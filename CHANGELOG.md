@@ -23,6 +23,15 @@ Waves queued for the next release, newest first:
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
 
+### Dangerous 安装确认门（2026-10-10，扩展安全）
+
+设计：`docs/plans/2026-10-10-dangerous-install-gate-design.md`（D-A 输入名确认 / D-B 安装时重扫 / D-C Suspicious 维持非阻断 / D-D v1 五命令）。
+
+- **安装时内部重扫**：五个安装命令（stdio / mcpb / skill 仓库 / native skill / agent 仓库）对即将安装的内容（SKILL.md / README / manifest / 命令与参数）重跑 advisory 扫描，不信任 UI 预扫——关掉"扫描后、安装前内容被调包"的窗口。
+- **Dangerous → TypeToConfirm 门**：确认缺失 / `acknowledged_risk` 不符 / `typed_name` 与条目名非精确一致（trim 后大小写敏感，后端校验）→ 拒绝并返回结构化载荷 `{error:"confirmation_required", risk, matches[], match_count, required, name}`；**拒绝零副作用**——mcpb 在解包前、仓库安装走同父暂存目录 + 原子改名（拒绝即清理、暂存目录不进列表）。确认安装留结构化 tracing 痕迹（`gate="dangerous_install"`）。
+- Suspicious 维持非阻断警告（现行为钉住）；`ConfirmationLevel::for_injection_risk` 映射首次接入判定链（`requires_confirmation()` 原样保留——trait 调用点无法扫描，不伪造消费方）。
+- UI：共享确认抽屉（逐条 matches + 输入条目名 + 实时匹配提示）接入全部 7 个安装调用面（取消 = 诚实无操作）；徽章 helper 追加「Dangerous 判定的条目需输入名称确认后才会安装」；demo 目录种 `skill-auto-reply-pro`（触发 system_override + data_exfil 双模式）走完整门流程。
+
 ### 缓期批 3（2026-10-10）
 
 - **开机自启（opt-in）**：新 `launch_on_login` 配置（默认关）+ `tauri-plugin-autostart 2.5.1`（锁版保 Rust 1.88 MSRV，Cargo.lock 纯增量）。写入语义：**OS 注册先行，成功才持久化**——配置永远不虚报 OS 拒绝过的注册，失败即拒绝并回弹 UI；读取以 OS 为准（`get_launch_on_login`，能反映系统设置侧的改动），配置字段仅是记忆意图。设置 → 通用 → 启动卡第三行开关。

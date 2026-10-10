@@ -244,6 +244,56 @@ pub enum ConfirmationLevel {
     TypeToConfirm,
 }
 
+impl ConfirmationLevel {
+    /// Wire/domain string (`"none"` / `"review"` / `"type_to_confirm"`).
+    /// Used by the install gate's structured refusal payload so the
+    /// `required` field stays in sync with this enum.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ConfirmationLevel::None => "none",
+            ConfirmationLevel::Review => "review",
+            ConfirmationLevel::TypeToConfirm => "type_to_confirm",
+        }
+    }
+
+    /// Scan-verdict → confirmation level (Dangerous-install gate design,
+    /// 2026-10-10): `Clean → None` (silent install), `Suspicious → Review`
+    /// (warn-only, stays non-blocking per decision D-C),
+    /// `Dangerous → TypeToConfirm` (the backend refuses unless the caller
+    /// acknowledges the Dangerous risk and types the entry name back).
+    ///
+    /// Consumed by the install-time rescan gate in `extensions_commands` —
+    /// the first real consumer of this enum in the install path.
+    pub fn for_injection_risk(risk: &super::security::InjectionRisk) -> ConfirmationLevel {
+        match risk {
+            super::security::InjectionRisk::Clean => ConfirmationLevel::None,
+            super::security::InjectionRisk::Suspicious => ConfirmationLevel::Review,
+            super::security::InjectionRisk::Dangerous => ConfirmationLevel::TypeToConfirm,
+        }
+    }
+}
+
+/// UI → backend acknowledgment that the user consciously overrode a
+/// `Dangerous` install-time scan verdict (Dangerous-install gate design,
+/// 2026-10-10, decision D-A).
+///
+/// Passed as the trailing `confirmation: Option<InstallConfirmation>`
+/// parameter of the five gated install commands (`install_mcp_stdio`,
+/// `install_mcp_mcpb`, `install_skill_from_repo`, `install_native_skill`,
+/// `install_agent_from_repo`). A missing parameter (`None`) deserializes
+/// cleanly, so existing UI call sites keep working at the wire level.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallConfirmation {
+    /// The risk level the user was shown and acknowledged. The gate only
+    /// accepts [`super::security::InjectionRisk::Dangerous`] — a confirmed
+    /// override must acknowledge the exact verdict the install-time rescan
+    /// produced, not a milder one.
+    pub acknowledged_risk: super::security::InjectionRisk,
+    /// The entry name the user typed back. Compared trimmed, case-sensitive,
+    /// against the entry name (server name / skill name / agent name).
+    pub typed_name: String,
+}
+
 /// Event the installer emits during long-running installs.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -393,5 +443,49 @@ mod tests {
         let json = serde_json::to_string(&t).expect("serialize");
         assert!(json.contains("keychain"));
         assert!(json.contains("obsidian-vault"));
+    }
+
+    // --- Dangerous-install gate: scan-verdict → level mapping ---
+
+    #[test]
+    fn confirmation_level_maps_from_injection_risk() {
+        use crate::extensions::security::InjectionRisk;
+        assert_eq!(
+            ConfirmationLevel::for_injection_risk(&InjectionRisk::Clean),
+            ConfirmationLevel::None
+        );
+        // D-C: Suspicious stays non-blocking (Review, not TypeToConfirm).
+        assert_eq!(
+            ConfirmationLevel::for_injection_risk(&InjectionRisk::Suspicious),
+            ConfirmationLevel::Review
+        );
+        assert_eq!(
+            ConfirmationLevel::for_injection_risk(&InjectionRisk::Dangerous),
+            ConfirmationLevel::TypeToConfirm
+        );
+    }
+
+    #[test]
+    fn confirmation_level_as_str_matches_wire_payload() {
+        assert_eq!(ConfirmationLevel::None.as_str(), "none");
+        assert_eq!(ConfirmationLevel::Review.as_str(), "review");
+        assert_eq!(ConfirmationLevel::TypeToConfirm.as_str(), "type_to_confirm");
+    }
+
+    #[test]
+    fn install_confirmation_round_trips_with_snake_case_risk() {
+        use crate::extensions::security::InjectionRisk;
+        let c = InstallConfirmation {
+            acknowledged_risk: InjectionRisk::Dangerous,
+            typed_name: "my-server".to_string(),
+        };
+        let json = serde_json::to_string(&c).expect("serialize");
+        assert!(
+            json.contains("\"acknowledged_risk\":\"dangerous\""),
+            "{json}"
+        );
+        assert!(json.contains("\"typed_name\":\"my-server\""), "{json}");
+        let back: InstallConfirmation = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(c, back);
     }
 }

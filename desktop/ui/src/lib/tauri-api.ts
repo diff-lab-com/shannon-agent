@@ -1627,12 +1627,36 @@ export async function listMcpRegistryServers(): Promise<RegistryServer[]> {
   return invoke('list_mcp_registry_servers')
 }
 
-export async function installMcpStdio(spec: StdioMcpSpecPayload): Promise<InstallResult> {
-  return invoke('install_mcp_stdio', { spec })
+/**
+ * Dangerous-install gate (backend: `InstallConfirmation` in
+ * desktop/src/extensions/types.rs). UI → backend acknowledgment that the
+ * user consciously overrode a `Dangerous` install-time rescan verdict:
+ * the risk level must be the exact verdict (`dangerous`) and `typed_name`
+ * must equal the entry name (compared trimmed, case-sensitive, backend-side).
+ *
+ * The five gated install commands take it as a trailing optional parameter;
+ * omitting it keeps the pre-gate wire shape (a missing param deserializes
+ * to `None`). When the gate fires the command rejects with the structured
+ * `confirmation_required` JSON payload — see `lib/installGate.ts`.
+ */
+export interface InstallConfirmation {
+  acknowledged_risk: 'dangerous'
+  typed_name: string
 }
 
-export async function installMcpMcpb(serverName: string, archiveBytes: number[]): Promise<InstallResult> {
-  return invoke('install_mcp_mcpb', { serverName, archiveBytes })
+export async function installMcpStdio(
+  spec: StdioMcpSpecPayload,
+  confirmation?: InstallConfirmation | null,
+): Promise<InstallResult> {
+  return invoke('install_mcp_stdio', { spec, confirmation: confirmation ?? null })
+}
+
+export async function installMcpMcpb(
+  serverName: string,
+  archiveBytes: number[],
+  confirmation?: InstallConfirmation | null,
+): Promise<InstallResult> {
+  return invoke('install_mcp_mcpb', { serverName, archiveBytes, confirmation: confirmation ?? null })
 }
 
 export async function installMcpOAuthAuthorizeUrl(vendorSlug: string, redirectUri: string): Promise<OAuthAuthorizeUrl> {
@@ -1701,15 +1725,17 @@ export async function installSkillFromRepo(
   pluginName: string,
   repo: string,
   ref_: string,
+  confirmation?: InstallConfirmation | null,
 ): Promise<InstallResult> {
-  return invoke('install_skill_from_repo', { pluginName, repo, ref_ })
+  return invoke('install_skill_from_repo', { pluginName, repo, ref_, confirmation: confirmation ?? null })
 }
 
 export async function installNativeSkill(
   pluginName: string,
   body: string,
+  confirmation?: InstallConfirmation | null,
 ): Promise<InstallResult> {
-  return invoke('install_native_skill', { pluginName, body })
+  return invoke('install_native_skill', { pluginName, body, confirmation: confirmation ?? null })
 }
 
 export async function listInstalledSkillPlugins(): Promise<InstalledSkill[]> {
@@ -1809,8 +1835,9 @@ export async function installAgentFromRepo(
   pluginName: string,
   repo: string,
   ref_: string,
+  confirmation?: InstallConfirmation | null,
 ): Promise<InstallResult> {
-  return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
+  return invoke('install_agent_from_repo', { pluginName, repo, ref_, confirmation: confirmation ?? null })
 }
 
 /**

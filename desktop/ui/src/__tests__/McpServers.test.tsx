@@ -343,12 +343,17 @@ describe('McpServers (Cursor-style UX)', () => {
     fireEvent.click(installButton)
 
     await waitFor(() => {
-      expect(installMcpStdio).toHaveBeenCalledWith({
-        server_name: 'myserver',
-        command: 'npx',
-        args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
-        env: [],
-      })
+      // Trailing `null` = the first, unconfirmed attempt (Dangerous-install
+      // gate: the retry after the confirm drawer passes the typed name).
+      expect(installMcpStdio).toHaveBeenCalledWith(
+        {
+          server_name: 'myserver',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+          env: [],
+        },
+        null,
+      )
     })
   })
 

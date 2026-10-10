@@ -141,6 +141,15 @@ export const testids = {
   // ── Right dock ────────────────────────────────────────────────────────
   /** Right-dock keyboard shortcut hint. */
   dockShortcutHint: 'dock-shortcut-hint',
+
+  // ── Extensions — Dangerous-install gate (components/extensions/
+  //    InstallConfirmDrawer.tsx) ──────────────────────────────────────────
+  /** Confirm drawer container (SidePanel body; portals above the surface). */
+  installConfirmDrawer: 'install-confirm-drawer',
+  /** Type-to-confirm input — must equal the entry name exactly. */
+  installConfirmInput: 'install-confirm-input',
+  /** Confirm (retry install) button — disabled until the exact name match. */
+  installConfirmButton: 'install-confirm-button',
 } as const
 
 /**
