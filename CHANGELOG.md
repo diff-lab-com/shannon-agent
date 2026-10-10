@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 修复 · tauri protocol-asset 特性缺失 —— 聊天图片附件/PDF 预览在构建版全坏（2026-10-10）
 - Dangerous 安装确认门 · 扩展安全（2026-10-10）
 - 缓期批 3 · 开机自启 + 执行模式收敛（2026-10-10）
 - 跨仓 mobile 信任续批 · `shannon/trust.changed` 撤销推送 + §R schema 键回填（2026-10-09）
