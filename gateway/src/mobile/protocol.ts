@@ -62,6 +62,41 @@ export type ShannonMethod =
   | "shannon/group.archive";
 
 /**
+ * Runtime mirror of [ShannonEvent]'s `type` discriminants — the same
+ * single-source discipline as [SHANNON_METHODS]: the `satisfies` keeps the
+ * list and the union in lockstep at compile time, and the protocol schema
+ * test pins `shannonEvent.type.enum` against this array so the cross-repo
+ * schema reference can never drift behind a new event kind again (the
+ * `group.*` kinds shipped five batches before anyone noticed the enum was
+ * non-exhaustive).
+ */
+export const SHANNON_EVENT_TYPES = [
+  "query.started",
+  "task.progress",
+  "query.completed",
+  "query.failed",
+  "query.cancelled",
+  "approval.request",
+  "task.message",
+  "device.revoked",
+  "group.handoff",
+  "group.member",
+  "group.system",
+  "group.pool-spend",
+  "group.report",
+] as const satisfies readonly ShannonEvent["type"][];
+
+// Compile-time guard: every event kind in the union is present above (the
+// `extends never` consumption marks the helper type as used, mirroring
+// `_UncoveredMethod`/`_AllCovered` above).
+type _UncoveredEventType = Exclude<ShannonEvent["type"], (typeof SHANNON_EVENT_TYPES)[number]>;
+type _AllEventsCovered = _UncoveredEventType extends never ? true : never;
+// Value-position consumption so the guard types count as "used" (the same
+// trick `_AllCovered` relies on for the method list).
+const _allEventsCovered: _AllEventsCovered = true;
+void _allEventsCovered;
+
+/**
  * Runtime mirror of [ShannonMethod] — the SINGLE SOURCE both the type above
  * (members must match exactly) and the protocol schema
  * (`docs/protocol/shannon-mobile-protocol.schema.json`, pinned by

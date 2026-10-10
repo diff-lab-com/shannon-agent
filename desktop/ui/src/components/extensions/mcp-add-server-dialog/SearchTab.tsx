@@ -13,6 +13,7 @@ import {
 } from "@/lib/tauri-api";
 import { safeErrorMessage } from "@/lib/packageValidation";
 import LoadingState from "@/components/ui/loading-state";
+import { useInstallGate } from "@/hooks/useInstallGate";
 import { Button } from "@/components/ui/button";
 import {
   buildSpecFromPackage,
@@ -32,6 +33,8 @@ export function SearchTab({
   const intl = useIntl();
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing.
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   const [query, setQuery] = useState(initialQuery);
   const [registry, setRegistry] = useState<RegistryServer[]>([]);
@@ -86,7 +89,14 @@ export function SearchTab({
     }
     setBusyId(server.id);
     try {
-      await installMcpStdio(spec);
+      // Dangerous-install gate: a `confirmation_required` rejection opens the
+      // shared confirm drawer and this promise stays pending until the user
+      // confirms (retry with the typed name) or cancels (resolves null —
+      // nothing installed).
+      const result = await installWithGate((confirmation) =>
+        installMcpStdio(spec, confirmation),
+      );
+      if (result === null) return; // gate drawer cancelled — nothing installed
       toast.success(
         t("extensions.mcp.oneClick.installSuccess", { name: server.name }),
       );
@@ -103,7 +113,8 @@ export function SearchTab({
   }
 
   return (
-    <div className="flex flex-col gap-sm" role="tabpanel">
+    <>
+      <div className="flex flex-col gap-sm" role="tabpanel">
       <input
         type="text"
         value={query}
@@ -194,6 +205,9 @@ export function SearchTab({
           })}
         </div>
       )}
-    </div>
+      </div>
+      {/* Dangerous-install gate drawer — portals above the dialog. */}
+      {gateDrawer}
+    </>
   );
 }

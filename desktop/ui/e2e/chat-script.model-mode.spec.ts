@@ -1,10 +1,19 @@
 // W2 journey #17（§9.4，gap G3+G4）— model-mode-switch: the composer model
 // chip's session override arc (suffix → Set as default → Reset), the effort
-// label, the ExecutionModeSwitcher's approval_mode writes with the honest
-// rawLabel echo for engine-only values, the PhaseTierSwitcher's tier write,
-// the "a switch takes effect on the NEXT turn" semantics pinned through the
-// player's send-time `model` stamp, and G4 — the strict mode still surfaces
-// the permission dialog for the same tool.
+// label, the approval-mode pill's honest rawLabel echo for engine-only
+// values, the 缓期批 3 rule-preset contract (activation changes ONLY
+// active_permission_profile — approval_mode stays CONSTANT), the composer
+// pill being the one surface that writes approval_mode, the
+// PhaseTierSwitcher's tier write, the "a switch takes effect on the NEXT
+// turn" semantics pinned through the player's send-time `model` stamp, and
+// G4 — the Ask mode still surfaces the permission dialog for the same tool.
+//
+// 缓期批 3 收敛: the composer's old ExecutionModeSwitcher (严格/平衡/宽松
+// tiers) is retired — it activated permission profiles, and backend
+// 8803a519d removed the activation → approval_mode overwrite, so the
+// control could no longer move the send-time mode. Rule presets (规则预设)
+// live in Settings → 权限与安全; this spec drives THEM for activation and
+// pins that the preset switch never flips the mode.
 //
 // Selectors: the Task3 branch (feat/chat-testids-registry) owns testids for
 // these chrome surfaces; each anchor below prefers the testid CONSTANT and
@@ -27,8 +36,6 @@ const SWITCH_MODEL = 'gpt-5'
 const MODEL_CHIP_TESTID = 'model-chip-trigger'
 // testid lands in feat/chat-testids-registry (approval-mode-pill)
 const APPROVAL_PILL_TESTID = 'approval-mode-pill'
-// testid lands in feat/chat-testids-registry (execution-mode-switcher)
-const EXEC_MODE_TESTID = 'execution-mode-switcher'
 // testid lands in feat/chat-testids-registry (permission-dialog)
 const PERMISSION_DIALOG_TESTID = 'permission-dialog'
 
@@ -36,14 +43,10 @@ const PERMISSION_DIALOG_TESTID = 'permission-dialog'
 function modelChip(page: Page) {
   return page.getByTestId(MODEL_CHIP_TESTID).or(page.getByRole('combobox', { name: 'Model' }))
 }
-/** The composer approval-mode pill (Select trigger). */
+/** The composer approval-mode control — the segmented radiogroup at the
+ *  1440px CI viewport (the chip Select below 1200px), same testid on both. */
 function approvalPill(page: Page) {
   return page.getByTestId(APPROVAL_PILL_TESTID).or(page.getByRole('combobox', { name: 'Permission mode' }))
-}
-/** The composer execution-mode switcher trigger (moved out of the Header,
- *  Aurora redesign 2026-10 — the testid is unchanged). */
-function execModeTrigger(page: Page) {
-  return page.getByTestId(EXEC_MODE_TESTID).or(page.getByRole('button', { name: /^Execution mode:/ }))
 }
 /** The Header permission alertdialog. */
 function permissionDialog(page: Page) {
@@ -70,9 +73,8 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
     // The rawLabel half needs a seeded engine-only approval_mode; the shared
-    // YAML stays clean (the ExecutionModeSwitcher test below arms the plain
-    // seed), so this arm mutates the object in memory — same schema, same
-    // ajv gate.
+    // YAML stays clean (the preset/pill test below arms the plain seed), so
+    // this arm mutates the object in memory — same schema, same ajv gate.
     const rawLabelScript = {
       ...script,
       seed: { ...script.seed, config: { ...script.seed?.config, approvalMode: 'bypass_permissions' } },
@@ -169,52 +171,72 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expectNoConsoleErrors(page)
   })
 
-  test('ExecutionModeSwitcher writes approval_mode per tier, PhaseTierSwitcher writes act_tier, and Strict still surfaces the dialog (G4)', async ({ page }) => {
+  test('rule presets activate WITHOUT touching approval_mode; the composer pill owns the mode write; PhaseTierSwitcher writes act_tier; Ask still surfaces the dialog (G4)', async ({ page }) => {
     test.setTimeout(90_000)
     const chat = new ChatPage(page)
     await loadChatScript(page, 'model-mode-switch', test.info())
-    await openSession(page)
+
+    // ── 缓期批 3 leg: rule presets are a SETTINGS surface (the composer's
+    // old ExecutionModeSwitcher retired with the activation → approval_mode
+    // overwrite). Drive the real preset cards in Settings → 权限与安全 and
+    // pin the honest contract: the active profile changes while
+    // approval_mode stays CONSTANT. Runs FIRST because the scripted backend
+    // re-seeds on every navigation — the chat legs below must not be reset.
+    const cfg = () => getConfig(page)
+    await page.getByRole('link', { name: 'Settings', exact: true }).click()
+    await page.getByRole('link', { name: 'Permissions & safety' }).click()
+    await expect(page.getByTestId('permissions-settings')).toBeVisible({ timeout: 15_000 })
+
+    // Demo defaults: profile 'balanced', engine-only mode alias 'standard'.
+    await expect.poll(async () => (await cfg()).active_permission_profile).toBe('balanced')
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+
+    // The preset cards render once list_permission_profiles resolves.
+    await expect(page.getByTestId('permissions-preset-card-permissive')).toBeVisible({ timeout: 15_000 })
+
+    // 宽松 preset: activate_permission_profile('permissive') — the mock
+    // mirrors the NEW backend contract and leaves approval_mode alone.
+    await page.getByTestId('permissions-preset-card-permissive')
+      .getByRole('button', { name: 'Enable' })
+      .click()
+    await expect(page.getByTestId('permissions-preset-card-permissive').getByRole('button', { name: 'Active' })).toBeVisible({ timeout: 5_000 })
+    await expect.poll(async () => (await cfg()).active_permission_profile).toBe('permissive')
+    // THE contract: the mode did not move with the preset.
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+
+    // 严格 preset: same story in the other direction (the OLD mock mapped
+    // strict → ask; that silent overwrite is exactly what backend
+    // 8803a519d removed).
+    await page.getByTestId('permissions-preset-card-strict')
+      .getByRole('button', { name: 'Enable' })
+      .click()
+    await expect(page.getByTestId('permissions-preset-card-strict').getByRole('button', { name: 'Active' })).toBeVisible({ timeout: 5_000 })
+    await expect.poll(async () => (await cfg()).active_permission_profile).toBe('strict')
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+
+    // Back to the chat: the session and its sent state survive the SPA
+    // navigation (same realm — only a full goto would re-seed).
+    await page.getByRole('link', { name: /^Chat/ }).click()
 
     // Turn 1 first: the empty conversation renders the WelcomeState overlay
     // over the message area, which would swallow the composer dropdowns; the
     // settled run also matches the journey narrative (confirm, then switch).
+    await openSession(page)
     await chat.send(script.turns[0]!.user)
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     expect((await mockSnapshot(page)).sends[0]).toMatchObject({ turnIndex: 0, model: SEEDED_MODEL })
 
-    // Demo default (no seeded approvalMode): the config ships the engine's
-    // `standard` alias, which the pill echoes verbatim (rawLabel) — the
-    // quick-switch table's labels only appear once a listed tier is picked.
+    // The pill STILL echoes the untouched engine value verbatim (rawLabel):
+    // presets never claimed to move it, and indeed nothing moved.
     await expect(approvalPill(page)).toContainText('standard')
 
-    // Permissive tier: activate_permission_profile('permissive') → the mock
-    // mirrors the backend mapping (auto_edit) — the pill re-renders. The
-    // pick goes through a REAL pointer click: the menu renders in a
-    // body-level portal at the z-modal token, so it wins the hit-test over
-    // the message area (w3 fix/header-dropdown-hit-test — the old
-    // dispatchEvent('click') workaround is retired; reverting the portal
-    // must turn this spec red).
-    const execMenu = () => page.getByRole('listbox', { name: 'Execution mode options' })
-    const pickTier = async (name: string) => {
-      await execModeTrigger(page).click()
-      const option = execMenu().getByRole('option', { name })
-      await option.waitFor({ timeout: 5_000 })
-      await option.click()
-      await execMenu().waitFor({ timeout: 5_000 }).catch(() => {}) // menu closes on pick
-    }
-    await pickTier('Permissive')
-    await expect(page.getByText('Execution mode: Permissive')).toBeVisible({ timeout: 5_000 })
-    await expect(execModeTrigger(page)).toContainText('Permissive')
-    await expect(approvalPill(page)).toContainText('Auto Edit')
-    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('auto-edit')
-
-    // Strict tier: back to suggest engine-side (the four-tier table's
-    // Balanced entry), the switcher label follows.
-    await pickTier('Strict')
-    await expect(page.getByText('Execution mode: Strict')).toBeVisible({ timeout: 5_000 })
-    await expect(execModeTrigger(page)).toContainText('Strict')
-    await expect(approvalPill(page)).toContainText(/ask/i)
-    await expect.poll(async () => (await getConfig(page)).approval_mode).toBe('ask')
+    // The composer's one mode surface: the approval-mode pill. Picking Ask
+    // writes approval_mode — the write presets can no longer do. At the CI
+    // viewport (1440px) the pill renders as the four-stop segmented control
+    // (radiogroup); the pick goes through a REAL pointer click.
+    await page.getByTestId('approval-mode-segment-ask').click()
+    await expect(page.getByTestId('approval-mode-segment-ask')).toHaveAttribute('aria-checked', 'true', { timeout: 5_000 })
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('ask')
 
     // PhaseTierSwitcher (testid already exists): Act → Fast writes the
     // global act_tier the backend resolves on the next query. Same real
@@ -228,7 +250,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect(page.getByTestId('phase-tier-switcher')).toContainText('Fast')
     await expect.poll(async () => (await getConfig(page)).act_tier).toBe('fast')
 
-    // G4 — mode decides the dialog: under Strict the SAME tool still (and
+    // G4 — mode decides the dialog: under Ask the SAME tool still (and
     // always) surfaces the permission prompt. The seeded override also
     // stamps sends[1].model without any UI switch (the seed-only path).
     await chat.send(script.turns[1]!.user)

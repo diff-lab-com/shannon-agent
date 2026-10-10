@@ -232,10 +232,13 @@ describe('Skills (P3 federated catalog)', () => {
     })
     fireEvent.click(screen.getByText('Install'))
     await waitFor(() => {
+      // Trailing `null` = the first, unconfirmed attempt (Dangerous-install
+      // gate: the retry after the confirm drawer passes the typed name).
       expect(installSkillFromRepo).toHaveBeenCalledWith(
         'brainstorming',
         'anthropics/skills',
         'main',
+        null,
       )
     })
   })

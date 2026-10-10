@@ -677,6 +677,15 @@
       }
     },
     {
+      "identifier": "allow-get-launch-on-login",
+      "description": "Enables the get_launch_on_login command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_launch_on_login"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-conversation",
       "description": "Enables the get_conversation command without any pre-configured scope.",
       "commands": {
@@ -3110,6 +3119,7 @@
         "allow-detect-provider-from-env",
         "allow-fetch-provider-models",
         "allow-get-config",
+        "allow-get-launch-on-login",
         "allow-get-provider-status",
         "allow-list-provider-keys",
         "allow-list-provider-profiles",

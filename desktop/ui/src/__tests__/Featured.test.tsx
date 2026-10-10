@@ -217,12 +217,17 @@ describe('Featured (P2 wire-up)', () => {
     })
     fireEvent.click(screen.getByTestId('featured-action-filesystem'))
     await waitFor(() => {
-      expect(installMcpStdio).toHaveBeenCalledWith({
-        server_name: 'filesystem',
-        command: 'npx',
-        args: ['-y', '@modelcontextprotocol/server-filesystem'],
-        env: [['ROOT', '/tmp']],
-      })
+      // Trailing `null` = the first, unconfirmed attempt (Dangerous-install
+      // gate: the retry after the confirm drawer passes the typed name).
+      expect(installMcpStdio).toHaveBeenCalledWith(
+        {
+          server_name: 'filesystem',
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-filesystem'],
+          env: [['ROOT', '/tmp']],
+        },
+        null,
+      )
     })
   })
 

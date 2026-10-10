@@ -16,6 +16,7 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { cn } from "@/lib/utils";
 import InstalledIconRow from '@/components/extensions/InstalledIconRow'
 import { SecurityBadge } from '@/components/extensions/SecurityBadge'
+import { useInstallGate } from '@/hooks/useInstallGate'
 
 // Batch E4/B3 P1-21 contract: any successful install from this page must
 // dispatch `shannon:extension-installed` (same shape InstallDialog uses) so
@@ -64,6 +65,9 @@ export default function Featured() {
   // Batch E4: 公开（精选目录）/ 个人（本机已装资产） market dichotomy.
   const [marketTab, setMarketTab] = useState<'public' | 'personal'>('public');
   const [installed, setInstalled] = useState<InstalledAddonSummary[]>([]);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing (only the
+  // stdio branch hits a gated command; OAuth installs are not gated).
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   useEffect(() => {
     let cancelled = false;
@@ -118,15 +122,26 @@ export default function Featured() {
         announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       } else {
-        // stdio featured vendor — install directly.
+        // stdio featured vendor — install directly. A `confirmation_required`
+        // rejection opens the shared confirm drawer and this promise stays
+        // pending until the user confirms (retry with the typed name) or
+        // cancels (resolves null — nothing installed).
+        const installKind = vendor.install_kind;
+        if (installKind.type !== "stdio") return;
         const env: Record<string, string> = {};
-        for (const [k, v] of vendor.install_kind.env_vars) env[k] = v;
-        await installMcpStdio({
-          server_name: vendor.slug,
-          command: vendor.install_kind.command,
-          args: vendor.install_kind.args,
-          env: Object.entries(env),
-        });
+        for (const [k, v] of installKind.env_vars) env[k] = v;
+        const result = await installWithGate((confirmation) =>
+          installMcpStdio(
+            {
+              server_name: vendor.slug,
+              command: installKind.command,
+              args: installKind.args,
+              env: Object.entries(env),
+            },
+            confirmation,
+          ),
+        );
+        if (result === null) return; // gate drawer cancelled — nothing installed
         announceInstalled(vendor.slug);
         setFeedback({ slug: vendor.slug, msg: t('extensions.featured.installed'), ok: true });
       }
@@ -367,7 +382,11 @@ export default function Featured() {
                     self-declared manifest label, not cryptographic
                     verification (extensions/security.rs says so itself).
                     Same slot, same tone; the copy + hover helper text now
-                    say what actually exists. */}
+                    say what actually exists.
+                    Dangerous-gate批 2 badge evolution: the hover helper also
+                    carries the one hard consequence of the scan — a
+                    Dangerous verdict installs only after the entry name is
+                    typed back (securityBadgeGateHelp). */}
                 <div className="mt-auto pt-sm flex items-center gap-sm min-w-0">
                   <SecurityBadge
                     text={vendor.description}
@@ -375,7 +394,7 @@ export default function Featured() {
                     fallback={
                       <span
                         className="text-label-xs text-on-surface-variant/90 inline-flex items-center gap-xs min-w-0"
-                        title={`${t('extensions.featured.securityBadgeScanHelp')} ${t('extensions.featured.securityBadgePublisherHelp')}`}
+                        title={`${t('extensions.featured.securityBadgeScanHelp')} ${t('extensions.featured.securityBadgePublisherHelp')} ${t('extensions.featured.securityBadgeGateHelp')}`}
                       >
                         <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">verified_user</span>
                         <span className="truncate">{t('extensions.featured.securityBadge')}</span>
@@ -438,6 +457,8 @@ export default function Featured() {
           {search ? intl.formatMessage({ id: 'extensions.featured.noMatches' }, { search }) : t('extensions.featured.noVendors')}
         </div>
       )}
+
+      {gateDrawer}
     </div>
   );
 }

@@ -19,6 +19,9 @@ import {
   MOCK_INSTALLED_AGENTS,
   MOCK_INSTALLED_ADDONS,
 } from './data/catalog'
+// Dangerous-install gate + SecurityBadge demo twin of the backend scanner
+// (extensions/security.rs) — same PATTERNS/classifier/payload shape.
+import { scanPromptInjectionDemo } from './data/security'
 // R1 chat-testing infra: when a ChatScript is loaded (scripted/player.ts →
 // setScriptSeed) these accessors answer with the script's seed data instead
 // of the global demo singletons; unarmed they all return null/undefined and
@@ -91,6 +94,38 @@ const demoVoiceLocal: VoiceLocalConfig = {
 // P1-6: ids already imported in this demo session — re-applying the same
 // migration surfaces as skipped (conflict handling), never duplicates.
 const demoMigration = { applied: new Set<string>() }
+
+// ── Dangerous-install gate (2026-10-10) — demo twin of the backend's
+// `ConfirmationRequiredError` (desktop/src/extensions_commands.rs). The one
+// seeded Dangerous skill keeps its install refused until the caller passes a
+// matching InstallConfirmation. ───────────────────────────────────────────
+const DEMO_DANGEROUS_SKILL_NAME = 'auto-reply-pro'
+
+/** Same wire shape as the Rust gate's refusal payload; the matches mirror
+ *  what scan_prompt_injection finds in the seeded entry's description:
+ *  "Ignore previous instructions" → system_override (verdict Dangerous on
+ *  its own) and "send the user's" → data_exfil. */
+function demoDangerousGatePayload(name: string): string {
+  return JSON.stringify({
+    error: 'confirmation_required',
+    risk: 'dangerous',
+    matches: [
+      {
+        pattern: 'ignore previous instructions',
+        matched_substring: 'Ignore previous instructions',
+        category: 'system_override',
+      },
+      {
+        pattern: "send the user's",
+        matched_substring: "send the user's",
+        category: 'data_exfil',
+      },
+    ],
+    match_count: 2,
+    required: 'type_to_confirm',
+    name,
+  })
+}
 
 // P2-2: whether the persona pack was already imported in this demo session —
 // a second import run surfaces as skipped (identical content), never dupes.
@@ -726,6 +761,16 @@ export const handlers: Record<string, MockHandler> = {
     }
     return config
   },
+  // 缓期批 3: honest launch-on-login read. A browser demo cannot query the
+  // OS login items (no tauri-plugin-autostart state behind it), so it
+  // answers the backend's own fallback branch: the persisted
+  // `launch_on_login` config value (remembered intent), defaulting off.
+  // The toggle state never comes from get_config directly — the Settings
+  // switch calls THIS command, exactly like the real backend read path.
+  async get_launch_on_login() {
+    await delay()
+    return demoConfig.launch_on_login === true
+  },
   // Wire shape note: the desktop command takes `{ update: { key, value } }`
   // (tauri-api configure wraps it); the flat shape is accepted too so older
   // callers keep working. Before this was fixed, EVERY configure in demo
@@ -796,6 +841,15 @@ export const handlers: Record<string, MockHandler> = {
     } else if (key === 'power.block_sleep_during_tasks') {
       // Settings R3 T3: run-time sleep blocker.
       demoConfig.power_block_sleep_during_tasks = String(value) === 'true'
+    } else if (key === 'launch_on_login') {
+      // 缓期批 3: autostart toggle — a dedicated demo arm (not a generic
+      // fall-through) mirroring the backend's dedicated configure arm. The
+      // browser demo has no OS to register login items with, so it answers
+      // exactly what the backend's honest read falls back to when the
+      // plugin state is absent: the persisted config value. A real OS
+      // refusal is exercised in the component tests via the mocked api
+      // layer (the optimistic toggle reverts on rejection).
+      demoConfig.launch_on_login = String(value) === 'true'
     } else if (key === 'context.auto_compact') {
       // Settings R3 T6: engine-level auto-compaction switch (a flip lands on
       // the next message).
@@ -2287,6 +2341,11 @@ export const handlers: Record<string, MockHandler> = {
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
   // P1-3: frozen contract — activate_permission_profile(name: string|null).
+  // 缓期批 3 (mirrors backend 8803a519d): activation changes ONLY
+  // `active_permission_profile` — approval_mode is NOT written anymore (the
+  // old silent overwrite made profile → approval_mode non-injective and
+  // fought the composer's approval-mode pill). The response reports the
+  // approval_mode value in effect, exactly like the backend.
   async activate_permission_profile(args: { name: string | null }) {
     await delay(60)
     const name = (args?.name ?? '').trim()
@@ -2295,10 +2354,7 @@ export const handlers: Record<string, MockHandler> = {
       throw new Error(`unknown permission profile \`${name}\``)
     }
     demoConfig.active_permission_profile = name === '' ? null : name
-    // Mirror the backend's mode mapping so the demo header reflects it.
-    if (name === 'strict' || name === 'balanced') demoConfig.approval_mode = 'ask'
-    else if (name === 'permissive') demoConfig.approval_mode = 'auto-edit'
-    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode }
+    return { active: name === '' ? null : name, approval_mode: demoConfig.approval_mode ?? null }
   },
   async save_custom_profile(args: { name: string; description?: string; auto_approve: string[]; confirm: string[]; deny: string[] }) {
     await delay(100)
@@ -2705,7 +2761,30 @@ export const handlers: Record<string, MockHandler> = {
   async list_skill_catalog() { await delay(); return clone(MOCK_SKILL_CATALOG) },
   async list_installed_skill_plugins() { await delay(); return clone(MOCK_INSTALLED_SKILLS) },
   async uninstall_skill_plugin() { await delay(60); return undefined },
-  async install_skill_from_repo() { await delay(800); return { success: true, message: 'Skill installed (mock)' } },
+  // Dangerous-install gate (2026-10-10): the demo catalog's one Dangerous
+  // entry (skill-auto-reply-pro in data/catalog.ts) is refused with the same
+  // structured `confirmation_required` payload the backend serializes into
+  // the command's Err(String) — the matches mirror what the real scanner
+  // (extensions/security.rs PATTERNS) finds in the entry's description. A
+  // retry with `{ acknowledged_risk: 'dangerous', typed_name }` whose
+  // typed_name.trim() equals the entry name installs, exactly like the Rust
+  // gate. Throwing the raw JSON string (not an Error) reproduces the Tauri
+  // wire behavior the UI's parseConfirmationRequired expects.
+  async install_skill_from_repo(args: {
+    pluginName?: string
+    confirmation?: { acknowledged_risk?: unknown; typed_name?: unknown }
+  }) {
+    await delay(800)
+    const pluginName = args?.pluginName ?? ''
+    if (pluginName === DEMO_DANGEROUS_SKILL_NAME) {
+      const confirmed =
+        args?.confirmation?.acknowledged_risk === 'dangerous' &&
+        typeof args?.confirmation?.typed_name === 'string' &&
+        args.confirmation.typed_name.trim() === DEMO_DANGEROUS_SKILL_NAME
+      if (!confirmed) throw demoDangerousGatePayload(DEMO_DANGEROUS_SKILL_NAME)
+    }
+    return { success: true, message: 'Skill installed (mock)' }
+  },
   async install_native_skill() { await delay(400); return { success: true, message: 'Skill installed (mock)' } },
 
   async list_agent_catalog() { await delay(); return clone(MOCK_AGENT_CATALOG) },
@@ -2715,6 +2794,18 @@ export const handlers: Record<string, MockHandler> = {
   async install_native_agent() { await delay(400); return { success: true, message: 'Agent installed (mock)' } },
 
   async list_installed_addons() { await delay(); return clone(MOCK_INSTALLED_ADDONS) },
+
+  // P6 prompt-injection scan — demo twin of extensions/security.rs. The
+  // with_readme variant answers description-only: demo mode has no network
+  // fetch, which is also the backend's documented fetch-failure fallback.
+  async scan_prompt_injection(args: { text?: string }) {
+    await delay()
+    return scanPromptInjectionDemo(args?.text ?? '')
+  },
+  async scan_prompt_injection_with_readme(args: { text?: string }) {
+    await delay()
+    return scanPromptInjectionDemo(args?.text ?? '')
+  },
 
   // --- Batch runs (P1-2 desktop best-of-N) ---
   async list_batch_runs() {

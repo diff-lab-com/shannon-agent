@@ -22,8 +22,9 @@ export const testids = {
 
   // ── Composer switchers (components/chat/, ex-Header since the Aurora
   //    redesign 2026-10 — testids unchanged, container moved) ─────────────
-  /** ExecutionModeSwitcher trigger (严格/平衡/宽松/自定义), composer row. */
-  executionModeSwitcher: 'execution-mode-switcher',
+  // (executionModeSwitcher retired in 缓期批 3 收敛: the profile-presets
+  // control left the composer when activation stopped touching
+  // approval_mode — Settings → 权限与安全 owns it now.)
   /** PhaseTierSwitcher trigger (规划/执行档位), composer row. */
   phaseTierSwitcher: 'phase-tier-switcher',
   /** PhaseTierSwitcher dropdown menu (role=listbox). */
@@ -140,6 +141,15 @@ export const testids = {
   // ── Right dock ────────────────────────────────────────────────────────
   /** Right-dock keyboard shortcut hint. */
   dockShortcutHint: 'dock-shortcut-hint',
+
+  // ── Extensions — Dangerous-install gate (components/extensions/
+  //    InstallConfirmDrawer.tsx) ──────────────────────────────────────────
+  /** Confirm drawer container (SidePanel body; portals above the surface). */
+  installConfirmDrawer: 'install-confirm-drawer',
+  /** Type-to-confirm input — must equal the entry name exactly. */
+  installConfirmInput: 'install-confirm-input',
+  /** Confirm (retry install) button — disabled until the exact name match. */
+  installConfirmButton: 'install-confirm-button',
 } as const
 
 /**
