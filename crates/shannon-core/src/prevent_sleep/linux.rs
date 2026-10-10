@@ -205,15 +205,13 @@ fn systemd_inhibit_in_path(path_var: &str) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex as StdMutex, OnceLock};
 
-    /// Serializes every test that touches the global refcount / child
-    /// statics (nextest also isolates per-process; this keeps plain
-    /// `cargo test` correct too).
-    static TEST_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-
+    /// Serialize on the MODULE-LEVEL lock (not a per-file one): these tests
+    /// reset `PREVENT_SLEEP_REF_COUNT` and drive the shared backend while
+    /// the `mod.rs` refcount assertions run — two independent locks do not
+    /// compose (that interleaving was the flake).
     fn lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap()
+        super::super::tests::shared_test_lock()
     }
 
     fn set_override(program: &str, args: &[&str]) {

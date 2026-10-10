@@ -262,7 +262,13 @@
             "query.failed",
             "query.cancelled",
             "approval.request",
-            "task.message"
+            "task.message",
+            "device.revoked",
+            "group.handoff",
+            "group.member",
+            "group.system",
+            "group.pool-spend",
+            "group.report"
           ]
         },
         "turn_id": {

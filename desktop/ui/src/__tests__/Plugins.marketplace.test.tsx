@@ -194,7 +194,9 @@ describe('Plugins (marketplace browser)', () => {
     fireEvent.click(screen.getAllByText('Install & authorize').at(-1)!)
 
     await waitFor(() => {
-      expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main')
+      // Trailing `null` = the first, unconfirmed attempt (Dangerous-install
+      // gate: the retry after the confirm drawer passes the typed name).
+      expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main', null)
     })
   })
 

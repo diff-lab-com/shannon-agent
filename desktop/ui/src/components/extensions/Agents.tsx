@@ -15,6 +15,7 @@ import { SecurityBadge } from "./SecurityBadge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
+import { useInstallGate } from "@/hooks/useInstallGate";
 import { cn } from "@/lib/utils";
 
 // B0 P0-6: catalog names come from upstream HTTP — enforce the same shape
@@ -55,6 +56,8 @@ export default function Agents() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  // Dangerous-install gate: shared confirm drawer + retry plumbing.
+  const { installWithGate, gateDrawer } = useInstallGate();
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +104,12 @@ export default function Agents() {
     setBusyId(entry.id);
     setFeedback(null);
     try {
+      // Dangerous-install gate: a `confirmation_required` rejection opens the
+      // shared confirm drawer and this promise stays pending until the user
+      // confirms (retry with the typed name) or cancels (resolves null —
+      // nothing installed). Native agents use install_native_agent, which is
+      // NOT one of the five gated commands and keeps its direct call.
+      let result: Awaited<ReturnType<typeof installWithGate>> = null;
       if (entry.source.type === 'native') {
         // G1 P1-9: native entries install as a FLAT
         // `~/.shannon/agents/<name>.toml` AgentDefinition — the shape the
@@ -124,11 +133,12 @@ export default function Agents() {
       } else if (entry.source.type === 'git_hub_repo') {
         const repo = entry.source.repo;
         const ref_ = entry.source.ref_ ?? 'main';
-        await installAgentFromRepo(entry.name, repo, ref_);
+        result = await installWithGate((confirmation) => installAgentFromRepo(entry.name, repo, ref_, confirmation));
       } else {
         setFeedback({ id: entry.id, msg: t('extensions.agents.unsupportedSource', { type: entry.source.type }), ok: false });
         return;
       }
+      if (result === null) return; // gate drawer cancelled — nothing installed
       setFeedback({ id: entry.id, msg: t('extensions.agents.installedToast', { name: entry.name }), ok: true });
       refreshInstalled();
     } catch (err) {
@@ -262,6 +272,7 @@ export default function Agents() {
         )}
       </section>
 
+      {gateDrawer}
       <ConfirmDialog
         open={removeTarget !== null}
         title={t('extensions.agents.removeConfirm.title')}

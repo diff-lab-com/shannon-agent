@@ -531,9 +531,10 @@ pub struct ActiveProfileStatus {
     /// The now-active profile name (`strict` / `balanced` / `permissive` /
     /// custom name), or `null` when no profile is active.
     pub active: Option<String>,
-    /// The `approval_mode` config value that ships with this activation
-    /// (see `profile_approval_mode`), or the pre-existing value when
-    /// deactivated.
+    /// The `approval_mode` config value currently in effect — activation
+    /// (缓期批 3) no longer touches `approval_mode`, so this is the
+    /// pre-existing value in both directions, returned for convenience so
+    /// the caller can show the effective mode without a second read.
     pub approval_mode: Option<String>,
 }
 
@@ -544,6 +545,14 @@ pub struct ActiveProfileStatus {
 /// profiles derive their mode the same way
 /// `PermissionManager::apply_custom_profile_def` does (read+write+bash
 /// auto-approved → `auto_edit`, otherwise `suggest`).
+///
+/// Since 缓期批 3 this function is the **validator + frozen-contract
+/// record** only: activation no longer writes the derived mode into
+/// `approval_mode` (the two controls fought — profile → approval_mode was
+/// non-injective), and the engine's session build applies the configured
+/// `approval_mode` AFTER the profile rules anyway (`send_message`), so the
+/// mapping documents what the profile's rules mean, while the user's mode
+/// choice stays authoritative.
 ///
 /// `Ok(None)` for an empty/deactivated profile; `Err` for a name that is
 /// neither built-in nor an existing custom profile file.
@@ -617,55 +626,74 @@ pub(crate) fn apply_active_profile(
 /// **Frozen contract (P1-3):** `activate_permission_profile(name: string|null)`.
 /// - `name = null` / `""` → clears the active profile; the plain
 ///   `approval_mode` config drives the engine again (unchanged value).
-/// - `strict` / `balanced` / `permissive` → activates the built-in profile
-///   and syncs `approval_mode` per the mode-switcher mapping.
+/// - `strict` / `balanced` / `permissive` → activates the built-in profile.
 /// - any other name → must match a custom profile under
-///   `.shannon/profiles/` (or `.claude/profiles/`); activates it and syncs
-///   `approval_mode` from its rules.
+///   `.shannon/profiles/` (or `.claude/profiles/`); activates it.
 ///
-/// Persists both keys to `~/.shannon/desktop/config.json` and emits
-/// `config-updated` for each so open windows refresh. The next
-/// `send_message` builds its `PermissionManager` from the new state, so the
-/// change takes effect on the very next turn of the open session.
+/// **缓期批 3:** activation changes ONLY the profile state — it no longer
+/// overwrites `approval_mode` with the profile-derived mode. The old
+/// silent overwrite is why profile → approval_mode was non-injective and
+/// the composer's execution-mode switcher fought the profile cards: each
+/// activation clobbered the user's mode choice. The engine's session
+/// build applies the configured `approval_mode` AFTER the profile rules
+/// (`send_message`), so the mode the user picked stays authoritative
+/// while the profile still contributes its deny/destructive side-effects.
+///
+/// Persists the profile key to `~/.shannon/desktop/config.json`, emits
+/// `config-updated` for it (only it — no `approval_mode` event, since
+/// nothing else changed), and returns the profile plus the
+/// `approval_mode` value currently in effect. The next `send_message`
+/// builds its `PermissionManager` from the new state, so the change takes
+/// effect on the very next turn of the open session.
 #[tauri::command]
 pub async fn activate_permission_profile(
     state: State<'_, AppState>,
     app_handle: tauri::AppHandle,
     name: Option<String>,
 ) -> Result<ActiveProfileStatus, String> {
+    activate_permission_profile_inner(state.inner(), &app_handle, name, |cfg| {
+        crate::config::save_config(cfg)
+    })
+    .await
+}
+
+/// Body of [`activate_permission_profile`] with the disk persist step
+/// injected — same testability shape as the config arms: tests capture
+/// the snapshot instead of writing the real
+/// `~/.shannon/desktop/config.json`.
+async fn activate_permission_profile_inner<R, P>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    name: Option<String>,
+    persist: P,
+) -> Result<ActiveProfileStatus, String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(&crate::config::DesktopConfig) -> Result<(), String>,
+{
     use tauri::Emitter;
 
     let trimmed = name.unwrap_or_default().trim().to_string();
 
-    // Validate (and resolve the synced approval mode) before touching config.
+    // Validate before touching config (unknown custom names are rejected).
     let registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
-    let synced_mode = profile_approval_mode(&trimmed, &registry)?.map(str::to_string);
+    profile_approval_mode(&trimmed, &registry)?;
 
+    // 缓期批 3 — profile state only; `approval_mode` stays untouched.
     let mut desktop_cfg = state.desktop_config.write().await;
     desktop_cfg.active_permission_profile = if trimmed.is_empty() {
         None
     } else {
         Some(trimmed.clone())
     };
-    if let Some(mode) = &synced_mode {
-        desktop_cfg.approval_mode = Some(mode.clone());
-    }
+    let mode_in_effect = desktop_cfg.approval_mode.clone();
     drop(desktop_cfg);
 
     {
         let desktop_cfg = state.desktop_config.read().await;
-        crate::config::save_config(&desktop_cfg)?;
+        persist(&desktop_cfg)?;
     }
 
-    if let Some(mode) = &synced_mode {
-        let _ = app_handle.emit(
-            crate::events::event_names::CONFIG_UPDATED,
-            crate::events::ConfigUpdatedPayload {
-                key: "approval_mode".into(),
-                value: mode.clone(),
-            },
-        );
-    }
     let _ = app_handle.emit(
         crate::events::event_names::CONFIG_UPDATED,
         crate::events::ConfigUpdatedPayload {
@@ -673,7 +701,7 @@ pub async fn activate_permission_profile(
             value: trimmed.clone(),
         },
     );
-    tracing::info!(profile = %trimmed, mode = ?synced_mode, "activated permission profile");
+    tracing::info!(profile = %trimmed, "activated permission profile (approval_mode untouched)");
 
     Ok(ActiveProfileStatus {
         active: if trimmed.is_empty() {
@@ -681,7 +709,7 @@ pub async fn activate_permission_profile(
         } else {
             Some(trimmed)
         },
-        approval_mode: synced_mode,
+        approval_mode: mode_in_effect,
     })
 }
 
@@ -829,6 +857,104 @@ mod tests {
         let mut mgr = shannon_engine::permissions::PermissionManager::new();
         apply_active_profile(&mut mgr, Some("ghost-profile"));
         assert!(mgr.active_profile().is_none());
+    }
+
+    // ── 缓期批 3: activation must not touch approval_mode ─────────────────
+
+    #[tokio::test]
+    async fn activate_profile_leaves_approval_mode_untouched() {
+        use crate::config::DesktopConfig;
+        use tauri::Manager as _;
+
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        // A mode no profile maps to: the old overwrite forced "ask" (strict/
+        // balanced) or "auto-edit" (permissive) — if any of that survives,
+        // "bypass_permissions" is the first thing to get clobbered.
+        tauri_state.desktop_config.write().await.approval_mode = Some("bypass_permissions".into());
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+
+        // Activate 宽松 — the profile whose derived mode ("auto-edit") differs
+        // most from the user's pick.
+        let status = activate_permission_profile_inner(
+            tauri_state.inner(),
+            app.handle(),
+            Some("permissive".into()),
+            |cfg| {
+                persisted.lock().unwrap().push(cfg.clone());
+                Ok(())
+            },
+        )
+        .await
+        .expect("activation succeeds");
+        assert_eq!(status.active.as_deref(), Some("permissive"));
+        // The response reports the mode actually in effect — the user's own.
+        assert_eq!(status.approval_mode.as_deref(), Some("bypass_permissions"));
+
+        {
+            let cfg = tauri_state.desktop_config.read().await;
+            assert_eq!(
+                cfg.active_permission_profile.as_deref(),
+                Some("permissive"),
+                "profile state changed"
+            );
+            assert_eq!(
+                cfg.approval_mode.as_deref(),
+                Some("bypass_permissions"),
+                "approval_mode must survive profile activation"
+            );
+        }
+        let snapshot = persisted.lock().unwrap().last().unwrap().clone();
+        assert_eq!(
+            snapshot.approval_mode.as_deref(),
+            Some("bypass_permissions")
+        );
+
+        // Deactivation likewise: profile clears, mode still untouched.
+        let status =
+            activate_permission_profile_inner(tauri_state.inner(), app.handle(), None, |cfg| {
+                persisted.lock().unwrap().push(cfg.clone());
+                Ok(())
+            })
+            .await
+            .expect("deactivation succeeds");
+        assert_eq!(status.active, None);
+        assert_eq!(status.approval_mode.as_deref(), Some("bypass_permissions"));
+        {
+            let cfg = tauri_state.desktop_config.read().await;
+            assert_eq!(cfg.active_permission_profile, None);
+            assert_eq!(cfg.approval_mode.as_deref(), Some("bypass_permissions"));
+        }
+    }
+
+    #[tokio::test]
+    async fn activate_unknown_profile_is_rejected_before_any_mutation() {
+        use tauri::Manager as _;
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        let before = tauri_state.desktop_config.read().await.clone();
+
+        let err = activate_permission_profile_inner(
+            tauri_state.inner(),
+            app.handle(),
+            Some("no-such-profile".into()),
+            |_| panic!("persist must not run for a rejected profile"),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("no-such-profile"), "{err}");
+        assert_eq!(
+            tauri_state
+                .desktop_config
+                .read()
+                .await
+                .active_permission_profile,
+            before.active_permission_profile,
+            "rejected activation mutates nothing"
+        );
     }
 
     // ── local_profiles_dir anchoring (P1-10) ────────────────────────────────

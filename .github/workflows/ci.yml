@@ -321,6 +321,16 @@ jobs:
           # entries the same way (actions/caches API, key prefix ci-v4).
           shared-key: ci-v4
       - name: Install Tauri system deps
+        # Load-bearing for shannon-desktop: the `cargo test --workspace`
+        # steps below compile AND run the desktop crate (1734 unit tests,
+        # ~21 s execution warm — it is NOT excluded here) with DEFAULT
+        # features, including preview-capture → xcap → pipewire-rs, whose
+        # libspa-sys build.rs pkg-config-probes libpipewire-0.3 at build
+        # time. The same set covers the Tauri/wry dep tree (webkit2gtk-4.1,
+        # gtk3, appindicator, rsvg). Do not add a shannon-desktop exclude
+        # to the workspace invocations below without re-homing that
+        # coverage — before these apt packages landed (F1, a1ee134f7) the
+        # desktop crate's Linux compile only ever happened at release time.
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -848,11 +858,6 @@ jobs:
           # matrix values to the key, so each OS leg keeps its own entry
           # (no cross-OS pollution).
           shared-key: ci-v4
-      # shannon-desktop is excluded below, but shannon-mcp-saas still
-      # pulls in `keyring` → `dbus-secret-service` → `dbus` →
-      # `libdbus-sys`, whose build.rs runs `pkg-config --libs dbus-1`.
-      # On Linux that needs the dev headers; macOS/Windows use the
-      # native keychain backends and skip dbus entirely.
       - name: Install system headers (Linux only)
         if: runner.os == 'Linux'
         # libdbus-1-dev is the load-bearing entry: keyring →
@@ -865,12 +870,41 @@ jobs:
         # Linux-only system header in some default-feature dep.
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev libgbm-dev libdrm-dev libwayland-dev libpipewire-0.3-dev libegl-dev
       - name: Check workspace (all platforms)
-        # shannon-desktop requires Tauri/webview system libs that are
-        # difficult to install on `windows-latest` and `macos-latest`
-        # runners; check the rest of the workspace there for a smoke
-        # test of the public Rust API surface. shannon-desktop is
-        # built fully in release.yml under each platform's matrix leg.
+        # shannon-desktop is excluded from this one workspace command: the
+        # Linux leg does not install the webkit2gtk/gtk dev headers it
+        # needs, and ubuntu's real desktop compile+test coverage lives in
+        # the Test shards / Clippy / Feature Matrix jobs, which install
+        # those headers and build the workspace unexcluded. The
+        # macOS/Windows legs compile the crate natively in the dedicated
+        # step right below. shannon-mcp-saas IS compiled here and pulls in
+        # `keyring` → `dbus-secret-service` → `dbus` → `libdbus-sys`,
+        # whose build.rs runs `pkg-config --libs dbus-1` — the apt step
+        # above supplies the headers on Linux.
         run: cargo check --workspace --exclude shannon-desktop
+      - name: Check shannon-desktop (macOS/Windows)
+        # Native compile gate for the Tauri shell on the two legs whose
+        # ONLY desktop compile used to be release.yml's bundle job — so a
+        # macOS cfg mismatch (E0425 `systemd_inhibit_available`) reached
+        # the v0.13.0 tag as a 7-attempt release failure even though every
+        # PR gate was green. The crate was historically excluded here as
+        # needing "webview system libs that are difficult to install", but
+        # that never held for these two runners: Tauri v2 links the
+        # runners' native WebKit/WebView2 — no system packages to install
+        # (release.yml already bundles the full app on macOS/Windows
+        # runners: macos-14 + windows-latest).
+        # Default features include preview-capture (xcap); its macOS
+        # (ScreenCaptureKit/CoreGraphics) and Windows (GDI/DXGI) backends
+        # link OS frameworks only. The Linux leg keeps the workspace-check
+        # exclude — this job does not install webkit2gtk/gtk dev headers;
+        # ubuntu's desktop compile+test coverage lives in the Test shards /
+        # Clippy / Feature Matrix jobs (they install the Tauri system deps
+        # and build the workspace unexcluded). Cold first run of this step
+        # compiles the tauri dep tree (~15 min); afterwards rust-cache
+        # (same per-OS ci-v4 entry as the leg) makes it a ~2-4 min
+        # crate-only check — well inside this job's 40-min budget (legs
+        # currently finish in 7-9 min).
+        if: runner.os != 'Linux'
+        run: cargo check -p shannon-desktop
       - name: Install nextest
         uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60
         with:

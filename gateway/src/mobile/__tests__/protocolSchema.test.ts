@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { SHANNON_METHODS, ShannonError } from "../protocol.js";
+import { SHANNON_EVENT_TYPES, SHANNON_METHODS, ShannonError } from "../protocol.js";
 
 const schemaPath = join(
   __dirname,
@@ -25,6 +25,7 @@ const schemaPath = join(
 const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
   definitions: {
     shannonMethods: { enum: string[] };
+    shannonEvent: { properties: { type: { enum: string[] } } };
     errorCodes: Record<string, number>;
     wireFixtures: { examples: unknown[] };
   };
@@ -35,6 +36,15 @@ describe("protocol schema contract", () => {
     expect([...schema.definitions.shannonMethods.enum].sort()).toEqual(
       [...SHANNON_METHODS].sort(),
     );
+  });
+
+  it("schema shannonEvent.type enum === SHANNON_EVENT_TYPES (full sync, not non-exhaustive)", () => {
+    // The one-shot full sync (group.* kinds shipped five batches before the
+    // enum caught up) — this pin keeps the schema reference from drifting
+    // behind a new event kind again.
+    expect([...schema.definitions.shannonEvent.properties.type.enum].sort()).toEqual([
+      ...SHANNON_EVENT_TYPES,
+    ].sort());
   });
 
   it("schema error codes === ShannonError", () => {

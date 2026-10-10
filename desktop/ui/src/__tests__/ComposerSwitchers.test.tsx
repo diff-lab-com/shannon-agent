@@ -1,8 +1,16 @@
 // ComposerSwitchers — Aurora redesign 2026-10 (02-chat.html 三要素归位):
-// the ExecutionModeSwitcher + PhaseTierSwitcher moved from the chat Header
-// into the composer's compose row. This suite pins the composer placement
-// and relocates the activation behavior coverage that used to live in
-// Header.test's P1-3 describe (the Header half now pins the ABSENCE).
+// the PhaseTierSwitcher moved from the chat Header into the composer's
+// compose row. This suite pins the composer placement and keeps the
+// phase-tier write coverage that used to live in Header.test's P1-3
+// describe (the Header half pins the ABSENCE).
+//
+// 缓期批 3 收敛: the execution-mode twin is GONE from the composer — it
+// activated permission profiles, and backend 8803a519d removed the
+// activation → approval_mode overwrite, so a composer control that could
+// no longer move the send-time mode was dishonest chrome. Rule presets
+// (规则预设) live in Settings → 权限与安全 (PermissionsSettings tests own
+// the activation coverage); the composer's only mode surface is the
+// approval-mode pill (ChatInputApprovalMode.test.tsx owns that).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -37,7 +45,6 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => {
   const actual = await importOriginal<typeof TauriApiModule>()
   return {
     ...actual,
-    activatePermissionProfile: vi.fn().mockResolvedValue({ active: 'strict', approval_mode: 'ask' }),
     configure: vi.fn().mockResolvedValue(undefined),
   }
 })
@@ -80,47 +87,20 @@ beforeEach(() => {
   ctx.sessions = [{ id: 'session-1', title: 'S', working_dir: '/home/alice/code/myproject' }]
   ctx.currentSessionId = 'session-1'
   ctx.promptQueue = []
-  ctx.config = { active_permission_profile: 'balanced', approval_mode: 'suggest', working_dir: '/home/alice/code/myproject' }
+  ctx.config = { approval_mode: 'suggest', working_dir: '/home/alice/code/myproject' }
   ctx.refreshConfig = vi.fn()
-  vi.mocked(api.activatePermissionProfile).mockClear()
   vi.mocked(api.configure).mockClear()
 })
 
 describe('ComposerSwitchers — placement (三要素归位)', () => {
-  it('renders the execution-mode and phase-tier switchers inside the composer', () => {
+  it('renders the phase-tier switcher inside the composer and the mode pill beside it', () => {
     renderPanel(composerValue())
-    // The compose row now carries both switchers (testids unchanged from
+    // The compose row carries the phase-tier switcher (testid unchanged from
     // the header era — e2e anchors by testid, not container).
-    expect(screen.getByTestId('execution-mode-switcher')).toBeInTheDocument()
     expect(screen.getByTestId('phase-tier-switcher')).toBeInTheDocument()
-    // Compact variants still announce the full state.
-    expect(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' })).toBeInTheDocument()
-  })
-
-  it('shows a custom profile name on the custom tier', () => {
-    ctx.config = { ...ctx.config, active_permission_profile: 'research-mode' }
-    renderPanel(composerValue())
-    expect(screen.getByRole('button', { name: 'Execution mode: Custom: research-mode. Press to change.' })).toBeInTheDocument()
-  })
-})
-
-describe('ComposerSwitchers — execution-mode activation (relocated from Header P1-3)', () => {
-  it('dispatches activate_permission_profile and refreshes config on tier switch', async () => {
-    renderPanel(composerValue())
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Strict' }))
-    await waitFor(() => {
-      expect(api.activatePermissionProfile).toHaveBeenCalledWith('strict')
-      expect(ctx.refreshConfig).toHaveBeenCalled()
-    })
-  })
-
-  it('marks the active tier aria-selected in the menu', async () => {
-    renderPanel(composerValue())
-    fireEvent.click(screen.getByRole('button', { name: 'Execution mode: Balanced. Press to change.' }))
-    const balanced = await screen.findByRole('option', { name: 'Balanced' })
-    expect(balanced).toHaveAttribute('aria-selected', 'true')
-    expect(await screen.findByRole('option', { name: 'Strict' })).toHaveAttribute('aria-selected', 'false')
+    // 缓期批 3 收敛: the execution-mode twin is retired from the composer —
+    // profile activation is a Settings concern now.
+    expect(screen.queryByTestId('execution-mode-switcher')).not.toBeInTheDocument()
   })
 })
 

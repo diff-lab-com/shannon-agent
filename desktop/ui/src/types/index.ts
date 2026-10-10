@@ -830,6 +830,15 @@ export interface DesktopConfig {
    *  automatically. Default true; read once at launch. Written via
    *  `configure('update_check_at_launch')`. */
   update_check_at_launch?: boolean
+  /** 缓期批 3: 开机自启 — register Shannon with the OS login items
+   *  (tauri-plugin-autostart). Default FALSE (opt-in). REMEMBERED INTENT
+   *  only: the honest toggle state comes from the `get_launch_on_login`
+   *  command (the OS registration, which the user can also flip outside the
+   *  app); this field is the backend's fallback when the OS state cannot be
+   *  queried. The backend applies the OS change FIRST and persists this
+   *  field only on success, so it never claims a registration the OS
+   *  refused. Written via `configure('launch_on_login')`. */
+  launch_on_login?: boolean
   /** 缓期批 2: 使命实体 (single-mission v1) — the one pinned mission, when
    *  configured. Absent = no mission; every mission surface hides. Wire
    *  keys are the struct's own snake_case (no rename_all), optional keys

@@ -96,7 +96,9 @@ test.describe('chat header testid registry anchors (P1.5)', () => {
     await page.goto('/chat')
     // The model chip is inside the composer; its visibility gates the rest.
     await expect(page.getByTestId(testids.modelChipTrigger)).toBeVisible({ timeout: 15000 })
-    await expect(page.getByTestId(testids.executionModeSwitcher)).toBeVisible()
+    // (executionModeSwitcher anchor retired with the control itself — 缓期批 3
+    // 收敛 moved rule presets to Settings; the pill below is the composer's
+    // one mode surface.)
     await expect(page.getByTestId(testids.approvalModePill)).toBeVisible()
     await expect(page.getByTestId(testids.composerPlusMenu)).toBeVisible()
   })

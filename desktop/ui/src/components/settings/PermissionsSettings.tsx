@@ -13,6 +13,7 @@ import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo, ProfilesList } from '@/types'
 import { useCatalog } from '@/context/CatalogContext'
 import { toastError } from '@/lib/errorToast'
+import { permissionPresetOption } from '@/lib/approvalModes'
 import EffectBadge from '@/components/settings/EffectBadge'
 
 // ─── Rule-list input validation (P1-3) ──────────────────────────────────────
@@ -398,9 +399,22 @@ export default function PermissionsSettings() {
             </section>
           )}
 
-          {/* Built-in tiers */}
+          {/* 规则预设 (rule presets) — 缓期批 3 convergence: activation
+              changes ONLY the active profile (backend 8803a519d), so the
+              section is named for what it actually is and the definition
+              line states the honest scope: switching a preset never moves
+              the execution mode (the composer's approval-mode pill owns
+              that). Labels/icons come from the shared approvalModes table. */}
           <section aria-label={t('settings.permissions.builtin.aria')} className="space-y-sm">
             <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.builtin.title')}</h3>
+            <p
+              className="text-body-sm text-on-surface-variant flex items-start gap-xs"
+              data-testid="permissions-preset-hint"
+              title={t('settings.permissions.builtin.presetHint')}
+            >
+              <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px] text-primary" aria-hidden="true">info</span>
+              <span>{t('settings.permissions.builtin.presetHint')}</span>
+            </p>
             <p className="text-body-sm text-on-surface-variant">{t('settings.permissions.builtin.diff')}</p>
             <div className="grid gap-md md:grid-cols-3">
               {(profiles?.builtin ?? []).map((p: BuiltinProfileInfo) => (
@@ -595,6 +609,11 @@ function BuiltinCard({
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) =>
     intl.formatMessage({ id }, values)
+  // 缓期批 3: the card vocabulary (name / description / icon) comes from the
+  // SHARED approvalModes table — the same single source the retired composer
+  // switcher competed with. Unknown future profile ids fall back to the
+  // engine-provided strings.
+  const preset = permissionPresetOption(profile.id)
   const flags: Array<[boolean, string]> = [
     [profile.auto_approve_read, 'settings.permissions.builtin.flag.read'],
     [profile.auto_approve_write, 'settings.permissions.builtin.flag.write'],
@@ -607,12 +626,13 @@ function BuiltinCard({
         'flex flex-col gap-sm p-md rounded-xl border bg-surface-container-low',
         active ? 'border-primary/50' : 'border-outline-variant/20',
       )}
+      data-testid={`permissions-preset-card-${profile.id}`}
     >
       <div className="flex items-center gap-sm">
         <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">
-          {profile.id === 'strict' ? 'shield_lock' : profile.id === 'permissive' ? 'speed' : 'balance'}
+          {preset?.icon ?? 'tune'}
         </span>
-        <span className="font-title-sm text-on-surface font-semibold">{profileName(t, profile.id)}</span>
+        <span className="font-title-sm text-on-surface font-semibold">{preset ? t(preset.labelKey) : profile.id}</span>
         {active && (
           <span className="ml-auto px-sm py-xs rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold uppercase tracking-wider">
             {t('settings.permissions.activeBadge')}
@@ -620,7 +640,7 @@ function BuiltinCard({
         )}
       </div>
       <p className="text-body-sm text-on-surface-variant">
-        {profileDescription(t, profile.id, profile.description)}
+        {preset ? t(preset.descriptionKey) : profile.description}
       </p>
       <ul className="text-label-md text-on-surface-variant space-y-xs">
         {flags.map(([on, key]) => (
@@ -651,40 +671,11 @@ function BuiltinCard({
   )
 }
 
-// R2-P2-14: the engine ships English profile descriptions; map the well-known
-// builtin ids to i18n keys so every locale renders localized text. Unknown
-// ids (future engine profiles) fall back to the engine-provided string.
-function profileDescription(
-  t: (id: string) => string,
-  id: string,
-  engineDescription: string,
-): string {
-  const known: Record<string, string> = {
-    strict: 'settings.permissions.builtin.desc.strict',
-    balanced: 'settings.permissions.builtin.desc.balanced',
-    permissive: 'settings.permissions.builtin.desc.permissive',
-  }
-  const key = known[id]
-  if (!key) return engineDescription
-  const translated = t(key)
-  return translated === key ? engineDescription : translated
-}
-
-// Design-parity R1 (2026-10-08 §1): card titles used to render the raw
-// profile.id ("strict") — the same residues the composer's exec-mode tiers
-// already localize as 严格 / 平衡 / 宽松. Same term table, new name keys.
-// Unknown future profile ids fall back to the engine id.
-function profileName(t: (id: string) => string, id: string): string {
-  const known: Record<string, string> = {
-    strict: 'settings.permissions.builtin.name.strict',
-    balanced: 'settings.permissions.builtin.name.balanced',
-    permissive: 'settings.permissions.builtin.name.permissive',
-  }
-  const key = known[id]
-  if (!key) return id
-  const translated = t(key)
-  return translated === key ? id : translated
-}
+// 缓期批 3: the R2-P2-14 profileDescription / design-parity-R1 profileName
+// local helpers retired — their name/description/icon mappings moved into the
+// shared `permissionPresetOption` table (lib/approvalModes.ts), the single
+// vocabulary source the plan's 收口 requires. The fallback for unknown ids
+// (engine description / raw id) lives in BuiltinCard.
 
 function ProfileEditorModal({
   editor,

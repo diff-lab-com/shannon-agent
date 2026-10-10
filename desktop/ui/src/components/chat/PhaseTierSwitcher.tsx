@@ -165,8 +165,9 @@ export function PhaseTierSwitcher({ compact = false }: { compact?: boolean }) {
         }
       />
       <Menu.Portal>
-        {/* z-modal rides the POSITIONER (see ExecutionModeSwitcher for the
-            stacking-context rationale and token scale). */}
+        {/* z-modal rides the POSITIONER (same stacking-context rationale
+            and token scale the composer menus share; the retired
+            ExecutionModeSwitcher documented the original fix). */}
         <Menu.Positioner align="end" sideOffset={8} className="isolate z-modal">
           {/* role="dialog" + dedicated label as before; aria-labelledby is
               cleared because Base UI would label the popup from the trigger.
