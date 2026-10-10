@@ -208,6 +208,50 @@ pub fn default_shannon_home() -> Result<PathBuf, SessionLogError> {
 ///
 /// The match is exhaustive on purpose: a future `QueryEvent` variant must
 /// make a conscious mapping decision here.
+/// Best-effort /proc snapshot naming every holder of a flock on `path`
+/// (kernel flock-table entries on this inode, plus this process's own fds
+/// targeting the file). Test-only diagnostics for the session_log flake
+/// family — never compiled into product paths.
+#[cfg(test)]
+pub(crate) fn debug_flock_holders(path: &std::path::Path) -> String {
+    use std::os::unix::fs::MetadataExt as _;
+    let mut out = String::new();
+    let Ok(meta) = std::fs::metadata(path) else {
+        return "(file gone — the lock cannot be held)".to_string();
+    };
+    let ino = meta.ino();
+    if let Ok(locks) = std::fs::read_to_string("/proc/locks") {
+        for line in locks.lines() {
+            let holder_ino = line
+                .split_whitespace()
+                .nth(5)
+                .and_then(|dev_ino| dev_ino.rsplit(':').next());
+            if holder_ino == Some(ino.to_string().as_str()) {
+                out.push_str("  KERNEL-LOCK: ");
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    if let Ok(fds) = std::fs::read_dir("/proc/self/fd") {
+        for fd in fds.flatten() {
+            if let Ok(target) = std::fs::read_link(fd.path()) {
+                if target == path {
+                    out.push_str(&format!(
+                        "  SELF-FD {} -> {}\n",
+                        fd.file_name().to_string_lossy(),
+                        target.display()
+                    ));
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push_str("  (no kernel locks and no self fds on this inode found)\n");
+    }
+    out
+}
+
 pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBody> {
     let body = match event {
         QueryEvent::Started { .. } => return None,

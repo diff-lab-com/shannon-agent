@@ -203,9 +203,21 @@ impl SessionLogWriter {
             }
         }
         // Fail fast when another writer holds the log (plan §4.1 ④).
-        FileExt::try_lock_exclusive(&file).map_err(|source| SessionLogError::AlreadyLocked {
-            path: path.clone(),
-            source,
+        FileExt::try_lock_exclusive(&file).map_err(|source| {
+            #[cfg(test)]
+            {
+                // Flake self-diagnosis: when an open sees the lock held,
+                // dump WHO holds it into the test log (2026-10-09 flake).
+                eprintln!(
+                    "FLOCK-HELD-DIAG path={}\n{}",
+                    path.display(),
+                    super::debug_flock_holders(&path)
+                );
+            }
+            SessionLogError::AlreadyLocked {
+                path: path.clone(),
+                source,
+            }
         })?;
 
         // Tail recovery while we hold the exclusive lock (plan §4.1 ③).
