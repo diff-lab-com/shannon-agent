@@ -7,6 +7,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 Waves queued for the next release, newest first:
 
 - 扩展安全 · 步骤 B：repo 安装 commit 钉住（sidecar 元数据 + update 比对 + 浮动引用徽章）（2026-10-11）
+- 发版工程 · install.sh 可选构建出处验证（SHANNON_VERIFY_ATTESTATION）+ PipeWire 探测（2026-10-11）
 - 修复 · tauri protocol-asset 特性缺失 —— 聊天图片附件/PDF 预览在构建版全坏（2026-10-10）
 - Dangerous 安装确认门 · 扩展安全（2026-10-10）
 - 缓期批 3 · 开机自启 + 执行模式收敛（2026-10-10）
@@ -80,6 +81,11 @@ B6.0-4 TTL 的收尾批：#371 落了机制面、生产者留空（群审批与�
   超顶钳制）；gateway 四象限（带金额 ask 的 quoteWindow 键与引擎 TTL 同值且注册表
   retention 对齐 / per-ask 窗越过 hub 默认窗后在自身窗口到期出 quote-expired 卡 /
   无金额 ask 与建群规划查询不带窗口键 / 普通 task 查询不带 `approvalTtlMs`）。
+
+### 发版工程 · 出处验证 + PipeWire 探测（2026-10-11）
+
+- **install.sh 可选构建出处验证**：`SHANNON_VERIFY_ATTESTATION=1` 时对每个下载物跑 `gh attestation verify`（release.yml 的 publish job 自 v0.13.0 起对全部 `release-assets/**` 记录 SLSa 式 provenance，attest 在 publish flip 之前、失败即阻断发版）。与校验和互补：SHA256SUMS 钉字节、attestation 钉构建来源——被攻破的 release 存储要同时篡改清单才能过哈希，而任何非本仓工作流产出的内容 attestation 必失败。需 gh ≥ 2.44；缺 gh 报清晰错误不静默跳过。实测：v0.14.0 真实资产 verify exit 0，篡改截断文件 exit 1。
+- **install.sh PipeWire 探测（警告不阻断）**：dpkg/rpm 探测版本，≥1.0 静默 / 0.3.40-0.3.48 known too old（22.04 原版已验证）/ 其余 0.x 软警告 may be too old；探测不到静默跳过，绝不阻断 curl|sh 安装。
 
 ### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
 
