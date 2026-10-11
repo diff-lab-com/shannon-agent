@@ -137,6 +137,49 @@ impl SecretGuardSection {
     }
 }
 
+/// `[injection_guard]` config section (扩展安全专项·并行线 E, audit v1).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct InjectionGuardSection {
+    /// `"audit"` (default when unset — observe-only) | `"off"` to disable.
+    /// `$SHANNON_INJECTION_GUARD` beats this section when present.
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+impl InjectionGuardSection {
+    /// Load this section from the same config files [`SecretGuardSection`]
+    /// reads — same layered, degrade-not-fail posture.
+    pub fn load() -> Self {
+        Self::load_from(&[
+            dirs::home_dir()
+                .map(|home| home.join(".shannon").join("config.toml"))
+                .unwrap_or_default(),
+            std::path::PathBuf::from(".shannon.toml"),
+        ])
+    }
+
+    fn load_from(paths: &[std::path::PathBuf]) -> Self {
+        let mut section = Self::default();
+        for path in paths {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            let Ok(value) = toml::from_str::<toml::Value>(&text) else {
+                continue;
+            };
+            if let Ok(parsed) = value
+                .get("injection_guard")
+                .cloned()
+                .unwrap_or(toml::Value::Boolean(false))
+                .try_into::<Self>()
+            {
+                section = parsed;
+            }
+        }
+        section
+    }
+}
+
 /// `[hooks]` config section: inbound webhook endpoints (P2-7).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksConfig {

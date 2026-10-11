@@ -391,6 +391,11 @@ impl Tool for WebFetchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {e}")))?;
 
+        // Outbound injection scan (audit v1): the fetched page is untrusted
+        // network content about to enter the conversation. Observe-only —
+        // findings are logged, the payload below is byte-identical either way.
+        shannon_core::injection_guard::audit_text(&output.url, &output.content);
+
         // The fetched page text IS the tool result: the engine forwards
         // `content` to the model, so the payload must live there (metadata is
         // only consulted for image payloads). Keep the summary line as a
@@ -780,6 +785,17 @@ impl Tool for WebSearchTool {
                 })
             })
             .collect();
+
+        // Outbound injection scan (audit v1): search snippets are untrusted
+        // network content. Observe-only — see the WebFetch call site note.
+        let mut scan_buffer = String::new();
+        for r in &output.results {
+            scan_buffer.push_str(&r.title);
+            scan_buffer.push('\n');
+            scan_buffer.push_str(&r.snippet);
+            scan_buffer.push('\n');
+        }
+        shannon_core::injection_guard::audit_text(&output.query, &scan_buffer);
 
         // The results themselves are the tool result: the engine forwards
         // `content` to the model, so render them as readable text there.
