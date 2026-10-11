@@ -216,6 +216,18 @@ pub struct InstalledAddon {
     /// file exists in the watched directory. For DataSource: tool is turned on
     /// and has credentials.
     pub enabled: bool,
+
+    /// Upstream commit repo-installed content was pinned at
+    /// (`.shannon-source.json` sidecar). `None` = no pin — non-git sources
+    /// and unresolvable HEADs honestly report absent.
+    #[serde(default)]
+    pub source_commit: Option<String>,
+
+    /// True when the install ref is mutable (branch/tag, not a full SHA) —
+    /// a refresh can silently move content upstream. UI renders a
+    /// floating-ref warning badge.
+    #[serde(default)]
+    pub ref_floating: bool,
 }
 
 /// Where to install an entry. Per-kind.

@@ -7,6 +7,8 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 Waves queued for the next release, newest first:
 
 - 扩展安全 · 并行线 E：出站注入扫描 audit v1（web-fetch/web-search 入口，observe-only）（2026-10-11）
+- 扩展安全 · 步骤 B：repo 安装 commit 钉住（sidecar 元数据 + update 比对 + 浮动引用徽章）（2026-10-11）
+- 发版工程 · install.sh 可选构建出处验证（SHANNON_VERIFY_ATTESTATION）+ PipeWire 探测（2026-10-11）
 - 修复 · tauri protocol-asset 特性缺失 —— 聊天图片附件/PDF 预览在构建版全坏（2026-10-10）
 - Dangerous 安装确认门 · 扩展安全（2026-10-10）
 - 缓期批 3 · 开机自启 + 执行模式收敛（2026-10-10）
@@ -29,12 +31,21 @@ Waves queued for the next release, newest first:
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
 
-### 扩展安全 · 并行线 E：出站注入扫描 audit v1（2026-10-11）
-
+<<<<<<< HEAD
 - **入口面**：web-fetch 抓取的页面文本 + web-search 的标题/摘要——真正不可信的网络内容进入对话的时刻。本地工具（Bash/文件读）有意不扫：`sudo `/`rm -rf` 在编码会话的本地输出里是噪声不是信号，wire 全量扫会把每次请求都打成日志海。
 - **observe-only**：默认 `audit` 模式只记日志（pattern + category + ≤48 字符摘录 + 来源 URL/查询词）、计数器（`audit_hits()`）与一次性提示（说明开关），内容零改动——为将来决定是否升级 warn/redact 先采真实误报数据。
 - **框架复用**：模式解析镜像 secret-guard（`$SHANNON_INJECTION_GUARD` 现存即裁决，`audit` 启用、其余含 `off`/垃圾值为显式退出且压过配置；缺省读 `[injection_guard] mode`；两者皆缺 → audit）。pattern 表上收到 `shannon_core::injection_guard` 单源，桌面安装门 scanner 改用同一表（分类逻辑/风险等级仍是安装门契约）。
 - **边界**：每串扫描封顶 64 KiB（char-boundary 安全）；未知 wire 面/其余工具入口的接入留待调参批。
+=======
+### 扩展安全 · 并行线 E：出站注入扫描 audit v1（2026-10-11）
+
+### 扩展安全 · 步骤 B：repo 安装 commit 钉住（2026-10-11）
+
+- **安装即钉住**：skill/agent 仓库安装完成后解析 `git rev-parse HEAD`，与 `repo`/`ref` 一起写入安装目录旁的 `.shannon-source.json` sidecar（目录扫描式列表没有持久 DB，sidecar 即元数据存储）。请求的 ref 是浮动指针（分支/tag）时结构化 tracing 警告。
+- **update 比对**：`git pull` 前读旧 pin、后解析新 HEAD 并重写 sidecar；同 ref 下内容移动（`old != new`）打 `upstream content moved` info 痕迹——「同名不同字节」的时刻首次可观测。UI 侧 toast 待 update 命令接入后端字段比较（trait 的 update 尚无 Tauri 命令面）。
+- **诚实边界**：非 git 来源（native skill/agent、mcpb、MCP）无 pin；`rev-parse` 失败记 `commit: null` 而非编造；sidecar 损坏按「无 pin」降级。
+- **UI**：`SourcePinBadge` 徽章接入 Skills/Agents 已安装列表——浮动引用显警告 chip（`link_off` + tooltip）+ 短 SHA `@a1b2c3d` 等宽展示；i18n ×10（`extensions.source.*` 三键）。
+>>>>>>> origin/dev
 
 ### Dangerous 安装确认门（2026-10-10，扩展安全）
 
@@ -80,6 +91,11 @@ B6.0-4 TTL 的收尾批：#371 落了机制面、生产者留空（群审批与�
   超顶钳制）；gateway 四象限（带金额 ask 的 quoteWindow 键与引擎 TTL 同值且注册表
   retention 对齐 / per-ask 窗越过 hub 默认窗后在自身窗口到期出 quote-expired 卡 /
   无金额 ask 与建群规划查询不带窗口键 / 普通 task 查询不带 `approvalTtlMs`）。
+
+### 发版工程 · 出处验证 + PipeWire 探测（2026-10-11）
+
+- **install.sh 可选构建出处验证**：`SHANNON_VERIFY_ATTESTATION=1` 时对每个下载物跑 `gh attestation verify`（release.yml 的 publish job 自 v0.13.0 起对全部 `release-assets/**` 记录 SLSa 式 provenance，attest 在 publish flip 之前、失败即阻断发版）。与校验和互补：SHA256SUMS 钉字节、attestation 钉构建来源——被攻破的 release 存储要同时篡改清单才能过哈希，而任何非本仓工作流产出的内容 attestation 必失败。需 gh ≥ 2.44；缺 gh 报清晰错误不静默跳过。实测：v0.14.0 真实资产 verify exit 0，篡改截断文件 exit 1。
+- **install.sh PipeWire 探测（警告不阻断）**：dpkg/rpm 探测版本，≥1.0 静默 / 0.3.40-0.3.48 known too old（22.04 原版已验证）/ 其余 0.x 软警告 may be too old；探测不到静默跳过，绝不阻断 curl|sh 安装。
 
 ### 发版工程（2026-10-09，v0.13.0 tag 首跑暴露）
 

@@ -166,11 +166,17 @@ export const MOCK_INSTALLED_SKILLS: InstalledSkill[] = [
     name: 'brainstorm',
     path: '~/.shannon/skills/brainstorm.md',
     installed_at: '2026-06-15T10:30:00Z',
+    // Repo-installed from a mutable branch (扩展安全专项·步骤 B): the demo
+    // twin of the Rust `.shannon-source.json` sidecar read.
+    source_commit: '9f2c1de77a04b5c8d3e6f0a1b2c3d4e5f6071829',
+    ref_floating: true,
   },
   {
     name: 'tdd',
     path: '~/.shannon/skills/tdd.md',
     installed_at: '2026-06-15T10:31:00Z',
+    source_commit: null,
+    ref_floating: false,
   },
 ]
 
@@ -179,11 +185,15 @@ export const MOCK_INSTALLED_AGENTS: InstalledAgent[] = [
     name: 'executor',
     path: '~/.shannon/agents/executor.md',
     installed_at: '2026-06-14T08:15:00Z',
+    source_commit: null,
+    ref_floating: false,
   },
   {
     name: 'code-reviewer',
     path: '~/.shannon/agents/code-reviewer.md',
     installed_at: '2026-06-14T08:16:00Z',
+    source_commit: 'c47d8e21fa90b6c5d3e2f1a0b9c8d7e6f5a4b3c2',
+    ref_floating: true,
   },
 ]
 
