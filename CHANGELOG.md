@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 扩展安全 · 步骤 B：repo 安装 commit 钉住（sidecar 元数据 + update 比对 + 浮动引用徽章）（2026-10-11）
 - 修复 · tauri protocol-asset 特性缺失 —— 聊天图片附件/PDF 预览在构建版全坏（2026-10-10）
 - Dangerous 安装确认门 · 扩展安全（2026-10-10）
 - 缓期批 3 · 开机自启 + 执行模式收敛（2026-10-10）
@@ -27,6 +28,13 @@ Waves queued for the next release, newest first:
 ### Breaking / behavior changes
 
 - **`secret-guard` defaults to `redact` (was `audit`)**: with no `$SHANNON_SECRET_GUARD` and no `[secret_guard] mode` configured, secret-shaped content in outbound requests is now replaced with deterministic surrogates before it reaches the provider (restored locally for tool execution and display; byte-stable, so prompt caching is unaffected). Opt out with `SHANNON_SECRET_GUARD=audit` (observe-only), `SHANNON_SECRET_GUARD=off`, or `[secret_guard] mode` in config — env beats config, and an explicit `off` always wins. A one-time notice after the first hit explains what happened and names these switches.
+
+### 扩展安全 · 步骤 B：repo 安装 commit 钉住（2026-10-11）
+
+- **安装即钉住**：skill/agent 仓库安装完成后解析 `git rev-parse HEAD`，与 `repo`/`ref` 一起写入安装目录旁的 `.shannon-source.json` sidecar（目录扫描式列表没有持久 DB，sidecar 即元数据存储）。请求的 ref 是浮动指针（分支/tag）时结构化 tracing 警告。
+- **update 比对**：`git pull` 前读旧 pin、后解析新 HEAD 并重写 sidecar；同 ref 下内容移动（`old != new`）打 `upstream content moved` info 痕迹——「同名不同字节」的时刻首次可观测。UI 侧 toast 待 update 命令接入后端字段比较（trait 的 update 尚无 Tauri 命令面）。
+- **诚实边界**：非 git 来源（native skill/agent、mcpb、MCP）无 pin；`rev-parse` 失败记 `commit: null` 而非编造；sidecar 损坏按「无 pin」降级。
+- **UI**：`SourcePinBadge` 徽章接入 Skills/Agents 已安装列表——浮动引用显警告 chip（`link_off` + tooltip）+ 短 SHA `@a1b2c3d` 等宽展示；i18n ×10（`extensions.source.*` 三键）。
 
 ### Dangerous 安装确认门（2026-10-10，扩展安全）
 
