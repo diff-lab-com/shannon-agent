@@ -1715,6 +1715,10 @@ export interface InstalledSkill {
   name: string
   path: string
   installed_at: string | null
+  /** Upstream commit repo-installed content was pinned at (null = no pin on disk). */
+  source_commit: string | null
+  /** True when the install ref is mutable (branch/tag) — content can move upstream. */
+  ref_floating: boolean
 }
 
 export async function listSkillCatalog(): Promise<SkillCatalogEntry[]> {
@@ -1825,6 +1829,10 @@ export interface InstalledAgent {
   name: string
   path: string
   installed_at: string | null
+  /** Upstream commit repo-installed content was pinned at (null = no pin on disk). */
+  source_commit: string | null
+  /** True when the install ref is mutable (branch/tag) — content can move upstream. */
+  ref_floating: boolean
 }
 
 export async function listAgentCatalog(): Promise<AgentCatalogEntry[]> {
