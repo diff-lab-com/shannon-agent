@@ -12,6 +12,7 @@ import {
   type InstalledAgent,
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
+import { SourcePinBadge } from "./SourcePinBadge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import ErrorState from "@/components/ui/error-state";
 import { Button } from "@/components/ui/button";
@@ -251,7 +252,10 @@ export default function Agents() {
               >
                 <span className="material-symbols-outlined text-primary icon-md">smart_toy</span>
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-label-md text-on-surface truncate">{agent.name}</div>
+                  <div className="flex items-center gap-xs">
+                    <span className="font-bold text-label-md text-on-surface truncate">{agent.name}</span>
+                    <SourcePinBadge sourceCommit={agent.source_commit} refFloating={agent.ref_floating} />
+                  </div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
                     {agent.path}
                   </div>

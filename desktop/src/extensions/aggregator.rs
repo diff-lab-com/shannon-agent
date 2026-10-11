@@ -272,6 +272,8 @@ mod tests {
             installed_at: Some(Utc::now()),
             version: Some("1.0".to_string()),
             enabled: true,
+            source_commit: None,
+            ref_floating: false,
         };
         let summary: InstalledAddonSummary = addon.into();
         assert_eq!(summary.id, "mcp:notion");

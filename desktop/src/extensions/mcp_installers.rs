@@ -227,6 +227,8 @@ impl AddonInstaller for StdioMcpInstaller {
             installed_at: Some(chrono::Utc::now()),
             version: entry.version.clone(),
             enabled: true,
+            source_commit: None,
+            ref_floating: false,
         })
     }
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
@@ -527,6 +529,8 @@ impl AddonInstaller for McpbInstaller {
             installed_at: Some(chrono::Utc::now()),
             version: manifest.version,
             enabled: true,
+            source_commit: None,
+            ref_floating: false,
         })
     }
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
