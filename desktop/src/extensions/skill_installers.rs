@@ -713,7 +713,11 @@ mod tests {
             .expect("listed");
         assert_eq!(entry.source_commit.as_deref(), Some(commit.as_str()));
         assert!(entry.ref_floating);
-        assert!(root.join("pinned-skill").join(".shannon-source.json").exists());
+        assert!(
+            root.join("pinned-skill")
+                .join(".shannon-source.json")
+                .exists()
+        );
     }
 
     #[tokio::test]

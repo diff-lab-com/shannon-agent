@@ -340,7 +340,15 @@ mod tests {
         // Full SHA-1 / SHA-256 pin; everything else is a mutable pointer.
         assert!(!is_floating_ref(&"a".repeat(40)));
         assert!(!is_floating_ref(&"b".repeat(64)));
-        for mutable in ["main".to_string(), "v1.2.3".into(), "HEAD".into(), "heads/main".into(), "g".repeat(40), "x".repeat(39), "x".repeat(41)] {
+        for mutable in [
+            "main".to_string(),
+            "v1.2.3".into(),
+            "HEAD".into(),
+            "heads/main".into(),
+            "g".repeat(40),
+            "x".repeat(39),
+            "x".repeat(41),
+        ] {
             assert!(is_floating_ref(&mutable), "{mutable:?} must be floating");
         }
     }
