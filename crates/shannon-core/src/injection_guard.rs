@@ -216,7 +216,7 @@ mod tests {
         let hit = hits
             .iter()
             .find(|h| h.pattern == "ignore previous instructions")
-            .unwrap();
+            .expect("first assert proves the hit exists");
         assert_eq!(hit.matched_substring, "IGNORE PREVIOUS INSTRUCTIONS");
     }
 
