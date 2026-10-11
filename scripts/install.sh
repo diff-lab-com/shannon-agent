@@ -9,6 +9,15 @@
 #   SHANNON_COMPONENTS=cli,gateway
 #   SHANNON_COMPONENTS=desktop    # desktop bundle only
 #
+# Provenance (opt-in):
+#   SHANNON_VERIFY_ATTESTATION=1  # verify every download against the repo's
+#                                 # build-provenance attestations (SLSa-style,
+#                                 # recorded by the release workflow; needs the
+#                                 # GitHub CLI `gh` in PATH). Independent of
+#                                 # the checksum check: SHA256SUMS pins the
+#                                 # bytes, the attestation pins their origin.
+#                                 # Human view: the repo's /attestations page.
+#
 # This script detects your OS and architecture, downloads the latest Shannon
 # Agent binaries (CLI + gateway) and desktop bundle, verifies their SHA-256
 # checksums (per-asset sidecar or the release-wide SHA256SUMS), and installs
@@ -137,6 +146,19 @@ download_verify() {
         err "No checksum available for $1 (neither a .sha256 sidecar nor SHA256SUMS was reachable). Download path may be broken or intercepted — refusing to install. If GitHub is down, retry later."
       fi
     fi
+  fi
+  # Opt-in build-provenance verification (release workflow records SLSa-style
+  # attestations for every distributable). Complements the checksum above:
+  # SHA256SUMS pins the bytes against the release, the attestation pins them
+  # against this repo's recorded builds — a compromised release bucket passes
+  # the hash check only if the manifest is compromised too, while attestation
+  # fails for any content the workflow never built.
+  if [ "${SHANNON_VERIFY_ATTESTATION:-0}" = "1" ]; then
+    command -v gh >/dev/null 2>&1 \
+      || err "SHANNON_VERIFY_ATTESTATION=1 requires the GitHub CLI (gh >= 2.44, has the 'attestation' command) in PATH"
+    info "Verifying build attestation..."
+    gh attestation verify "$dst" -R "$REPO_URL" >/dev/null \
+      || err "Attestation verification failed for $1 — this file does not match any build recorded by the repo. Do not install."
   fi
   printf '%s' "$dst"
 }
