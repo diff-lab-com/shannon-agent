@@ -187,13 +187,32 @@ fi
 
 # ── Desktop bundle ─────────────────────────────────────────────────────────
 
+# Warn when the system PipeWire looks too old for the desktop capture stack
+# (the bundles are built against Ubuntu 24.04-era 1.0.x SPA headers). Warn
+# only — never blocks: the app may install and run fine, capture is what
+# breaks, and a false warning beats blocking a curl|sh install.
+warn_old_pipewire() {
+  PW=""
+  if command -v dpkg-query >/dev/null 2>&1; then
+    PW="$(dpkg-query -W -f='${Version}' libpipewire-0.3-0 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    PW="$(rpm -q --qf '%{VERSION}' pipewire-libs 2>/dev/null || true)"
+  fi
+  [ -n "$PW" ] || return 0
+  # dpkg versions carry epoch/revision ("1.0.7-3~ubuntu22.04") — prefix match.
+  case "$PW" in
+    1.*|2.*) ;;
+    0.3.4[0-8]|0.3.4[0-8].*|0.3.4[0-8]-*)
+      warn "PipeWire $PW is known to be too old for the desktop capture stack (built against 1.0.x) — the app installs, but screen/preview capture may not work. Upgrade PipeWire or use Ubuntu 24.04+. CLI/gateway are unaffected." ;;
+    0.*)
+      warn "PipeWire $PW may be too old for the desktop capture stack (built against 1.0.x). If capture misbehaves, upgrade PipeWire. CLI/gateway are unaffected." ;;
+  esac
+}
+
 install_desktop() {
   case "$OS" in
     Linux)
-      # Desktop bundles are built against Ubuntu 24.04-era libraries; stock
-      # 22.04's libpipewire-0.3 (0.3.48) is too old for the capture stack.
-      # CLI/gateway components are static musl builds and unaffected.
-      info "Desktop bundles need a recent PipeWire (Ubuntu 24.04+; stock 22.04's 0.3.48 is too old) — CLI/gateway unaffected."
+      warn_old_pipewire
       DEB="$(download_verify "$DESKTOP" 2>/dev/null || true)"
       RPM="$(download_verify "shannon-desktop-${VERSION}-1.x86_64.rpm" 2>/dev/null || true)"
       if [ -n "$DEB" ] && [ -f "$DEB" ]; then
