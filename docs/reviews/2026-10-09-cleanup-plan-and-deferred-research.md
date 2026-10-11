@@ -115,3 +115,15 @@ PR #342 宣称并已在 CHANGELOG 向用户宣告"unset 默认 redact",但实际
 - **门禁**:desktop nextest 1780/1780 + clippy/fmt 干净;tsc 0 错;mock 相关 vitest 91/91;CI 全绿(#388:19 pass + website build 按 path 过滤跳过;#389:20 pass)。
 - **本地部署 ✅**:dev @ 981f42146(#388 合并点,含 #389 前端无关),二进制已含修复,DISPLAY=:1 运行中(pid 1993406)。前端 dist 沿用 v0.14.0 构建产物——与本轮 UI 源码差异仅 handlers.ts 注释(mock 专用,零渲染影响),故未重建。
 - **遗留建议**:① **v0.14.1 patch 发版待圈选**——修复仅在 dev,v0.14.0 发布包用户仍遇破图;② install.sh 可升级为 pipewire 版本探测(本轮仅提示行,逻辑探测属行为变更未纳入);③ 扩展安全专项(签名/出站扫描/自动更新)仍在决策后动清单。
+
+## 执行记录(四)(2026-10-11,决策后动项四批:①探测+发版 ②attestation ③commit 钉住 ④出站扫描 audit)
+
+用户批准修正路线的全部四项,当日完成:
+
+- **① install.sh PipeWire 探测 + v0.14.1 发版 ✅(PR #392 + tag v0.14.1)**:dpkg/rpm 探测三档分警示(≥1.0 静默/0.3.40-0.3.48 known too old/其余 0.x 软警告),不阻断 curl|sh;分档模式经 7 种版本串模拟验证(含 dpkg 连字符后缀修洞)。v0.14.1 一次通过发布(24 资产,发版说明已写),install.sh 发布物含探测函数(实测下载确认)。随版内容:Dangerous 门(#384)+ protocol-asset 真修复(#388)。
+- **② 构建出处验证 ✅(PR #393)**:侦察发现 release.yml 的 `attest-build-provenance@v4.2.2` 早已存在(a9179ecd9,publish flip 前全量证明)——本批只补用户侧:`SHANNON_VERIFY_ATTESTATION=1` 时对每个下载物 `gh attestation verify`,与校验和互补(哈希钉字节/attestation 钉来源)。**实测**(gh 2.63.2):v0.14.0 真实 install.sh exit 0,篡改截断件 exit 1;本机 gh 2.4.0 无 attestation 子命令 → 错误信息带版本要求。
+- **③ repo 安装 commit 钉住 ✅(PR #394)**:`.shannon-source.json` sidecar(repo/ref/commit/ref_floating)随安装写入,目录扫描列表读回;update 前后比对、同 ref 内容移动打 info 痕迹;浮动 ref 安装时 tracing 警告 + UI `SourcePinBadge` 警告 chip + 短 SHA,i18n ×10。诚实边界:非 git 源无 pin/rev-parse 失败记 null/sidecar 损坏按无 pin 降级。update 的 UI toast 待 update 命令接入 Tauri 面。
+- **④ 出站注入扫描 audit v1 ✅(PR #395)**:`shannon_core::injection_guard`——pattern 表上收单源(桌面安装门改用同一表),web-fetch/web-search 两入口 observe-only 审计(日志+计数+一次性提示,输出字节不变);模式解析镜像 secret-guard(env 现存即裁决→config→缺省 audit);本地工具有意不扫(sudo/rm -rf 在编码会话是噪声),其余入口留待调参批。core 20/20 + desktop 安装门 18/18 + web 103/103。
+- **过程事故(自省)**:③ 执行中途,#392 合并后的 `git reset --hard origin/dev` 把工作区里未提交的 ③ 全部改动抹掉(仅 2 个 untracked 新文件幸存)——全部改动从上下文完整重放并重新过门禁。教训重录:**破坏性重置前必须先确认工作区干净**;此外 `pkill -f` 模式自匹配、后台轮询丢 cwd 两起小事故均即时发现无损。
+- **CI 备注**:CI clippy 带 `-D warnings`(含 `unwrap_used`)严于本地默认——④ 首推被 Clippy 拒,测试断言 `.unwrap()`→`.expect()` 后绿;此后本地严格参数(`-- -D warnings`)复核。
+- **本地部署 ✅**:dev @ 77ea21234(④ 合并点),二进制含 ③④,DISPLAY=:1 运行中(pid 3525463)。
