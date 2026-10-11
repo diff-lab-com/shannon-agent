@@ -97,6 +97,89 @@ pub(crate) fn staging_dir_name(plugin: &str) -> String {
     format!(".{plugin}.staging-{}-{nanos}", std::process::id())
 }
 
+/// Upstream source pin for repo-installed addons (扩展安全专项·步骤 B,
+/// 2026-10-11). Written as a sidecar next to the installed content so the
+/// directory-scanning listings can report exactly which commit the content
+/// came from — and whether the ref it tracks is mutable. No persistent
+/// addon database exists (listings scan `~/.shannon/{skills,agents}/`), so
+/// the sidecar IS the metadata store.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct SourcePin {
+    /// Repo the content was cloned from (`owner/repo` shorthand or URL).
+    pub repo: String,
+    /// Ref the install requested (branch/tag name or full commit SHA).
+    #[serde(rename = "ref")]
+    pub ref_: String,
+    /// Commit the clone actually landed on, when resolvable. Absent beats
+    /// fabricated — a failed `rev-parse` degrades the pin, never invents one.
+    pub commit: Option<String>,
+    /// True when the requested ref is mutable — a refresh can silently move
+    /// content (supply-chain surface the UI renders as a floating-ref badge).
+    pub ref_floating: bool,
+}
+
+/// Sidecar filename inside the installed plugin dir. Dot-prefixed like the
+/// other bookkeeping files; never a plugin slug.
+pub(crate) const SOURCE_PIN_SIDECAR: &str = ".shannon-source.json";
+
+/// A ref pins content only if it IS a full commit hash — anything else
+/// (branch, tag, `HEAD`) is a mutable pointer upstream. Doubles as the
+/// validator for `rev-parse` output (SHA-1: 40 hex, SHA-256: 64 hex).
+pub(crate) fn is_floating_ref(ref_: &str) -> bool {
+    let is_full_hash = ref_.len() == 40 || ref_.len() == 64;
+    let all_hex = ref_.bytes().all(|b| b.is_ascii_hexdigit());
+    !(is_full_hash && all_hex)
+}
+
+/// Resolve the commit the working tree at `dir` is on (`git rev-parse HEAD`
+/// — works on the shallow clones the installers create). `None` on any
+/// failure: callers record the pin WITHOUT a commit rather than guessing.
+pub(crate) fn resolve_head_commit(dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if is_floating_ref(&sha) {
+        return None;
+    }
+    Some(sha)
+}
+
+/// Persist the pin next to the installed content. Best-effort by design: a
+/// failed sidecar write degrades to "no pin reported" and never fails the
+/// install it accompanies.
+pub(crate) fn write_source_pin(dir: &std::path::Path, pin: &SourcePin) {
+    let path = dir.join(SOURCE_PIN_SIDECAR);
+    match serde_json::to_vec_pretty(pin) {
+        Ok(bytes) => {
+            if let Err(e) = std::fs::write(&path, bytes) {
+                tracing::warn!(error = %e, path = %path.display(), "source pin sidecar write failed");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "source pin serialize failed"),
+    }
+}
+
+/// Read the pin back. `None` when absent or corrupt — listings report an
+/// unpinned addon, which is exactly what the disk shows.
+pub(crate) fn read_source_pin(dir: &std::path::Path) -> Option<SourcePin> {
+    let bytes = std::fs::read(dir.join(SOURCE_PIN_SIDECAR)).ok()?;
+    match serde_json::from_slice(&bytes) {
+        Ok(pin) => Some(pin),
+        Err(e) => {
+            tracing::warn!(error = %e, "source pin sidecar unreadable");
+            None
+        }
+    }
+}
+
 /// Shared fixtures for the repo-installer gate tests (skill + agent): local
 /// git repos addressed via `file://` — no network, no GitHub.
 #[cfg(test)]
@@ -253,6 +336,55 @@ mod tests {
     }
 
     #[test]
+    fn floating_ref_classification() {
+        // Full SHA-1 / SHA-256 pin; everything else is a mutable pointer.
+        assert!(!is_floating_ref(&"a".repeat(40)));
+        assert!(!is_floating_ref(&"b".repeat(64)));
+        for mutable in ["main".to_string(), "v1.2.3".into(), "HEAD".into(), "heads/main".into(), "g".repeat(40), "x".repeat(39), "x".repeat(41)] {
+            assert!(is_floating_ref(&mutable), "{mutable:?} must be floating");
+        }
+    }
+
+    #[test]
+    fn head_commit_resolves_and_degrades_honestly() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let url = test_support::local_repo_fixture(
+            &tmp.path().join("repo"),
+            &[("SKILL.md", "# fixture")],
+        );
+        let clone = tmp.path().join("clone");
+        test_support::run_git(
+            tmp.path(),
+            &["clone", "-q", "--depth", "1", &url, clone.to_str().unwrap()],
+        );
+        let sha = resolve_head_commit(&clone).expect("shallow clone resolves HEAD");
+        assert_eq!(sha.len(), 40);
+        // Not a repo → None, never a fabricated value.
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(resolve_head_commit(&empty), None);
+    }
+
+    #[test]
+    fn source_pin_roundtrip_and_corruption() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let dir = tmp.path().join("plugin");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(read_source_pin(&dir), None, "absent sidecar reads None");
+        let pin = SourcePin {
+            repo: "o/r".into(),
+            ref_: "main".into(),
+            commit: Some("a".repeat(40)),
+            ref_floating: true,
+        };
+        write_source_pin(&dir, &pin);
+        assert_eq!(read_source_pin(&dir), Some(pin));
+        // Corrupt sidecar → None (honest degradation, not a guessed pin).
+        std::fs::write(dir.join(SOURCE_PIN_SIDECAR), b"{not json").unwrap();
+        assert_eq!(read_source_pin(&dir), None);
+    }
+
+    #[test]
     fn safe_plugin_name_slugs_to_frontend_whitelist() {
         // The slug must satisfy the UI-side ^[a-z0-9][a-z0-9._-]*$ whitelist.
         assert_eq!(safe_plugin_name("My Skill v2!").unwrap(), "my-skill-v2");
@@ -339,6 +471,8 @@ mod tests {
                 installed_at: Some(chrono::Utc::now()),
                 version: entry.version.clone(),
                 enabled: true,
+                source_commit: None,
+                ref_floating: false,
             })
         }
         async fn uninstall(&self, _addon_id: &str) -> Result<(), InstallError> {
