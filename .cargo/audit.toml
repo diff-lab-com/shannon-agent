@@ -95,4 +95,8 @@ ignore = [
     # policy above this entry lives HERE only. Re-evaluate if
     # async-imap stabilizes.
     "RUSTSEC-2023-0086",
+    # unsafe-libyaml - unmaintained (transitive via serde_yaml). Same entry
+    # as deny.toml (both tools flag it): yaml parsing is config-local, not
+    # attacker-facing. Keep the two lists in sync per the header note.
+    "RUSTSEC-2024-0449",
 ]
