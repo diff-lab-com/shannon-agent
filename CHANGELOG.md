@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 更新通道 · `shannon self-update`（签名验证原子自换）+ latest.json 签名通道（D1/D2）（2026-10-12）
 - 扩展安全 · 并行线 E：出站注入扫描 audit v1（web-fetch/web-search 入口，observe-only）（2026-10-11）
 - 扩展安全 · 步骤 B：repo 安装 commit 钉住（sidecar 元数据 + update 比对 + 浮动引用徽章）（2026-10-11）
 - 发版工程 · install.sh 可选构建出处验证（SHANNON_VERIFY_ATTESTATION）+ PipeWire 探测（2026-10-11）
@@ -37,6 +38,13 @@ Waves queued for the next release, newest first:
 - **框架复用**：模式解析镜像 secret-guard（`$SHANNON_INJECTION_GUARD` 现存即裁决，`audit` 启用、其余含 `off`/垃圾值为显式退出且压过配置；缺省读 `[injection_guard] mode`；两者皆缺 → audit）。pattern 表上收到 `shannon_core::injection_guard` 单源，桌面安装门 scanner 改用同一表（分类逻辑/风险等级仍是安装门契约）。
 - **边界**：每串扫描封顶 64 KiB（char-boundary 安全）；未知 wire 面/其余工具入口的接入留待调参批。
 =======
+### 更新通道 · `shannon self-update` + latest.json 签名通道（2026-10-12，D1/D2）
+
+- **签名通道（D2）**：publish job 用**本发布二进制** `shannon self-update --emit-channel` 从 SHA256SUMS 构建 latest.json 并以 Ed25519 签名（私钥入 `SHANNON_LATEST_SIGNING_KEY` Actions secret，公钥钉死 `self_update.rs`）——emit 与 verify 同一份代码，canonicalization 永不漂移；签名盖 compact+键序排序的 canonical JSON，一次覆盖全部产物哈希。latest.json 有意不在 SHA256SUMS/attestation 覆盖内（生成于两者之后），以自身签名为保护。
+- **自换命令（D1）**：`shannon self-update`（`--yes`/`--url`；`SHANNON_UPDATE_URL` 环境变量同效）——fetch→验签→版本门→确认→下载→sha256→tar→**同目录 rename 原子换装**（运行中会话保留旧 inode 直至退出）。显式用户命令，补充桌面「notify only」承诺而非自动化它。
+- **诚实边界**：验签失败一律拒绝（无跳过路径）；系统包安装（无写权限）指向 install.sh/包管理器；Windows v1 不支持（运行中 exe 不可替换），指向 install.ps1；本地工具入口之外的扫描接入、通道密钥轮换 = 新 pair + 新版本发布（文档已注）。
+- **测试**：9/9 含 python cryptography 独立实现交叉签名夹具（canonicalization 契约跨实现钉死）+ 篡改/错钥/缺签名/未知 schema 拒绝；E2E 实测本地通道签发（真实私钥）→ 换装 → 篡改拒绝零改动。
+
 ### 扩展安全 · 并行线 E：出站注入扫描 audit v1（2026-10-11）
 
 ### 扩展安全 · 步骤 B：repo 安装 commit 钉住（2026-10-11）
