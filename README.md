@@ -246,6 +246,8 @@ Shannon is local-first: state lives in `~/.shannon/`, and nothing leaves your ma
 
 ### 1. Install
 
+Already installed? `shannon self-update` downloads, signature-verifies and atomically replaces the CLI from the signed release channel (Linux/macOS).
+
 Download the latest release for your platform:
 
 ```bash
