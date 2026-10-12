@@ -127,3 +127,15 @@ PR #342 宣称并已在 CHANGELOG 向用户宣告"unset 默认 redact",但实际
 - **过程事故(自省)**:③ 执行中途,#392 合并后的 `git reset --hard origin/dev` 把工作区里未提交的 ③ 全部改动抹掉(仅 2 个 untracked 新文件幸存)——全部改动从上下文完整重放并重新过门禁。教训重录:**破坏性重置前必须先确认工作区干净**;此外 `pkill -f` 模式自匹配、后台轮询丢 cwd 两起小事故均即时发现无损。
 - **CI 备注**:CI clippy 带 `-D warnings`(含 `unwrap_used`)严于本地默认——④ 首推被 Clippy 拒,测试断言 `.unwrap()`→`.expect()` 后绿;此后本地严格参数(`-- -D warnings`)复核。
 - **本地部署 ✅**:dev @ 77ea21234(④ 合并点),二进制含 ③④,DISPLAY=:1 运行中(pid 3525463)。
+
+## 执行记录(五)(2026-10-12,更新通道 D1/D2 落地 + C 的 tripwires 固化)
+
+用户批准「D 拆四步:现在做 D1+D2,C 维持信号门控」:
+
+- **D2 · latest.json 签名通道 ✅(PR #397)**:publish job 新步骤——**用本发布二进制** `shannon self-update --emit-channel` 从 SHA256SUMS 构建并 Ed25519 签名(emit/verify 同一份代码,canonicalization 永不漂移);私钥入 `SHANNON_LATEST_SIGNING_KEY` Actions secret(2026-10-12 生成,备份于工作区 secrets-backup,轮换 = 新 pair + 新版本),公钥钉死 `self_update.rs`;签名盖 compact+键序 canonical JSON,一次覆盖全部产物哈希。latest.json 有意不进 SHA256SUMS/attestation(生成于两者之后),以自身签名为保护;签名失败即阻断发版(publish flip 之前)。
+- **D1 · `shannon self-update` ✅(同 PR)**:fetch→验签→版本门→确认→下载→sha256→tar→同目录 rename 原子换装(运行中会话保留旧 inode);显式用户命令,补充桌面「notify only」承诺而非自动化它。诚实边界:验签失败一律拒绝(无跳过路径)、系统包安装无写权限指向 install.sh、Windows v1 不支持指向 install.ps1、gate-exempt 同 update/doctor。
+- **验证**:单测 9/9 含 **python cryptography 独立实现交叉签名夹具**(canonicalization 契约跨实现钉死);E2E 实测本地通道真实私钥签发→换装成功(假 v99 二进制,运行输出 i-am-v99.0.0)→篡改通道拒绝且零副作用。
+- **CI 三轮修复(advisory 库当日变动,非本批引入)**:①cargo-deny 报 unsafe-libyaml unmaintained(RUSTSEC-2024-0449)→ 按 deny.toml 既有模式豁免(注明理由);②cargo audit 又报 quinn-proto 0.11.16 两个 high(0339/0341)→ 升 0.11.17;③audit 再报 0.11.17 上新挂的三个公告(0338/0340/0343,修复 ≥0.11.18)→ 升 0.11.18,并按 audit.toml 头部「两表同步」约定补 RUSTSEC-2024-0449。终态 20 pass 全绿。
+- **C · 真·托管+签名目录:tripwires 固化(满足任一即立项)**:①≥2 个第三方发布者主动要求经 Shannon 目录分发;②目录安装量达 ~1k/月量级;③生态出真实供应链事件/险情;④企业许可清单明确要求签名出处。届时第一步形状 =「Shannon 签目录清单 + 钉哈希,发布者继续自托管」,不做全量镜像。
+- **D3/D4 处置**:D3(桌面辅助更新,默认关 + 文案捆绑改写)等第一声用户需求;D4(静默自动更新)不做——系统包模型下需要 updater 服务,属产品负资产。
+- **本地部署**:本次仅动 shannon-cli + release.yml,桌面二进制无变化,:1 沿用 pid 3525463 部署。
