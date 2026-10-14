@@ -719,13 +719,19 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       const gate = sessionGate(ctx);
       if (gate) return gate;
       try {
-        const { mode } = await getApprovalMode({
+        // #400 follow-up: forward the EFFECTIVE mode and its source so the
+        // phone displays what a new turn would actually run under (`?? null`
+        // covers an engine that predates the additive `source` key).
+        const { mode, source } = await getApprovalMode({
           engineBaseUrl: opts.engineHttpBaseUrl,
           sessionId: ctx.sessionId as string,
           authToken: engineAuthToken,
           fetchImpl,
         });
-        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+        return {
+          kind: "result",
+          result: { mode, source: source ?? null } satisfies ApprovalStateResult,
+        };
       } catch (err) {
         return {
           kind: "error",
@@ -747,7 +753,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         };
       }
       try {
-        const { mode } = await setApprovalMode({
+        const { mode, source } = await setApprovalMode({
           engineBaseUrl: opts.engineHttpBaseUrl,
           sessionId: ctx.sessionId as string,
           mode: params.mode,
@@ -757,7 +763,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         opts.logger.info(
           `shannon/approval.set: session ${ctx.sessionId} tightened to ${mode}`,
         );
-        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+        return {
+          kind: "result",
+          result: { mode, source: source ?? null } satisfies ApprovalStateResult,
+        };
       } catch (err) {
         return {
           kind: "error",

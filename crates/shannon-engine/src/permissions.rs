@@ -161,6 +161,17 @@ pub enum ApprovalMode {
     Readonly,
 }
 
+/// #400: which user-configuration layer set the current approval mode.
+/// Absent → the mode is the struct default (or was set programmatically —
+/// a CLI flag, a per-session override, a test).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalModeSource {
+    /// A permission profile (`apply_profile` / `apply_custom_profile_def`).
+    Profile,
+    /// A settings `permissions.defaultMode` (`apply_settings_permissions`).
+    Settings,
+}
+
 impl std::fmt::Display for ApprovalMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1112,12 +1123,14 @@ pub struct PermissionManager {
     /// Current approval policy mode
     approval_mode: ApprovalMode,
 
-    /// #400: whether the current mode was set by user configuration — a
-    /// permission profile (`apply_profile` / `apply_custom_profile_def`) or a
-    /// settings `permissions.defaultMode` — rather than staying at the struct
-    /// default. Headless hosts consult this so an explicitly configured mode
-    /// is honored instead of being silently overridden by a headless default.
-    approval_mode_from_config: bool,
+    /// #400: where the current mode came from, when it came from user
+    /// configuration — a permission profile (`apply_profile` /
+    /// `apply_custom_profile_def`) or a settings `permissions.defaultMode` —
+    /// rather than staying at the struct default. Headless hosts consult the
+    /// presence so an explicitly configured mode is honored instead of being
+    /// silently overridden by a headless default; the approval-mode
+    /// transparency face (approval/mode GET) surfaces WHICH source won.
+    approval_mode_source: Option<ApprovalModeSource>,
 
     /// Sessions with an approved plan (for Plan mode auto-approval).
     plan_approved_sessions: HashSet<uuid::Uuid>,
@@ -1168,7 +1181,7 @@ impl PermissionManager {
             classifier: crate::permission_classifier::PermissionClassifier::new(),
             llm_classifier: None,
             approval_mode: ApprovalMode::default(),
-            approval_mode_from_config: false,
+            approval_mode_source: None,
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
             known_read_only: HashMap::new(),
@@ -1614,11 +1627,18 @@ impl PermissionManager {
 
     /// #400: was the current mode set by user configuration (a permission
     /// profile or a settings `defaultMode`)? Programmatic `set_approval_mode`
-    /// calls (CLI flags, per-session overrides, tests) clear the flag — it
-    /// tracks the CONFIG origin only, so headless hosts can distinguish
-    /// "the user asked for this mode" from "the struct default is showing".
+    /// calls (CLI flags, per-session overrides, tests) clear it — this tracks
+    /// the CONFIG origin only, so headless hosts can distinguish "the user
+    /// asked for this mode" from "the struct default is showing".
     pub fn approval_mode_from_config(&self) -> bool {
-        self.approval_mode_from_config
+        self.approval_mode_source.is_some()
+    }
+
+    /// #400: WHICH configuration layer set the current mode — `None` when
+    /// the mode is the struct default or was set programmatically. Feeds the
+    /// approval-mode transparency face (`GET /api/approval/mode` `source`).
+    pub fn approval_mode_source(&self) -> Option<ApprovalModeSource> {
+        self.approval_mode_source
     }
 
     /// Set the approval mode. Resets the auto-approval budget counter —
@@ -1626,7 +1646,7 @@ impl PermissionManager {
     pub fn set_approval_mode(&mut self, mode: ApprovalMode) {
         tracing::info!(old = ?self.approval_mode, new = ?mode, "Approval mode changed");
         self.approval_mode = mode;
-        self.approval_mode_from_config = false;
+        self.approval_mode_source = None;
         self.reset_auto_approval_count();
     }
 
@@ -1761,7 +1781,7 @@ impl PermissionManager {
         );
 
         self.approval_mode = mode;
-        self.approval_mode_from_config = true;
+        self.approval_mode_source = Some(ApprovalModeSource::Profile);
         self.active_profile = Some(profile);
     }
 
@@ -1801,7 +1821,7 @@ impl PermissionManager {
         );
 
         self.approval_mode = mode;
-        self.approval_mode_from_config = true;
+        self.approval_mode_source = Some(ApprovalModeSource::Profile);
         self.active_profile = Some(PermissionProfile::Custom(def.name.clone()));
     }
 
@@ -2639,9 +2659,9 @@ pub fn apply_settings_permissions(
                 } else {
                     pm.set_approval_mode(mode);
                     // #400: mark the config origin — `set_approval_mode` clears
-                    // the flag (it is the programmatic override entry), so a
+                    // it (it is the programmatic override entry), so a
                     // settings-sourced mode is re-stamped after the call.
-                    pm.approval_mode_from_config = true;
+                    pm.approval_mode_source = Some(ApprovalModeSource::Settings);
                 }
             }
             None => tracing::warn!("unknown permissions.defaultMode '{mode_str}'"),
@@ -4244,29 +4264,39 @@ mod tests {
     }
 
     // #400: headless hosts honor a user-configured approval mode instead of
-    // silently overriding it — `approval_mode_from_config` tracks whether the
-    // current mode came from a profile or a settings `defaultMode`.
+    // silently overriding it — the source tracker records WHICH config layer
+    // (settings defaultMode vs permission profile) set the current mode.
     #[test]
-    fn test_approval_mode_from_config_tracks_configuration_origin() {
+    fn test_approval_mode_source_tracks_configuration_origin() {
         // Fresh manager: struct default, NOT config-sourced.
         let mut pm = PermissionManager::new();
         assert!(!pm.approval_mode_from_config());
+        assert_eq!(pm.approval_mode_source(), None);
 
-        // A settings defaultMode stamps the config origin.
+        // A settings defaultMode stamps the Settings origin.
         let perms = serde_json::json!({ "defaultMode": "ask" });
         super::apply_settings_permissions(&mut pm, &perms, false);
         assert_eq!(pm.approval_mode(), ApprovalMode::Ask);
         assert!(pm.approval_mode_from_config());
+        assert_eq!(
+            pm.approval_mode_source(),
+            Some(super::ApprovalModeSource::Settings)
+        );
 
         // A programmatic override clears it (the CLI flag path).
         pm.set_approval_mode(ApprovalMode::FullAuto);
         assert!(!pm.approval_mode_from_config());
+        assert_eq!(pm.approval_mode_source(), None);
 
-        // A permission profile stamps it again.
+        // A permission profile stamps the Profile origin.
         let profile =
             crate::permission_profile::PermissionProfile::from_str_lossy("strict").unwrap();
         pm.apply_profile(profile);
         assert!(pm.approval_mode_from_config());
+        assert_eq!(
+            pm.approval_mode_source(),
+            Some(super::ApprovalModeSource::Profile)
+        );
     }
 
     fn sid_of() -> uuid::Uuid {
