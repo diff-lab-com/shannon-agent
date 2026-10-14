@@ -806,11 +806,15 @@ async fn query_handler(
     // Same tools=[] fix as the WS path: serve the server's registry, not a
     // fresh empty one. K4/P2-3: the request may pin an approval mode.
     let mut permissions = server_permissions();
-    apply_ambient_and_session(&mut permissions, state.ambient_approval_mode, req.approval_mode.as_deref())
-        .map_err(|message| ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message,
-        })?;
+    apply_ambient_and_session(
+        &mut permissions,
+        state.ambient_approval_mode,
+        req.approval_mode.as_deref(),
+    )
+    .map_err(|message| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message,
+    })?;
     let state_mgr = StateManager::new();
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
@@ -1747,9 +1751,11 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                     let s = session.lock().await;
                     s.approval_mode.clone()
                 };
-                if let Err(e) =
-                    apply_ambient_and_session(&mut permissions, state.ambient_approval_mode, stored_mode.as_deref())
-                {
+                if let Err(e) = apply_ambient_and_session(
+                    &mut permissions,
+                    state.ambient_approval_mode,
+                    stored_mode.as_deref(),
+                ) {
                     tracing::warn!(session = %session_id, error = %e, "stored approval mode refused");
                 }
                 let state_mgr = StateManager::new();
@@ -4519,7 +4525,7 @@ mod tests {
         assert_eq!(res.0.source.as_deref(), Some("ambient"));
 
         // A session pin still outranks the ambient default.
-        approval_mode_post_handler(
+        let _tighten = approval_mode_post_handler(
             State(state.clone()),
             axum::Json(ApprovalModeRequest {
                 session_id: sid.clone(),
@@ -4554,7 +4560,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::FullAuto);
+        assert_eq!(
+            pm.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::FullAuto
+        );
 
         // A session pin outranks the ambient default…
         let mut pm = shannon_engine::permissions::PermissionManager::new();
@@ -4564,21 +4573,29 @@ mod tests {
             Some("readonly"),
         )
         .unwrap();
-        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::Readonly);
+        assert_eq!(
+            pm.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::Readonly
+        );
 
         // …and an UNKNOWN pin is refused (never silently widened to ambient).
         let mut pm = shannon_engine::permissions::PermissionManager::new();
-        assert!(apply_ambient_and_session(
-            &mut pm,
-            Some(shannon_engine::permissions::ApprovalMode::FullAuto),
-            Some("not-a-mode"),
-        )
-        .is_err());
+        assert!(
+            apply_ambient_and_session(
+                &mut pm,
+                Some(shannon_engine::permissions::ApprovalMode::FullAuto),
+                Some("not-a-mode"),
+            )
+            .is_err()
+        );
 
         // Neither present → the settings/profile base stands.
         let mut pm = shannon_engine::permissions::PermissionManager::new();
         apply_ambient_and_session(&mut pm, None, None).unwrap();
-        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::AutoEdit);
+        assert_eq!(
+            pm.approval_mode(),
+            shannon_engine::permissions::ApprovalMode::AutoEdit
+        );
     }
 
     #[tokio::test]

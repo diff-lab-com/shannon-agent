@@ -326,7 +326,9 @@ pub fn build_server(
 /// refuse (root / `SHANNON_DISABLE_BYPASS=1`). Unrecognised values degrade
 /// to `Ask` — [`crate::commands::parse_approval_mode`] semantics, the same
 /// safe default the unattended flows use.
-fn ambient_approval_mode(desktop_config: &DesktopConfig) -> Option<shannon_engine::permissions::ApprovalMode> {
+fn ambient_approval_mode(
+    desktop_config: &DesktopConfig,
+) -> Option<shannon_engine::permissions::ApprovalMode> {
     let raw = desktop_config.approval_mode.as_deref()?;
     let parsed = crate::commands::parse_approval_mode(raw);
     if parsed == shannon_engine::permissions::ApprovalMode::BypassPermissions {
@@ -442,7 +444,11 @@ mod tests {
             approval_mode: None,
             ..DesktopConfig::default()
         };
-        assert_eq!(ambient_approval_mode(&cfg), None, "explicit null → no ambient");
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            None,
+            "explicit null → no ambient"
+        );
 
         cfg.approval_mode = Some("auto-edit".to_string());
         assert_eq!(
