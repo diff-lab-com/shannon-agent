@@ -546,6 +546,10 @@ async function startMobileServer(
       // dispatch hub's journal (task id → roster agent) — the same hub the
       // task handlers journal into.
       taskAgentLookup: (sessionId: string) => dispatchHub.agentForSession(sessionId),
+      // D-4 (#401): a device may steer its own task threads — the journal's
+      // task→device attribution decides; foreign ids keep the hijack guard.
+      taskOwnedByDevice: (sessionId: string, deviceId: string) =>
+        dispatchHub.ownsTaskSession(deviceId, sessionId),
       // trust.changed: a revoke that actually removed a grant is broadcast to
       // every connected device (host-level entity, seq-free, outside the §O4
       // replay ring — a missed push degrades to the §Q5 re-probe behavior).

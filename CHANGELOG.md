@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 跨仓 mobile 安全批 · headless 运行尊重 settings/审批档位的模式（#400，无审批出口时 fail-closed 拒绝并留痕）+ gated query 放行「属主设备 × 名下任务线程」steering/cancel（#401，纯 hub 判定，wire 不变）（2026-10-14）
 - 更新通道 · `shannon self-update`（签名验证原子自换）+ latest.json 签名通道（D1/D2）（2026-10-12）
 - 扩展安全 · 并行线 E：出站注入扫描 audit v1（web-fetch/web-search 入口，observe-only）（2026-10-11）
 - 扩展安全 · 步骤 B：repo 安装 commit 钉住（sidecar 元数据 + update 比对 + 浮动引用徽章）（2026-10-11）

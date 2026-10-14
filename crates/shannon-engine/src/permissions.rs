@@ -1112,6 +1112,13 @@ pub struct PermissionManager {
     /// Current approval policy mode
     approval_mode: ApprovalMode,
 
+    /// #400: whether the current mode was set by user configuration — a
+    /// permission profile (`apply_profile` / `apply_custom_profile_def`) or a
+    /// settings `permissions.defaultMode` — rather than staying at the struct
+    /// default. Headless hosts consult this so an explicitly configured mode
+    /// is honored instead of being silently overridden by a headless default.
+    approval_mode_from_config: bool,
+
     /// Sessions with an approved plan (for Plan mode auto-approval).
     plan_approved_sessions: HashSet<uuid::Uuid>,
 
@@ -1161,6 +1168,7 @@ impl PermissionManager {
             classifier: crate::permission_classifier::PermissionClassifier::new(),
             llm_classifier: None,
             approval_mode: ApprovalMode::default(),
+            approval_mode_from_config: false,
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
             known_read_only: HashMap::new(),
@@ -1604,11 +1612,21 @@ impl PermissionManager {
         self.approval_mode
     }
 
+    /// #400: was the current mode set by user configuration (a permission
+    /// profile or a settings `defaultMode`)? Programmatic `set_approval_mode`
+    /// calls (CLI flags, per-session overrides, tests) clear the flag — it
+    /// tracks the CONFIG origin only, so headless hosts can distinguish
+    /// "the user asked for this mode" from "the struct default is showing".
+    pub fn approval_mode_from_config(&self) -> bool {
+        self.approval_mode_from_config
+    }
+
     /// Set the approval mode. Resets the auto-approval budget counter —
     /// a posture change is a fresh stretch (design §4.1 / K5).
     pub fn set_approval_mode(&mut self, mode: ApprovalMode) {
         tracing::info!(old = ?self.approval_mode, new = ?mode, "Approval mode changed");
         self.approval_mode = mode;
+        self.approval_mode_from_config = false;
         self.reset_auto_approval_count();
     }
 
@@ -1743,6 +1761,7 @@ impl PermissionManager {
         );
 
         self.approval_mode = mode;
+        self.approval_mode_from_config = true;
         self.active_profile = Some(profile);
     }
 
@@ -1782,6 +1801,7 @@ impl PermissionManager {
         );
 
         self.approval_mode = mode;
+        self.approval_mode_from_config = true;
         self.active_profile = Some(PermissionProfile::Custom(def.name.clone()));
     }
 
@@ -2618,6 +2638,10 @@ pub fn apply_settings_permissions(
                     );
                 } else {
                     pm.set_approval_mode(mode);
+                    // #400: mark the config origin — `set_approval_mode` clears
+                    // the flag (it is the programmatic override entry), so a
+                    // settings-sourced mode is re-stamped after the call.
+                    pm.approval_mode_from_config = true;
                 }
             }
             None => tracing::warn!("unknown permissions.defaultMode '{mode_str}'"),
@@ -4217,6 +4241,32 @@ mod tests {
             )
             .unwrap();
         assert!(r.is_none(), "allow rules pre-approve");
+    }
+
+    // #400: headless hosts honor a user-configured approval mode instead of
+    // silently overriding it — `approval_mode_from_config` tracks whether the
+    // current mode came from a profile or a settings `defaultMode`.
+    #[test]
+    fn test_approval_mode_from_config_tracks_configuration_origin() {
+        // Fresh manager: struct default, NOT config-sourced.
+        let mut pm = PermissionManager::new();
+        assert!(!pm.approval_mode_from_config());
+
+        // A settings defaultMode stamps the config origin.
+        let perms = serde_json::json!({ "defaultMode": "ask" });
+        super::apply_settings_permissions(&mut pm, &perms, false);
+        assert_eq!(pm.approval_mode(), ApprovalMode::Ask);
+        assert!(pm.approval_mode_from_config());
+
+        // A programmatic override clears it (the CLI flag path).
+        pm.set_approval_mode(ApprovalMode::FullAuto);
+        assert!(!pm.approval_mode_from_config());
+
+        // A permission profile stamps it again.
+        let profile =
+            crate::permission_profile::PermissionProfile::from_str_lossy("strict").unwrap();
+        pm.apply_profile(profile);
+        assert!(pm.approval_mode_from_config());
     }
 
     fn sid_of() -> uuid::Uuid {

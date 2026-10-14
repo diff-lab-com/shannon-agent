@@ -443,6 +443,9 @@ const handlers = createMobileHandlers({
     // B0: shannon/session.list fills a task session's agent_id from the same
     // hub journal the task handlers write (bootstrap parity).
     taskAgentLookup: (sessionId: string) => hub.agentForSession(sessionId),
+    // D-4 (#401, bootstrap parity): a device may steer its own task threads.
+    taskOwnedByDevice: (sessionId: string, deviceId: string) =>
+      hub.ownsTaskSession(deviceId, sessionId),
   },
   tokens,
   registry,

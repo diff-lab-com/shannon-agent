@@ -18,6 +18,7 @@ import {
 } from "../crypto.js";
 import { ShannonError, type ShannonEvent } from "../protocol.js";
 import { ApprovalRegistry } from "../approvalRegistry.js";
+import { ActiveQueryRegistry } from "../../router/activeQueries.js";
 import { MobileServer, type MethodHandlers } from "../server.js";
 import {
   DeviceRegistry,
@@ -97,7 +98,11 @@ function rpcStream(socket: WebSocket, method: string, params: unknown): {
 // ── mock engine (only needed for post-pair query/approval E2E) ──────────────
 
 class FakeEngine implements EngineClient {
-  constructor(private readonly script: EngineEvent[] = []) {}
+  constructor(
+    private readonly script: EngineEvent[] = [],
+    /** D-4: the connect opts the bridge chose — `sessionId` asserts ownership routing. */
+    readonly connectOpts: { sessionId: string | null } = { sessionId: null },
+  ) {}
   async connect(): Promise<void> {}
   cancel(): void {}
   async close(): Promise<void> {}
@@ -118,6 +123,12 @@ function handlers(opts: {
   engineScript?: EngineEvent[];
   onDeviceRevoked?: (deviceId: string) => void;
   approvalRegistry?: ApprovalRegistry;
+  /** D-4: task-thread ownership predicate wired into the engine bridge. */
+  taskOwnedByDevice?: (sessionId: string, deviceId: string) => boolean;
+  /** D-4: sink for every FakeEngine the bridge creates (connect opts assertions). */
+  createdEngines?: FakeEngine[];
+  /** Shared in-flight query registry (cancel reachability tests). */
+  activeQueries?: ActiveQueryRegistry;
 }): MethodHandlers {
   return createMobileHandlers({
     engine: {
@@ -125,9 +136,15 @@ function handlers(opts: {
       engineHttpBaseUrl: "http://engine:33420",
       version: "test",
       logger,
-      engineClientFactory: () => new FakeEngine(opts.engineScript ?? []),
+      engineClientFactory: (o) => {
+        const engine = new FakeEngine(opts.engineScript ?? [], { sessionId: o.sessionId ?? null });
+        opts.createdEngines?.push(engine);
+        return engine;
+      },
       fetchImpl: opts.fetchImpl,
       approvalRegistry: opts.approvalRegistry,
+      taskOwnedByDevice: opts.taskOwnedByDevice,
+      activeQueries: opts.activeQueries,
     },
     tokens: opts.tokens,
     registry: opts.registry,
@@ -1022,6 +1039,129 @@ describe("query ownership", () => {
     const res = await response;
     expect(res.result).toEqual({ ok: true });
     expect(events.map((e) => e.type)).toContain("query.completed");
+    socket.close();
+  });
+
+  it("query keeps the session_id when it is the caller's own task thread (D-4 #401)", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const created: FakeEngine[] = [];
+    let boundDeviceId = "";
+    const { port } = await start(
+      handlers({
+        tokens,
+        registry,
+        engineScript: [{ type: "completed", model: "m" }],
+        createdEngines: created,
+        // Journal stand-in: this device dispatched exactly one task, "task-own-1".
+        taskOwnedByDevice: (sessionId, deviceId) =>
+          sessionId === "task-own-1" && deviceId === boundDeviceId,
+      }),
+    );
+    const socket = await connect(port);
+    const phone = newPhone();
+    const rec = tokens.issue();
+    const paired = await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phone.publicKeyB64Url,
+      pop_signature: signMessage(phone.privateKey, pairPopMessage(rec.token, phone.publicKeyB64Url)),
+    });
+    boundDeviceId = paired.result.device_id;
+
+    // Steering its own task thread must keep the task id — the reply lands
+    // in the task thread, not the device session.
+    const { events, response } = rpcStream(socket, "shannon/query", {
+      prompt: "steer",
+      session_id: "task-own-1",
+    });
+    const res = await response;
+    expect(res.result).toEqual({ ok: true });
+    expect(events.map((e) => e.type)).toContain("query.completed");
+    expect(created[0]!.connectOpts.sessionId).toBe("task-own-1");
+    socket.close();
+  });
+
+  it("query still forces the device session for a foreign task id even with ownership wired", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const created: FakeEngine[] = [];
+    let boundDeviceId = "";
+    const { port } = await start(
+      handlers({
+        tokens,
+        registry,
+        engineScript: [{ type: "completed", model: "m" }],
+        createdEngines: created,
+        // Ownership wired (bootstrap parity) but the id belongs to nobody.
+        taskOwnedByDevice: (sessionId, deviceId) =>
+          sessionId === "task-own-1" && deviceId === boundDeviceId,
+      }),
+    );
+    const socket = await connect(port);
+    const phone = newPhone();
+    const rec = tokens.issue();
+    const paired = await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phone.publicKeyB64Url,
+      pop_signature: signMessage(phone.privateKey, pairPopMessage(rec.token, phone.publicKeyB64Url)),
+    });
+    boundDeviceId = paired.result.device_id;
+
+    const { response } = rpcStream(socket, "shannon/query", {
+      prompt: "hi",
+      session_id: "someone-elses-task",
+    });
+    const res = await response;
+    expect(res.result).toEqual({ ok: true });
+    expect(created[0]!.connectOpts.sessionId).toBe(boundDeviceId);
+    socket.close();
+  });
+
+  it("cancel reaches a steering client parked under the caller's own task id (D-4 #401)", async () => {
+    const tokens = new PairTokenStore();
+    const registry = new DeviceRegistry();
+    const activeQueries = new ActiveQueryRegistry();
+    let boundDeviceId = "";
+    const { port } = await start(
+      handlers({
+        tokens,
+        registry,
+        engineScript: [{ type: "completed", model: "m" }],
+        activeQueries,
+        taskOwnedByDevice: (sessionId, deviceId) =>
+          sessionId === "task-own-1" && deviceId === boundDeviceId,
+      }),
+    );
+    const socket = await connect(port);
+    const phone = newPhone();
+    const rec = tokens.issue();
+    const paired = await rpc(socket, "shannon/pair", {
+      pair_token: rec.token,
+      device_public_key: phone.publicKeyB64Url,
+      pop_signature: signMessage(phone.privateKey, pairPopMessage(rec.token, phone.publicKeyB64Url)),
+    });
+    boundDeviceId = paired.result.device_id;
+
+    // A steering query registers under the TASK id key (D-4 query routing);
+    // pre-register a stand-in so the cancel probe has a target.
+    const cancelled: string[] = [];
+    activeQueries.set("task-own-1", {
+      cancel: () => cancelled.push("task-own-1"),
+      close: async () => {},
+    });
+
+    const res = await rpc(socket, "shannon/cancel", { session_id: "task-own-1" });
+    expect(res.result).toEqual({ ok: true });
+    expect(cancelled).toEqual(["task-own-1"]);
+
+    // A foreign task id must NOT reach anyone's client.
+    activeQueries.set("someone-elses-task", {
+      cancel: () => cancelled.push("someone-elses-task"),
+      close: async () => {},
+    });
+    const foreign = await rpc(socket, "shannon/cancel", { session_id: "someone-elses-task" });
+    expect(foreign.result).toEqual({ ok: true });
+    expect(cancelled).toEqual(["task-own-1"]);
     socket.close();
   });
 });

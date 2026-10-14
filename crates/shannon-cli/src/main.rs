@@ -2238,10 +2238,16 @@ fn run_noninteractive_query(
             permissions.register_tool_read_only(name, ro);
         }
 
-        // Non-interactive mode: use full-auto by default (allows all non-critical tools),
-        // or bypassPermissions with --yes flag (allows everything including critical).
-        // An explicit --permission-mode wins over both defaults (it was silently
-        // ignored on this path before — roadmap E7 QA finding).
+        // Non-interactive mode defaults, tightest-first:
+        //   explicit --permission-mode  >  --yes (bypassPermissions)
+        //   >  the user-configured mode (permission profile or settings
+        //      `permissions.defaultMode` — #400: headless runs honor it; this
+        //      path used to clobber it with full-auto unconditionally)
+        //   >  full-auto (allows all non-critical tools) when nothing is
+        //      configured.
+        // A configured conservative mode (e.g. `ask`) has no approval outlet
+        // on this headless path, so non-pre-approved tools fail closed
+        // (denied + audited) — pass --permission-mode to override.
         if let Some(mode) = permission_mode {
             let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
                 .ok_or_else(|| anyhow::anyhow!("unknown --permission-mode '{mode}'"))?;
@@ -2256,6 +2262,13 @@ fn run_noninteractive_query(
                 "Warning: --yes enables bypassPermissions (all checks skipped). Refused as root / with SHANNON_DISABLE_BYPASS=1."
             );
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::BypassPermissions);
+        } else if permissions.approval_mode_from_config() {
+            let configured = permissions.approval_mode();
+            eprintln!(
+                "Notice: headless run honoring the configured approval mode '{configured}' \
+                 (permission profile / settings defaultMode). Without an interactive approver, \
+                 non-pre-approved tools are denied — pass --permission-mode to override."
+            );
         } else {
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         }
@@ -2821,6 +2834,13 @@ fn run_headless_query(
             permissions.register_tool_read_only(name, ro);
         }
 
+        // Mode resolution, tightest-first (#400): explicit --permission-mode
+        // > --yes (bypassPermissions) > the user-configured mode (permission
+        // profile / settings defaultMode — this path used to clobber it with
+        // full-auto unconditionally) > full-auto when nothing is configured.
+        // A configured conservative mode (e.g. `ask`) has no approval outlet
+        // on this headless path, so non-pre-approved tools fail closed
+        // (denied + audited) — pass --permission-mode to override.
         let resolved_mode = match permission_mode {
             Some(mode) => {
                 let parsed = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
@@ -2837,6 +2857,15 @@ fn run_headless_query(
             None if yes => {
                 shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
                 shannon_engine::permissions::ApprovalMode::BypassPermissions
+            }
+            None if permissions.approval_mode_from_config() => {
+                let configured = permissions.approval_mode();
+                eprintln!(
+                    "Notice: headless run honoring the configured approval mode '{configured}' \
+                     (permission profile / settings defaultMode). Without an interactive approver, \
+                     non-pre-approved tools are denied — pass --permission-mode to override."
+                );
+                configured
             }
             None => shannon_engine::permissions::ApprovalMode::FullAuto,
         };
