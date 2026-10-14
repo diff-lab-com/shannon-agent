@@ -738,7 +738,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
  * Batch C2 (2026-09-20 delta analysis): the in-chat change summary grew
  * "+x −y" line counts and an in-place 撤销 (rewind to this turn's checkpoint,
  * reusing the user-message confirm flow) — the ZCode diff-card grammar.
+ *
+ * R2 审查 G8 (docs/reviews/2026-10-14-design-parity-audit-r2.md §4): 回合级
+ * 汇总卡与 InlineDiffCard(单文件卡)同屏会把路径/增删重复一遍——文件数 >2 时
+ * 默认折叠为一行「N 个文件 · +x −y」(评审/撤销操作保留),点开才展开路径列表;
+ * ≤2 个文件维持现状(路径内联,一眼可读)。
  */
+const FILE_CHANGES_COLLAPSE_THRESHOLD = 2
+
 function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
   paths: string[]
   rewindable: boolean
@@ -749,6 +756,8 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, number>) => intl.formatMessage({ id }, values)
   const [stats, setStats] = useState<DiffLineStats | null>(null)
+  const collapsible = paths.length > FILE_CHANGES_COLLAPSE_THRESHOLD
+  const [pathsExpanded, setPathsExpanded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -763,49 +772,87 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
     // Aurora 2026-10 语义色归位: additions/acceptance wear the success token
     // (moss green, shannon-ui.css `.plus`) — tertiary/amber is reserved for
     // warnings. Deletions stay error.
-    <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-success/5 border border-success/20" data-testid="file-changes-card">
-      <div className="flex items-center gap-sm min-w-0">
-        <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">difference</span>
-        <span className="font-label-sm text-on-surface truncate">
-          {t('chat.message.filesChanged', { count: paths.length })}
-        </span>
-        <span className="font-label-xs text-on-surface-variant truncate font-mono" title={paths.join('\n')}>
-          {paths.join(', ')}
-        </span>
-        {hasCounts && (
-          <span
-            className="font-mono text-label-xs tabular-nums shrink-0"
-            aria-label={t('chat.message.diffStats.aria', { additions: stats!.additions, deletions: stats!.deletions })}
-          >
-            <span className="text-success">+{stats!.additions}</span>{' '}
-            <span className="text-error">−{stats!.deletions}</span>
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-xs shrink-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-xs px-sm py-xs text-success hover:bg-success/10"
-          onClick={() => (paths.length > 1 && onReviewAll ? onReviewAll() : onReview())}
-        >
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>
-          {paths.length > 1 ? t('chat.message.reviewAll') : t('chat.message.diff')}
-        </Button>
-        {rewindable && (
+    <div className="px-md py-xs rounded-lg bg-success/5 border border-success/20" data-testid="file-changes-card">
+      <div className="flex items-center justify-between gap-sm">
+        <div className="flex items-center gap-sm min-w-0">
+          <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">difference</span>
+          {collapsible ? (
+            // G8 collapsed summary doubles as the disclosure toggle — the
+            // review/undo actions below stay visible either way.
+            <button
+              type="button"
+              data-testid="file-changes-card-toggle"
+              aria-expanded={pathsExpanded}
+              onClick={() => setPathsExpanded(v => !v)}
+              className="flex items-center gap-xs font-label-sm text-on-surface truncate cursor-pointer rounded-sm hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 min-w-0"
+            >
+              <span className="truncate">{t('chat.message.filesChanged.count', { count: paths.length })}</span>
+              {hasCounts && (
+                <span className="font-mono text-label-xs tabular-nums shrink-0">
+                  <span aria-hidden="true">· </span>
+                  <span className="text-success">+{stats!.additions}</span>{' '}
+                  <span className="text-error">−{stats!.deletions}</span>
+                </span>
+              )}
+              <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">
+                {pathsExpanded ? 'expand_less' : 'expand_more'}
+              </span>
+            </button>
+          ) : (
+            <>
+              <span className="font-label-sm text-on-surface truncate">
+                {t('chat.message.filesChanged', { count: paths.length })}
+              </span>
+              <span className="font-label-xs text-on-surface-variant truncate font-mono" title={paths.join('\n')}>
+                {paths.join(', ')}
+              </span>
+              {hasCounts && (
+                <span
+                  className="font-mono text-label-xs tabular-nums shrink-0"
+                  aria-label={t('chat.message.diffStats.aria', { additions: stats!.additions, deletions: stats!.deletions })}
+                >
+                  <span className="text-success">+{stats!.additions}</span>{' '}
+                  <span className="text-error">−{stats!.deletions}</span>
+                </span>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-xs shrink-0">
           <Button
             variant="ghost"
             size="sm"
-            aria-label={t('chat.message.rewind.aria')}
-            title={t('chat.message.rewind.button')}
-            className="gap-xs px-sm py-xs text-on-surface-variant hover:text-error hover:bg-error/10"
-            onClick={onUndo}
+            className="gap-xs px-sm py-xs text-success hover:bg-success/10"
+            onClick={() => (paths.length > 1 && onReviewAll ? onReviewAll() : onReview())}
           >
-            <span className="material-symbols-outlined icon-sm" aria-hidden="true">undo</span>
-            {t('chat.message.rewind.button')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>
+            {paths.length > 1 ? t('chat.message.reviewAll') : t('chat.message.diff')}
           </Button>
-        )}
+          {rewindable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('chat.message.rewind.aria')}
+              title={t('chat.message.rewind.button')}
+              className="gap-xs px-sm py-xs text-on-surface-variant hover:text-error hover:bg-error/10"
+              onClick={onUndo}
+            >
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">undo</span>
+              {t('chat.message.rewind.button')}
+            </Button>
+          )}
+        </div>
       </div>
+      {collapsible && pathsExpanded && (
+        <ul className="mt-xs space-y-[2px]" data-testid="file-changes-card-paths">
+          {paths.map(p => (
+            <li key={p} className="flex items-start gap-xs font-label-xs text-on-surface-variant min-w-0">
+              <span className="font-mono text-on-surface-variant/70 shrink-0" aria-hidden="true">·</span>
+              <span className="font-mono truncate" title={p}>{p}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -884,7 +931,10 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   // user asked about; healthy calls stay collapsed (ZCode delta ⑤).
   const [expanded, setExpanded] = useState(toolCall.is_error === true)
   const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
-  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
+  // R2 审查 W10 (docs/reviews/2026-10-14-design-parity-audit-r2.md §3.1):
+  // 完成对勾是中性形态(02 页 .tool .st ok 的克制读法)——琥珀只留高危/暂停,
+  // 绿色只留 diff 新增/接受;error 红与 running 态维持原样。
+  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-on-surface-variant'
   const filePath = extractFilePath(toolCall.tool_name, toolCall.tool_input)
   const canDiff = filePath != null && toolCall.status === 'completed' && !toolCall.is_error
   const durationMs = toolCall.duration_ms ?? durationMsProp
@@ -1105,7 +1155,8 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
   const maxTurns = typeof input.max_turns === 'number' ? input.max_turns : null
   const systemPrompt = typeof input.system_prompt === 'string' ? input.system_prompt : ''
   const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
-  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
+  // R2 审查 W10: subagent 卡完成对勾同样去琥珀 → 中性 on-surface-variant。
+  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-on-surface-variant'
   const durationMs = toolCall.duration_ms
 
   return (
