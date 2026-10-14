@@ -318,7 +318,8 @@ export default function MemoryPanel({
               {(injectionPreview?.entries.length ?? 0) > 3 && (
                 <span
                   data-testid="memory-injection-preview-chip-overflow"
-                  className="inline-flex items-center px-sm py-xs rounded-lg bg-surface-container-high/70 border border-outline-variant/30 font-mono text-[11.5px] text-on-surface-variant"
+                  title={(injectionPreview?.entries ?? []).slice(3).map(e => `#${e.title}`).join('\n')}
+                  className="inline-flex items-center px-sm py-xs rounded-lg bg-surface-container-high/70 border border-outline-variant/30 font-mono text-[11.5px] text-on-surface-variant cursor-default"
                 >
                   +{Math.max((injectionPreview?.entries.length ?? 0) - 3, 0)}
                 </span>

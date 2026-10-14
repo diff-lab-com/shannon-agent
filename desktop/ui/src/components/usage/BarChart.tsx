@@ -64,9 +64,20 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
   const padX = 32
   const padTop = 24
   const padBottom = 56
+  // Y-axis tick labels render leftward from the axis (textAnchor="end").
+  // CJK formatters (「1.5万」) need more leading room than a fixed 32px
+  // gutter — the leading character clipped at the viewBox edge (R2 polish
+  // A, pre-existing). Size the left gutter from the widest formatted tick;
+  // rough per-char width: CJK ≈ 12 units at fontSize 11, ASCII ≈ 7.
+  const padLeft = Math.max(
+    padX,
+    ...[0, 0.25, 0.5, 0.75, 1].map(t =>
+      [...fmt(max * t)].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? 12 : 7), 0) + 12,
+    ),
+  )
   const chartH = VB_H - padTop - padBottom
   const colCount = Math.max(data.length, 1)
-  const groupW = (VB_W - padX * 2) / colCount
+  const groupW = (VB_W - padLeft - padX) / colCount
   const colW = Math.min(36, groupW * 0.7)
 
   if (data.length === 0) {
@@ -87,7 +98,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         {[0, 0.25, 0.5, 0.75, 1].map(t => (
           <g key={t}>
             <line
-              x1={padX}
+              x1={padLeft}
               x2={VB_W - padX}
               y1={padTop + chartH * (1 - t)}
               y2={padTop + chartH * (1 - t)}
@@ -96,7 +107,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
               strokeDasharray={t === 0 ? undefined : '2 4'}
             />
             <text
-              x={padX - 6}
+              x={padLeft - 6}
               y={padTop + chartH * (1 - t) + 4}
               textAnchor="end"
               fontSize="11"
@@ -110,7 +121,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         ))}
 
         {data.map((point, idx) => {
-          const groupX = padX + groupW * idx + (groupW - colW) / 2
+          const groupX = padLeft + groupW * idx + (groupW - colW) / 2
           let y = padTop + chartH
           // Adaptive X-axis density: when there are too many columns to
           // fit legible labels, drop every other one — otherwise 30 / 90

@@ -462,7 +462,11 @@ const BLOCKED_FAMILY_STATUSES: [&str; 4] = ["blocked", "waiting", "review", "pen
 /// (chrono) serializes to. Anything else: `None`.
 fn parse_epoch_ms(v: &serde_json::Value) -> Option<i64> {
     if let Some(n) = v.as_i64() {
-        Some(if n > 1_000_000_000_000 { n } else { n.saturating_mul(1000) })
+        Some(if n > 1_000_000_000_000 {
+            n
+        } else {
+            n.saturating_mul(1000)
+        })
     } else if let Some(s) = v.as_str() {
         chrono::DateTime::parse_from_rfc3339(s)
             .ok()
@@ -956,7 +960,10 @@ mod tests {
             "blocked_reason": "quota exceeded"
         });
         assert_eq!(
-            parse_task_value(&snake, None, None).unwrap().blocked_reason.as_deref(),
+            parse_task_value(&snake, None, None)
+                .unwrap()
+                .blocked_reason
+                .as_deref(),
             Some("quota exceeded")
         );
 
@@ -999,7 +1006,9 @@ mod tests {
             "updatedAt": 1_760_000_000_000_i64
         });
         assert_eq!(
-            parse_task_value(&both, None, Some(mtime)).unwrap().blocked_since_ms,
+            parse_task_value(&both, None, Some(mtime))
+                .unwrap()
+                .blocked_since_ms,
             Some(1_700_000_000_000)
         );
     }
@@ -1010,7 +1019,9 @@ mod tests {
         for status in ["blocked", "waiting", "review", "pending_review"] {
             let v = serde_json::json!({ "id": "1", "subject": "x", "status": status });
             assert_eq!(
-                parse_task_value(&v, None, Some(mtime)).unwrap().blocked_since_ms,
+                parse_task_value(&v, None, Some(mtime))
+                    .unwrap()
+                    .blocked_since_ms,
                 Some(mtime),
                 "{status} is a blocked-family status"
             );
@@ -1019,7 +1030,9 @@ mod tests {
         for status in ["pending", "in_progress", "completed", "failed"] {
             let v = serde_json::json!({ "id": "2", "subject": "x", "status": status });
             assert_eq!(
-                parse_task_value(&v, None, Some(mtime)).unwrap().blocked_since_ms,
+                parse_task_value(&v, None, Some(mtime))
+                    .unwrap()
+                    .blocked_since_ms,
                 None,
                 "{status} must not gain a blocked_since"
             );
@@ -1028,8 +1041,14 @@ mod tests {
 
     #[test]
     fn parse_epoch_ms_handles_seconds_millis_and_rfc3339() {
-        assert_eq!(parse_epoch_ms(&serde_json::json!(1_760_000_000_000_i64)), Some(1_760_000_000_000));
-        assert_eq!(parse_epoch_ms(&serde_json::json!(1_760_000_000_i64)), Some(1_760_000_000_000));
+        assert_eq!(
+            parse_epoch_ms(&serde_json::json!(1_760_000_000_000_i64)),
+            Some(1_760_000_000_000)
+        );
+        assert_eq!(
+            parse_epoch_ms(&serde_json::json!(1_760_000_000_i64)),
+            Some(1_760_000_000_000)
+        );
         assert_eq!(
             parse_epoch_ms(&serde_json::json!("2026-10-14T08:00:00Z")),
             Some(

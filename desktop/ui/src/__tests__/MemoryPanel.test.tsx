@@ -343,7 +343,11 @@ describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
 
     await screen.findByTestId('memory-injection-preview-count')
     expect(screen.getAllByTestId('memory-injection-preview-chip')).toHaveLength(3)
-    expect(screen.getByTestId('memory-injection-preview-chip-overflow')).toHaveTextContent('+2')
+    // R2 polish A2: the +N badge carries a tooltip listing the titles past
+    // the 3-chip cap — the overflow stays discoverable without pagination.
+    const overflow = screen.getByTestId('memory-injection-preview-chip-overflow')
+    expect(overflow).toHaveTextContent('+2')
+    expect(overflow).toHaveAttribute('title', '#Memory 4\n#Memory 5')
   })
 
   it('degrades to the amber placeholder when the preview command fails', async () => {
