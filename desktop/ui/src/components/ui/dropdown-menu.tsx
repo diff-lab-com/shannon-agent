@@ -32,6 +32,9 @@ export interface DropdownMenuItem {
   icon?: string
   disabled?: boolean
   destructive?: boolean
+  /** Stable e2e/aria anchor (e.g. the composer's memory-bypass item keeps
+   *  the retired standalone button's `memory-bypass-toggle`). */
+  testid?: string
   onSelect?: () => void
 }
 
@@ -161,6 +164,7 @@ export function DropdownMenu({
           type="button"
           role="menuitem"
           data-menu-item-index={index}
+          data-testid={item.testid}
           aria-disabled={item.disabled}
           disabled={item.disabled}
           className={cn(

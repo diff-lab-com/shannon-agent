@@ -6,36 +6,39 @@
 // demoConfig, and `get_status` mirrors it — so a successful commit is
 // visible in both selectors.
 //
-// UI notes (模型名去重 / audit D8 / GB round-1 R3):
+// UI notes (模型名去重 / audit D8 / GB round-1 R3 / 02c 收敛裁决):
 //  - the composer placeholder is context-aware, so waits target the
 //    textarea's stable aria-label ("Message") instead of placeholder text;
-//  - reasoning effort is the SELECTED model row's expanded sub-tier inside
-//    the model chip's dropdown (S3-5, 裁定⑪) — no separate Reasoning
-//    combobox, no bottom section;
-//  - the permission control is a FOUR-stop segmented control
-//    (Ask/Auto Edit/Plan/Full — Aurora 2026-10, 裁决 B1); below the 1200px
-//    breakpoint it folds back into the current-mode chip dropdown;
+//  - reasoning effort has TWO surfaces writing configure('effort_level'):
+//    the SELECTED model row's expanded sub-tier inside the model chip's
+//    dropdown (S3-5, 裁定⑪) and the gauge chip beside the model chip
+//    (02c 裁决 D2 — dim at the `standard` default, accent-lit otherwise);
+//  - the permission control is the ACTIVE-mode chip opening the four-stop
+//    dropdown (02c 裁决 D3, 二次修正) — one form at every width; the old
+//    segmented control and its 1200px breakpoint are gone;
 //  - the Header model selector is hidden on /chat (the composer chip is the
 //    single surface there), so chip→header sync is verified cross-page.
 import { test, expect } from '@playwright/test'
 
 test.describe('Select interactions', () => {
-  test('permission mode commits from the composer segmented control', async ({ page }) => {
+  test('permission mode commits from the active-mode chip dropdown', async ({ page }) => {
     await page.goto('/chat')
     await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
     await page.waitForTimeout(800)
 
-    // Aurora 2026-10 (裁决 B1): the approval ladder is a four-stop segmented
-    // control at ≥1200px (ask / auto-edit / plan / full-auto). Clicking Auto
-    // Edit writes `auto-edit` — a REAL state change the demo configure
-    // persists, so the controlled aria-checked flips. A seeded out-of-ladder
-    // value (e.g. 'standard') renders through the raw badge with nothing
-    // selected — covered by chat-script.model-mode.
-    const group = page.getByTestId('approval-mode-pill')
-    await expect(group).toBeVisible()
-    await expect(group.getByRole('radio')).toHaveCount(4)
-    await group.getByTestId('approval-mode-segment-auto-edit').click()
-    await expect(group.getByTestId('approval-mode-segment-auto-edit')).toHaveAttribute('aria-checked', 'true', { timeout: 10000 })
+    // 02c 裁决 D3: the chip echoes the ACTIVE tier; opening it lists the
+    // four ladder stops + the high-risk note. Picking Auto Edit writes
+    // `auto-edit` — a REAL state change the demo configure persists, so the
+    // chip echoes the new tier. A seeded out-of-ladder value (e.g.
+    // 'standard') echoes verbatim with nothing selected — covered by
+    // chat-script.model-mode.
+    const chip = page.getByTestId('approval-mode-pill')
+    await expect(chip).toBeVisible()
+    await chip.click()
+    const popup = page.locator('[data-slot="select-content"]').last()
+    await expect(popup.getByRole('option')).toHaveCount(4)
+    await popup.getByRole('option', { name: /Auto Edit/ }).click()
+    await expect(chip).toContainText(/Auto Edit/i, { timeout: 10000 })
   })
 
   test('reasoning effort commits from the model chip dropdown', async ({ page }) => {
@@ -44,14 +47,15 @@ test.describe('Select interactions', () => {
     await page.waitForTimeout(800)
 
     // S3-5 (裁定⑪): the effort entries are the SELECTED model row's
-    // expanded sub-tier — picking one re-renders the effort BADGE beside
-    // the chip; the chip label itself stays the bare model name (the old
-    // `name · Deep` glue is gone, P2-19).
+    // expanded sub-tier — picking one lights the gauge chip beside the chip
+    // (02c 裁决 D2: always present, accent-lit when non-default); the chip
+    // label itself stays the bare model name (the old `name · Deep` glue is
+    // gone, P2-19).
     const trigger = page.getByRole('combobox', { name: 'Model' })
     await trigger.click()
     await expect(page.getByTestId('effort-subtier-header')).toBeVisible()
     await page.getByRole('option', { name: 'Deep' }).click()
-    await expect(page.getByTestId('effort-badge')).toContainText(/Deep/i, { timeout: 10000 })
+    await expect(page.getByTestId('effort-gauge')).toContainText(/Deep/i, { timeout: 10000 })
     await expect(trigger).not.toContainText(/Deep/i, { timeout: 10000 })
 
     // Re-opening the picker shows the sub-tier again (expanded under the

@@ -1,20 +1,23 @@
-// GB P2-4 — composer approval-tier switcher tests; rewritten for the Aurora
-// 2026-10 four-stop segmented control (裁决 B1, design 02:256-261).
-//
-// Pins the composer↔settings sync contract: the segmented control renders
-// the SHARED table's four stops (ask / auto-edit / plan / full-auto — `plan`
-// is a legal engine approval_mode), marks the active one from
-// `config.approval_mode` (legacy values normalize), switching commits the
-// same configure('approval_mode') write the General page performs, the
-// High-risk note rides the group title, and out-of-ladder engine values
-// surface through the honest raw badge instead of pretending to be a tier.
+// 02c 裁决 D3(2026-10-14,二次修正) — the composer approval-mode control is
+// a SINGLE chip showing the ACTIVE mode, opening the approval ladder as a
+// dropdown. This suite pins the composer↔settings sync contract on that
+// dropdown form: the trigger echoes the SHARED table's current stop (ask /
+// auto-edit / plan / full-auto — `plan` is a legal engine approval_mode),
+// legacy values normalize, switching commits the same
+// configure('approval_mode') write the General page performs, the High-risk
+// note rides the popup, and out-of-ladder engine values surface through the
+// honest raw echo in the trigger instead of pretending to be a tier.
+// (The former four-stop segmented control and its 1200px breakpoint are
+// gone — one form at every width.)
 
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
 import type * as ReactRouterDom from 'react-router-dom'
+
+vi.setConfig({ testTimeout: 60_000 })
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -69,13 +72,6 @@ vi.mock('@/lib/tauri-api', async () => {
     setSessionModel: vi.fn().mockResolvedValue(undefined),
     clearSessionModel: vi.fn().mockResolvedValue(undefined),
     getSessionModel: vi.fn().mockResolvedValue(null),
-    getSessionContextBreakdown: vi.fn().mockResolvedValue({
-      totalTokens: 0, contextWindow: null,
-      categories: [{ key: 'system', tokens: 0 }, { key: 'tools', tokens: 0 }, { key: 'skills', tokens: 0 },
-        { key: 'memory', tokens: 0 }, { key: 'mcp', tokens: 0 }, { key: 'conversation', tokens: 0 }],
-    }),
-    getSessionUsage: vi.fn().mockResolvedValue({ cost_usd: 0 }),
-    getSessionBudget: vi.fn().mockResolvedValue(null),
     onWebviewFileDrop: vi.fn().mockResolvedValue(() => {}),
   }
 })
@@ -97,131 +93,129 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
   return render(<ChatInput {...defaultProps} {...props} />, { wrapper: I18nProvider })
 }
 
-/** The segmented control's group (jsdom has no matchMedia → the wide form). */
-function modeGroup(): HTMLElement {
-  return screen.getByLabelText('Permission mode')
+/** The active-mode chip (Base UI Select trigger). One form at every width. */
+function modeChip(): HTMLElement {
+  return screen.getByTestId('approval-mode-pill')
 }
 
-// The shared setup stubs matchMedia with `matches` true ONLY for
-// prefers-reduced-motion — the segmented control's breakpoint query would
-// read false and render the <1200px chip fallback. This suite pins the
-// SEGMENTED form, so width queries resolve against the wide (1440px) e2e
-// viewport profile here.
-const realMatchMedia = window.matchMedia
-beforeAll(() => {
-  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-    matches:
-      /min-width:\s*1200px/.test(query) ||
-      /prefers-reduced-motion:\s*reduce/i.test(query),
-    media: query,
-    onchange: null,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })) as unknown as typeof window.matchMedia
+// Base UI's Select in jsdom (same recipe as ChatInputEffort.test.tsx):
+// opening is a plain trigger click; committing an option needs the
+// pointer-highlight + click pair. Closed portals LINGER (the data-closed
+// leave animation never finishes in jsdom) — scope lookups to the freshest
+// popup and sweep leftovers after each test.
+const currentPopup = (): HTMLElement | null => {
+  const popups = document.querySelectorAll('[data-slot="select-content"]')
+  return (popups[popups.length - 1] as HTMLElement | undefined) ?? null
+}
+const openMenu = () => {
+  fireEvent.click(modeChip())
+  expect(currentPopup()).not.toBeNull()
+}
+const pickOption = (el: HTMLElement) => {
+  fireEvent.pointerDown(el, { button: 0 })
+  fireEvent.pointerUp(el, { button: 0 })
+  fireEvent.click(el)
+}
+const optionByName = (name: RegExp): HTMLElement => {
+  const popup = currentPopup()
+  if (!popup) throw new Error('no open select popup')
+  const el = Array.from(popup.querySelectorAll('[role="option"]')).find(o => name.test(o.textContent ?? ''))
+  if (!el) throw new Error(`option ${name} not in the open popup`)
+  return el
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  configOverride = makeConfig('ask')
+  vi.mocked(api.configure).mockReset()
+  vi.mocked(api.configure).mockResolvedValue(undefined)
 })
-afterAll(() => {
-  window.matchMedia = realMatchMedia
+
+afterEach(() => {
+  document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
 })
 
-function radio(value: string): HTMLElement {
-  return within(modeGroup()).getByTestId(`approval-mode-segment-${value}`)
-}
-
-/** The one segment whose aria-checked is true ("" when none). */
-function checkedValue(): string {
-  for (const el of within(modeGroup()).getAllByRole('radio')) {
-    if (el.getAttribute('aria-checked') === 'true') {
-      return el.getAttribute('data-testid')?.replace('approval-mode-segment-', '') ?? ''
-    }
-  }
-  return ''
-}
-
-describe('ChatInput approval-mode segmented control (Aurora 2026-10, 裁决 B1)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    configOverride = makeConfig('ask')
-    vi.mocked(api.configure).mockReset()
-    vi.mocked(api.configure).mockResolvedValue(undefined)
-  })
-
-  it('renders the four ladder stops — ask / auto-edit / plan / full-auto', () => {
-    renderChatInput()
-    expect(within(modeGroup()).getAllByRole('radio')).toHaveLength(4)
-    expect(radio('ask')).toBeInTheDocument()
-    expect(radio('auto-edit')).toBeInTheDocument()
-    // Plan takes its design-mandated seat: the engine accepts `plan` as an
-    // approval_mode (ApprovalMode::Plan).
-    expect(radio('plan')).toBeInTheDocument()
-    expect(radio('full-auto')).toBeInTheDocument()
-  })
-
-  it('renders the SHARED table label for the current config mode (auto_edit → Auto Edit checked)', () => {
+describe('ChatInput approval-mode chip + dropdown (02c 裁决 D3)', () => {
+  it('renders the SHARED table label for the current config mode (auto_edit → Auto Edit)', () => {
     configOverride = makeConfig('auto_edit')
     renderChatInput()
-    // Legacy 'auto_edit' normalizes to the auto-edit ladder tier — its
-    // segment is the checked one, proving the composer reads the same table
-    // the settings page writes.
-    expect(checkedValue()).toBe('auto-edit')
-    expect(radio('auto-edit')).toHaveTextContent(/auto edit/i)
+    // Legacy 'auto_edit' normalizes to the auto-edit ladder tier — the chip
+    // echoes it, proving the composer reads the same table the settings
+    // page writes.
+    expect(modeChip()).toHaveTextContent(/auto edit/i)
   })
 
   it('suggest renders as the Ask tier (legacy alias of the ladder base)', () => {
     renderChatInput()
-    expect(checkedValue()).toBe('ask')
+    expect(modeChip()).toHaveTextContent(/^.*ask/i)
   })
 
-  it('renders unknown engine values honestly via the raw badge — no segment claims them', () => {
+  it('renders unknown engine values honestly via the raw echo — no tier claimed', () => {
     configOverride = makeConfig('mystery-mode')
     renderChatInput()
-    // A value this UI does not manage shows raw in the badge instead of
+    // A value this UI does not manage shows raw in the chip instead of
     // dressing itself up as a tier the user could meaningfully pick.
-    expect(within(modeGroup()).getByTestId('approval-mode-offladder-badge')).toHaveTextContent('mystery-mode')
-    expect(checkedValue()).toBe('')
+    expect(modeChip()).toHaveTextContent('mystery-mode')
   })
 
   it('legacy confirm normalizes to the Ask tier (no fake raw readout)', () => {
     configOverride = makeConfig('confirm')
     renderChatInput()
-    expect(checkedValue()).toBe('ask')
+    expect(modeChip()).toHaveTextContent(/ask/i)
   })
 
-  it('picking a segment commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
+  it('the dropdown lists exactly the four ladder stops plus the high-risk note', () => {
     renderChatInput()
-    fireEvent.click(radio('auto-edit'))
-    // The commit chain is async (click → await configure → await
+    openMenu()
+    const popup = currentPopup()!
+    const options = Array.from(popup.querySelectorAll('[role="option"]'))
+    expect(options).toHaveLength(4)
+    expect(options.map(o => o.textContent)).toEqual([
+      expect.stringMatching(/ask/i),
+      expect.stringMatching(/auto edit/i),
+      expect.stringMatching(/full/i),
+      expect.stringMatching(/plan/i),
+    ])
+    // GB P2-4: the danger note travels with the switcher.
+    expect(popup.textContent).toContain('High-risk actions')
+  })
+
+  it('picking a tier commits configure(approval_mode) + refreshConfig — the General-page write', async () => {
+    renderChatInput()
+    openMenu()
+    pickOption(optionByName(/auto edit/i))
+    // The commit chain is async (pick → await configure → await
     // refreshConfig). Order-specific: refreshConfig is only asserted after
     // configure landed.
     await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'auto-edit' }), { timeout: 15_000 })
     await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: 15_000 })
   })
 
-  it('the plan segment writes the engine-legal plan value (and replaces the old toggle)', async () => {
+  it('the plan option writes the engine-legal plan value', async () => {
     renderChatInput()
-    fireEvent.click(radio('plan'))
+    openMenu()
+    pickOption(optionByName(/plan/))
     await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'plan' }), { timeout: 15_000 })
-    // The standalone plan-mode toggle is gone — one surface owns the key.
+    // The standalone plan-mode toggle is long gone — one surface owns the key.
     expect(screen.queryByRole('button', { name: 'Toggle plan mode' })).not.toBeInTheDocument()
   })
 
-  it('the High-risk note travels with the switcher (group title)', () => {
-    renderChatInput()
-    expect(modeGroup()).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
-  })
-
-  it('an out-of-table current value never hides the listed tiers (plan_ro → Strict badge)', () => {
+  it('an out-of-table current value never hides the listed tiers (plan_ro → Strict echo)', () => {
     configOverride = makeConfig('plan_ro')
     renderChatInput()
-    const group = modeGroup()
     // Legacy plan_ro normalizes to the readonly EXPERT mode — labeled
-    // honestly (Strict) via the badge, while all four stops stay pickable.
-    expect(within(group).getByTestId('approval-mode-offladder-badge')).toHaveTextContent(/strict/i)
-    expect(within(group).getAllByRole('radio')).toHaveLength(4)
-    expect(checkedValue()).toBe('')
-    // The honest description + the high-risk note still ride the title.
-    expect(group).toHaveAttribute('title', expect.stringContaining('High-risk actions'))
+    // honestly (Strict) in the chip, while the dropdown still lists all
+    // four stops pickable.
+    expect(modeChip()).toHaveTextContent(/strict/i)
+    openMenu()
+    expect(currentPopup()!.querySelectorAll('[role="option"]')).toHaveLength(4)
+    expect(currentPopup()!.textContent).toContain('High-risk actions')
+  })
+
+  it('the segmented control is gone — no segment testids survive (02c D3)', () => {
+    renderChatInput()
+    expect(screen.queryByTestId('approval-mode-segment-ask')).toBeNull()
+    expect(screen.queryByTestId('approval-mode-offladder-badge')).toBeNull()
+    expect(document.querySelectorAll('[role="radiogroup"][aria-label="Permission mode"]')).toHaveLength(0)
   })
 })

@@ -1,9 +1,9 @@
-// S3-5 (P2-19) — effort as a picker sub-tier (裁定⑪): the effort options
-// expand under the EFFECTIVE model's row inside the model chip's dropdown,
-// commits go through configure('effort_level') with the CANONICAL engine
-// values (low|standard|high|max — the old 'medium' write is gone), the
-// current tier is highlighted, and a non-default effort wears the standalone
-// effort BADGE beside the chip (the `name · High` label glue is dead).
+// S3-5 (P2-19) + 02c 裁决 D2 — effort has TWO surfaces writing the same
+// configure('effort_level'): the model chip dropdown's sub-tier under the
+// effective model row (low|standard|high|max — the old 'medium' write is
+// gone), and the always-present CLICKABLE gauge chip beside the model chip
+// (dim at the `standard` default, accent-lit otherwise) opening its own
+// four-level menu in one click.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import ChatInput from '@/components/chat/ChatInput'
@@ -138,6 +138,8 @@ beforeEach(() => {
 
 afterEach(() => {
   document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
+  // The gauge chip's Base UI Menu portal lingers the same way — sweep it.
+  document.querySelectorAll('[data-testid="effort-gauge-menu"]').forEach(n => n.remove())
 })
 
 describe('ChatInput effort sub-tier (S3-5)', () => {
@@ -165,39 +167,73 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     expect(mockRefreshConfig).toHaveBeenCalled()
   })
 
-  it('highlights the current tier and wears the badge only for non-default effort', async () => {
+  it('highlights the current tier; the gauge chip is ALWAYS present (02c 裁决 D2)', async () => {
     catalog.config = { effort_level: 'high' }
     const view = renderChatInput()
     openModelMenu()
     // Current tier carries the checked radio glyph.
     expect(optionByTestId('effort-option-high')).toHaveTextContent('radio_button_checked')
     expect(optionByTestId('effort-option-low')).toHaveTextContent('radio_button_unchecked')
-    // Non-default effort → the independent badge beside the chip.
-    expect(screen.getByTestId('effort-badge')).toHaveTextContent(/deep/i)
+    // The gauge chip beside the model chip shows the level word, accent-lit
+    // while non-default.
+    const gauge = screen.getByTestId('effort-gauge')
+    expect(gauge).toHaveTextContent(/deep/i)
+    expect(gauge.className).toContain('bg-secondary-container')
     // The chip label is the bare model name — `name · Deep` is dead (P2-19).
     expect(screen.getByTestId('model-chip-trigger')).toHaveTextContent('Claude Sonnet 4.6')
     expect(screen.getByTestId('model-chip-trigger').textContent).not.toContain('Deep')
 
-    // Back to the default: no badge at all (resting composer stays clean).
-    // The commit writes through the config mirror (mock configure), and a
-    // re-render picks the refreshed catalog up — exactly the
-    // configure → refreshConfig round trip the real backend does.
+    // Back to the default: the chip RESTS DIM (still present — it is the
+    // one-click dial — but no accent fill). The commit writes through the
+    // config mirror (mock configure), and a re-render picks the refreshed
+    // catalog up — exactly the configure → refreshConfig round trip the
+    // real backend does.
     openModelMenu()
     pickOption(optionByTestId('effort-option-standard'))
     await waitFor(() => {
       expect(vi.mocked(api.configure)).toHaveBeenCalledWith({ key: 'effort_level', value: 'standard' })
     })
     view.rerender(<ChatInput value="" onChange={vi.fn()} onSend={vi.fn()} onExecuteSlash={vi.fn()} attachedFiles={[]} onAttach={vi.fn()} onDetachAll={vi.fn()} isQuerying={false} onCancelQuery={vi.fn()} onOpenQuickFix={vi.fn()} onOpenEditor={vi.fn()} />)
-    expect(screen.queryByTestId('effort-badge')).not.toBeInTheDocument()
+    const resting = screen.getByTestId('effort-gauge')
+    expect(resting).toHaveTextContent(/standard/i)
+    expect(resting.className).not.toContain('bg-secondary-container')
   })
 
-  it('normalizes the legacy medium alias to standard (badge stays hidden)', () => {
+  it('normalizes the legacy medium alias to standard (gauge chip rests dim)', () => {
     catalog.config = { effort_level: 'medium' }
     renderChatInput()
-    // No crash, and the default tier renders no badge.
-    expect(screen.queryByTestId('effort-badge')).not.toBeInTheDocument()
+    // No crash; the gauge chip shows the normalized default, unlit.
+    const gauge = screen.getByTestId('effort-gauge')
+    expect(gauge).toHaveTextContent(/standard/i)
+    expect(gauge.className).not.toContain('bg-secondary-container')
     openModelMenu()
     expect(optionByTestId('effort-option-standard')).toHaveTextContent('radio_button_checked')
+  })
+
+  it('the gauge chip opens its own four-level menu and commits configure (02c D2)', async () => {
+    renderChatInput()
+    fireEvent.click(screen.getByTestId('effort-gauge'))
+    const menu = await screen.findByTestId('effort-gauge-menu')
+    for (const v of ['low', 'standard', 'high', 'max']) {
+      expect(menu.querySelector(`[data-testid="effort-gauge-option-${v}"]`)).toBeInTheDocument()
+    }
+    // Pick "Max" straight from the gauge — the one-click dial the read-only
+    // badge never offered. Same write the model picker's sub-tier commits.
+    fireEvent.click(menu.querySelector('[data-testid="effort-gauge-option-max"]')!)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'effort_level', value: 'max' })
+    })
+    expect(mockRefreshConfig).toHaveBeenCalled()
+  })
+
+  it('the gauge menu carries the honest not-applicable note for a non-reasoning model', async () => {
+    catalog.status = { model: 'text-legacy-3', provider: 'openai', querying: false, message_count: 0, working_dir: '/home/user/projects' }
+    renderChatInput()
+    fireEvent.click(screen.getByTestId('effort-gauge'))
+    const menu = await screen.findByTestId('effort-gauge-menu')
+    // A note, not a lockout — the levels stay pickable.
+    expect(menu.querySelector('[data-testid="effort-gauge-not-applicable"]')).toBeInTheDocument()
+    expect(menu.querySelector('[data-testid="effort-gauge-option-high"]')).toBeInTheDocument()
   })
 
   it('shows no note for a reasoning-capable effective model', () => {
