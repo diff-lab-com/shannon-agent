@@ -33,8 +33,10 @@ const MAX_TASK_IDS = 200
 /** 2100-01-01Z epoch-ms — the backend's plausible-deadline upper bound. */
 const MAX_DEADLINE_TS = 4102444800000
 
-/** Two-decimal USD, byte-identical to TaskCard's cost chip formatting. */
-function fmtUsd(n: number): string {
+/** Two-decimal USD, byte-identical to TaskCard's cost chip formatting.
+ *  Exported for the mission hero (G4 merge) so both surfaces format the
+ *  same figure identically. */
+export function fmtUsd(n: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',

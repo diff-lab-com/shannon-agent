@@ -19,7 +19,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { getTraceTimeline, listCheckpoints, rewindSession, saveTextFileViaDialog, type CheckpointInfo } from '@/lib/tauri-api'
+import { getTraceTimeline, getSessionBudget, listCheckpoints, rewindSession, saveTextFileViaDialog, type CheckpointInfo } from '@/lib/tauri-api'
 import { timelineToHtml } from '@/lib/timelineExport'
 import type { TimelineCumulativePoint, TimelineTurn, TurnTimeline } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -38,6 +38,12 @@ import { useApp } from '@/context/AppContext'
 
 /** Percentage span floor so sub-second calls stay clickable-looking. */
 const MIN_ROW_WIDTH_PCT = 2
+
+/** R2 audit I4 (10:170): the read/write KPI shows one decimal under 10%
+ *  (`8.7%`) and whole percents above — no trailing `.0` noise. */
+function formatBudgetPct(pct: number): string {
+  return String(pct >= 100 ? Math.round(pct) : Math.round(pct * 10) / 10)
+}
 
 // §7-28 (P1-27 adjacent, timeline side): turn-end reasons split into three
 // visual tones. Only genuine failures read as errors — `interrupted` /
@@ -253,6 +259,42 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
     () => timeline?.turns.reduce((acc, tu) => acc + tu.tools.length, 0) ?? 0,
     [timeline],
   )
+  // R2 audit I4 (10:170「读 7 · 写 2 · 网络 2」): the KPI breakdown derives
+  // from the SAME coarse toolKind() binning that tints the waterfall, so the
+  // chip can never disagree with the bars it summarizes. Unbinned `other`
+  // calls get no segment (the legend counts the four kinds, not everything);
+  // a failed call still counts toward its kind — only its BAR overrides to
+  // red. risk joins the label only when nonzero, matching design 10's
+  // three-segment default while keeping the four-color legend honest.
+  const toolMix = useMemo(() => {
+    const mix = { read: 0, write: 0, net: 0, risk: 0 }
+    for (const tu of timeline?.turns ?? []) {
+      for (const tool of tu.tools) {
+        const kind = toolKind(tool.tool_name)
+        if (kind !== 'other') mix[kind]++
+      }
+    }
+    return mix
+  }, [timeline])
+
+  // R2 audit Wave C′ #4 (10:176「预算 $1.00 · 已用 8.7%」): the session's own
+  // spend cap — the same `get_session_budget` source CurrentSessionCostPanel
+  // edits. The monthly governance snapshot is deliberately NOT polled here:
+  // get_usage_governance carries a once-per-month threshold-notification side
+  // effect this read-only page must not trigger. No cap → the chip stays
+  // hidden (absent stays absent).
+  const [budgetUsd, setBudgetUsd] = useState<number | null>(null)
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    getSessionBudget(id)
+      .then(b => { if (!cancelled) setBudgetUsd(b) })
+      .catch(() => { if (!cancelled) setBudgetUsd(null) })
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+
   // KPI 补齐 (audit §10 P2): input total rides the new projection field
   // (C6); the per-turn sum stays the fallback for stale projections.
   const totalInputTokens = useMemo(() => {
@@ -271,6 +313,11 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
   const totalCost = [...(timeline?.cumulative ?? [])]
     .reverse()
     .find(p => p.cost_total_usd != null)?.cost_total_usd
+  // Budget-usage percentage only when both sides of the ratio exist; the
+  // backend refuses non-positive caps so `budgetUsd > 0` is the honest gate.
+  const budgetPct = totalCost != null && budgetUsd != null && budgetUsd > 0
+    ? (totalCost / budgetUsd) * 100
+    : null
   const wallDuration = timeline
     ? formatWallDuration(Math.max(timeline.ended_ts_ns - timeline.started_ts_ns, 0))
     : '—'
@@ -370,6 +417,25 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
             />
             <SummaryChip icon="schema" label={t('timeline.stat.turns', { count: timeline.turns.length })} />
             <SummaryChip icon="build" label={t('timeline.stat.tools', { count: totalTools })} />
+            {/* R2 audit I4 (10:170): 「读 N · 写 N · 网络 N」breakdown under
+                the tool-call KPI — hidden entirely when nothing was called. */}
+            {totalTools > 0 && (
+              <SummaryChip
+                icon="category"
+                label={[
+                  t('timeline.stat.mix.read', { count: toolMix.read }),
+                  t('timeline.stat.mix.write', { count: toolMix.write }),
+                  t('timeline.stat.mix.net', { count: toolMix.net }),
+                  ...(toolMix.risk > 0 ? [t('timeline.stat.mix.risk', { count: toolMix.risk })] : []),
+                ].join(' · ')}
+                ariaLabel={t('timeline.stat.mix.aria', {
+                  read: toolMix.read,
+                  write: toolMix.write,
+                  net: toolMix.net,
+                  risk: toolMix.risk,
+                })}
+              />
+            )}
             <SummaryChip
               icon="token"
               label={`${tokenCompact(intl.locale).format(totalInputTokens)} ↓ · ${tokenCompact(intl.locale).format(totalOutputTokens)} ↑`}
@@ -380,6 +446,22 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
             />
             {totalCost != null && (
               <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
+            )}
+            {/* R2 audit (10:176): 「预算 $X · 已用 Y%」 next to the cost KPI —
+                only when the session carries a spend cap; past 100% the chip
+                takes the error tone (over budget is a failure signal). */}
+            {budgetUsd != null && budgetUsd > 0 && (
+              <SummaryChip
+                icon="account_balance_wallet"
+                testId="timeline-budget-chip"
+                error={budgetPct != null && budgetPct >= 100}
+                label={budgetPct != null
+                  ? t('timeline.stat.budget', {
+                    budget: COST_FORMAT.format(budgetUsd),
+                    percent: formatBudgetPct(budgetPct),
+                  })
+                  : t('timeline.stat.budgetOnly', { budget: COST_FORMAT.format(budgetUsd) })}
+              />
             )}
           </div>
         </div>
@@ -459,17 +541,26 @@ function SummaryChip({
   icon,
   label,
   ariaLabel,
+  error = false,
+  testId,
 }: {
   icon: string
   label: string
   /** Screen-reader text when the visual label is symbolic (↓/↑ etc). */
   ariaLabel?: string
+  /** Semantic failure tone (e.g. over-budget KPI) — error text + border. */
+  error?: boolean
+  testId?: string
 }) {
   return (
     <span
       role="listitem"
       aria-label={ariaLabel}
-      className="inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30"
+      data-testid={testId}
+      className={cn(
+        'inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30',
+        error && 'text-error border-error/40',
+      )}
     >
       <Icon name={icon} size="xs" />
       {label}
