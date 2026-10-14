@@ -202,7 +202,7 @@
               </div>
             </div>
 
-            <!-- 高危操作:需逐项确认 -->
+            <!-- 高危操作:始终询问(2026-10-14 R2 词汇按权限命名 v2 回改:档位只调整自动批准基线,高危不受档位影响) -->
             <div class="tool risk">
               <svg class="ic"><use href="#i-globe"/></svg><span class="nm">terminal</span>
               <span class="arg">curl -s https://api.stripe.com/v1/events/evt_1P… --data "test=1"</span>
@@ -211,7 +211,7 @@
                 <button class="btn sm danger">拒绝</button>
               </span>
             </div>
-            <p class="dim-text" style="font-size:12px">外发网络请求,风险等级 <b style="color:var(--warn)">中</b> —— 验证新密钥能否通过生产事件签名校验。当前执行模式「自动编辑」:文件改动自动应用,网络外发等高危操作仍逐项确认。</p>
+            <p class="dim-text" style="font-size:12px">外发网络请求,风险等级 <b style="color:var(--warn)">中</b> —— 验证新密钥能否通过生产事件签名校验。当前执行模式「自动编辑」:文件改动自动应用,网络外发等高危操作仍先询问。</p>
 
             <p>修复后 14 个测试全部通过。需要我直接创建 PR 吗?也可以先在 Diff 面板过一遍改动。</p>
 
@@ -253,11 +253,14 @@
       <div class="composer aurora-line">
         <div class="ta"><textarea rows="2" placeholder="回复 Shannon,或输入 / 唤起技能、@ 引用文件…"></textarea></div>
         <div class="compose-row">
+          <!-- 2026-10-14 R2:词汇按权限命名 v2 回改(与 02c D7 同口径)——
+               四档主词 = 询问 / 自动编辑 / 计划 / 全自动,对齐实现 approvalModes.ts 单词汇表;
+               副语见 02c S4 弹层。 -->
           <div class="seg">
-            <button><svg class="ic"><use href="#i-shield"/></svg>逐项确认</button>
+            <button><svg class="ic"><use href="#i-shield"/></svg>询问</button>
             <button class="on"><svg class="ic"><use href="#i-edit"/></svg>自动编辑</button>
             <button>计划</button>
-            <button>完全访问</button>
+            <button>全自动</button>
           </div>
           <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
           <button class="chip">推理<span class="cv">标准</span><svg class="caret"><use href="#i-chev-d"/></svg></button>

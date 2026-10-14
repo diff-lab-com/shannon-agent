@@ -1,13 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import OPC from '@/pages/OPC'
+import type * as TauriApi from '@/lib/tauri-api'
+import * as api from '@/lib/tauri-api'
+import type { MissionProgress } from '@/types'
 
 const ctx = vi.hoisted(() => ({
   agents: [] as any[],
   tasks: [] as any[],
   config: null as any,
   refreshTasks: vi.fn().mockResolvedValue(undefined),
+  refreshConfig: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/context/CatalogContext', () => ({
@@ -17,11 +21,24 @@ vi.mock('@/context/SessionContext', () => ({
   useSessions: () => ctx,
 }))
 
+// G4: the manage-mission dialog mounts MissionCard, which reads the
+// mission_progress projection. importActual spread keeps every other
+// command's real (rejecting-in-jsdom) behavior the page already tolerates.
+vi.mock('@/lib/tauri-api', async () => {
+  const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
+  return {
+    ...actual,
+    configure: vi.fn().mockResolvedValue(undefined),
+    missionProgress: vi.fn(),
+  }
+})
+
 function resetCtx() {
   ctx.agents = []
   ctx.tasks = []
   ctx.config = null
   ctx.refreshTasks = vi.fn().mockResolvedValue(undefined)
+  ctx.refreshConfig = vi.fn().mockResolvedValue(undefined)
 }
 
 function renderOPC() {
@@ -337,5 +354,69 @@ describe('OPC mission hero (audit §09 P1)', () => {
     expect(strip).toHaveTextContent('In progress 0')
     expect(strip).toHaveTextContent('Completed 0')
     expect(strip).toHaveTextContent('0 total')
+  })
+})
+
+// ─── G4 (R2 audit §4-G4): hero 合卡 — single aurora hero, MissionCard in
+// the 管理使命 dialog ───
+
+describe('OPC mission hero merge (G4)', () => {
+  const FUTURE_TS = new Date('2027-03-01').getTime()
+  const missionConfig = {
+    name: 'Launch Shannon v2',
+    budget_usd: 120,
+    deadline_ts: FUTURE_TS,
+    task_ids: ['t1'],
+  }
+  const missionProgressPayload: MissionProgress = {
+    name: 'Launch Shannon v2',
+    budget_usd: 120,
+    deadline_ts: FUTURE_TS,
+    budget_used_usd: 30,
+    tasks: [
+      { task_id: 't1', found: true, title: 'A', status: 'in_progress', cost_usd: 12.5 },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.missionProgress).mockReset()
+    vi.mocked(api.missionProgress).mockResolvedValue(missionProgressPayload)
+  })
+
+  it('with a mission: hero absorbs budget/deadline and no second aurora card renders', async () => {
+    resetCtx()
+    ctx.config = { mission: missionConfig }
+    renderOPC()
+    // Headline is the mission name; chips live in the hero strip.
+    expect(screen.getByText('Launch Shannon v2')).toBeInTheDocument()
+    expect(screen.getByTestId('mission-hero-budget')).toHaveTextContent('Budget $120.00')
+    // 花费 figure rides the async mission_progress projection (G4).
+    await waitFor(() =>
+      expect(screen.getByTestId('mission-hero-budget')).toHaveTextContent('$30.00'),
+    )
+    expect(screen.getByTestId('mission-hero-deadline')).toBeInTheDocument()
+    // The MissionCard aurora card is GONE from the page body — it only
+    // exists inside the manage dialog.
+    expect(screen.queryByTestId('mission-card')).not.toBeInTheDocument()
+  })
+
+  it('管理使命 opens the dialog hosting the MissionCard and its editor', async () => {
+    resetCtx()
+    ctx.config = { mission: missionConfig }
+    renderOPC()
+    fireEvent.click(screen.getByTestId('mission-manage-open'))
+    expect(await screen.findByTestId('mission-manage-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('mission-card')).toBeInTheDocument()
+    // The editor capability survived the move.
+    fireEvent.click(screen.getByTestId('mission-edit-toggle'))
+    expect(screen.getByTestId('mission-edit-form')).toBeInTheDocument()
+  })
+
+  it('without a mission: legacy free-text hero, no manage affordance', () => {
+    resetCtx()
+    renderOPC()
+    expect(screen.getByText(/Autonomous task execution through multi-agent/)).toBeInTheDocument()
+    expect(screen.queryByTestId('mission-manage-open')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('mission-hero-budget')).not.toBeInTheDocument()
   })
 })

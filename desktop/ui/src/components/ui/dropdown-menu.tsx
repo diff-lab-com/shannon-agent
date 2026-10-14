@@ -32,13 +32,43 @@ export interface DropdownMenuItem {
   icon?: string
   disabled?: boolean
   destructive?: boolean
+  /** Stable e2e/aria anchor (e.g. the composer's memory-bypass item keeps
+   *  the retired standalone button's `memory-bypass-toggle`). */
+  testid?: string
   onSelect?: () => void
 }
+
+/** R2 audit W6 (02c 设计稿 S1) — a non-interactive divider row, the
+ *  data-driven counterpart of shadcn's DropdownMenuSeparator for this
+ *  items[]-array API. Create via the `DropdownMenuSeparator(id)` helper. */
+export interface DropdownMenuSeparatorItem {
+  kind: 'separator'
+  id: string
+}
+
+/** Anything the menu can render: a regular item or a separator. Plain
+ *  `DropdownMenuItem[]` call sites remain assignable (existing menus never
+ *  grow separators unless they opt in). */
+export type DropdownMenuEntry = DropdownMenuItem | DropdownMenuSeparatorItem
+
+/** shadcn-style `DropdownMenuSeparator` factory for the flat items[] API. */
+export function DropdownMenuSeparator(id: string): DropdownMenuSeparatorItem {
+  return { kind: 'separator', id }
+}
+
+const isSeparator = (item: DropdownMenuEntry): item is DropdownMenuSeparatorItem =>
+  'kind' in item
+
+/** Positive predicate — TS does not narrow a union through a negated
+ *  custom predicate, so the focus-roving guards use this form to reach
+ *  `.disabled`/`.onSelect` on the item branch. */
+const isRegularItem = (item: DropdownMenuEntry): item is DropdownMenuItem =>
+  !isSeparator(item)
 
 export interface DropdownMenuProps {
   open: boolean
   onClose: () => void
-  items: DropdownMenuItem[]
+  items: DropdownMenuEntry[]
   align?: "start" | "end"
   className?: string
   ariaLabel?: string
@@ -66,7 +96,9 @@ export function DropdownMenu({
       setFocusIndex(-1)
       return
     }
-    const firstEnabled = items.findIndex((i) => !i.disabled)
+    // Separators are never focusable — the roving index only ever points at
+    // real items (guards below repeat the skip).
+    const firstEnabled = items.findIndex((i) => isRegularItem(i) && !i.disabled)
     setFocusIndex(firstEnabled)
   }, [open, items])
 
@@ -88,7 +120,8 @@ export function DropdownMenu({
         e.stopPropagation()
         setFocusIndex((cur) => {
           for (let i = cur + 1; i < items.length; i++) {
-            if (!items[i].disabled) return i
+            const it = items[i]
+            if (isRegularItem(it) && !it.disabled) return i
           }
           return cur
         })
@@ -97,7 +130,8 @@ export function DropdownMenu({
         e.stopPropagation()
         setFocusIndex((cur) => {
           for (let i = cur - 1; i >= 0; i--) {
-            if (!items[i].disabled) return i
+            const it = items[i]
+            if (isRegularItem(it) && !it.disabled) return i
           }
           return cur
         })
@@ -105,7 +139,7 @@ export function DropdownMenu({
         e.preventDefault()
         e.stopPropagation()
         const item = items[focusIndex]
-        if (item && !item.disabled) {
+        if (item && isRegularItem(item) && !item.disabled) {
           item.onSelect?.()
           onClose()
         }
@@ -155,37 +189,50 @@ export function DropdownMenu({
         className
       )}
     >
-      {items.map((item, index) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          data-menu-item-index={index}
-          aria-disabled={item.disabled}
-          disabled={item.disabled}
-          className={cn(
-            "w-full text-left px-md py-sm flex items-center gap-sm text-label-md transition-colors",
-            "focus:bg-primary/10 focus:text-primary focus:outline-none",
-            item.disabled
-              ? "opacity-40 cursor-not-allowed"
-              : "text-on-surface hover:bg-primary/5 hover:text-primary cursor-pointer",
-            item.destructive && "text-error hover:bg-error/10 hover:text-error focus:bg-error/10 focus:text-error"
-          )}
-          onClick={() => {
-            if (item.disabled) return
-            item.onSelect?.()
-            onClose()
-          }}
-          onMouseEnter={() => !item.disabled && setFocusIndex(index)}
-        >
-          {item.icon && (
-            <span className="material-symbols-outlined icon-md shrink-0" aria-hidden="true">
-              {item.icon}
-            </span>
-          )}
-          <span className="truncate">{item.label}</span>
-        </button>
-      ))}
+      {items.map((item, index) =>
+        isSeparator(item) ? (
+          // shadcn DropdownMenuSeparator convention: a plain non-interactive
+          // row, excluded from the roving index (no data-menu-item-index).
+          <div
+            key={item.id}
+            role="separator"
+            aria-orientation="horizontal"
+            data-slot="dropdown-menu-separator"
+            className="my-xs h-px bg-outline-variant/25"
+          />
+        ) : (
+          <button
+            key={item.id}
+            type="button"
+            role="menuitem"
+            data-menu-item-index={index}
+            data-testid={item.testid}
+            aria-disabled={item.disabled}
+            disabled={item.disabled}
+            className={cn(
+              "w-full text-left px-md py-sm flex items-center gap-sm text-label-md transition-colors",
+              "focus:bg-primary/10 focus:text-primary focus:outline-none",
+              item.disabled
+                ? "opacity-40 cursor-not-allowed"
+                : "text-on-surface hover:bg-primary/5 hover:text-primary cursor-pointer",
+              item.destructive && "text-error hover:bg-error/10 hover:text-error focus:bg-error/10 focus:text-error"
+            )}
+            onClick={() => {
+              if (item.disabled) return
+              item.onSelect?.()
+              onClose()
+            }}
+            onMouseEnter={() => !item.disabled && setFocusIndex(index)}
+          >
+            {item.icon && (
+              <span className="material-symbols-outlined icon-md shrink-0" aria-hidden="true">
+                {item.icon}
+              </span>
+            )}
+            <span className="truncate">{item.label}</span>
+          </button>
+        )
+      )}
     </div>
   )
 }

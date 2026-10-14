@@ -20,6 +20,7 @@ import { chimeKey, invalidateNotificationPrefsCache, maybePlayTaskChime } from '
 import { maybeShowToast } from '@/lib/toastDedupe'
 import { reportRejectedAttachments } from '@/lib/attachmentFeedback'
 import { clearDraft, tombstoneDraft } from '@/lib/composerDraft'
+import { readMemoryBypassDefault } from '@/lib/memoryBypassPref'
 import { basenameOf, isVisionImagePath } from '@/lib/fileRefs'
 import {
   beginRun as runBegin,
@@ -1176,9 +1177,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [windowSessionId, currentSessionId, armCancelWatchdog])
 
+  // design-parity R2 (M3b, design 12-settings-general.html:224-232) —
+  // 记忆旁路默认: when the session-defaults toggle is on, a JUST-created
+  // session starts as a temporary chat. This writes the same per-session
+  // pin the composer's toggle writes (set_session_memory_bypass — sidecar
+  // persisted, backend-side) BEFORE the first send, so the memory layer
+  // never sees this session; ChatInput re-reads the flag per focused id
+  // (ChatInput.tsx:527-537), so its banner + the Memory page reflect it
+  // with no extra plumbing. Best-effort on purpose: a failed sidecar write
+  // must not fail the session creation itself — the composer toggle stays
+  // available per session, and the settings copy states the pref is saved
+  // on this device (lib/memoryBypassPref: the engine's configure allowlist
+  // has no default field to persist into).
+  const applyMemoryBypassDefault = useCallback(async (id: string) => {
+    if (!readMemoryBypassDefault()) return
+    try {
+      await api.setSessionMemoryBypass(id, true)
+    } catch (e) {
+      logSoftFailure('memory bypass default', e)
+    }
+  }, [])
+
   const createSession = useCallback(async () => {
     try {
       const id = await api.newSession()
+      await applyMemoryBypassDefault(id)
       setCurrentSessionId(id)
       setMessages([])
       loadedSessionRef.current = id
@@ -1191,12 +1214,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setRunProcess(initialRunProcess())
       await refreshSessions()
     } catch (e) { setChatError(String(e)) }
-  }, [refreshSessions, setChatError])
+  }, [refreshSessions, setChatError, applyMemoryBypassDefault])
 
   const createSessionInWorktree = useCallback(async () => {
     let id: string | null = null
     try {
       id = await api.newSession()
+      await applyMemoryBypassDefault(id)
       const title = `Session ${id.slice(0, 8)}`
       await api.createSessionWorktree(id, title)
       const msgs = await api.switchSession(id)
@@ -1229,7 +1253,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         loadedSessionRef.current = null
       }
     }
-  }, [refreshSessions, setChatError])
+  }, [refreshSessions, setChatError, applyMemoryBypassDefault])
 
   // B1 P2-3: a session switch now carries a transient loading flag for the
   // message area's skeleton. Same-session calls (and Chat remounts that

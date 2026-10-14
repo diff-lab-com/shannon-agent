@@ -25,10 +25,9 @@ export const testids = {
   // (executionModeSwitcher retired in 缓期批 3 收敛: the profile-presets
   // control left the composer when activation stopped touching
   // approval_mode — Settings → 权限与安全 owns it now.)
-  /** PhaseTierSwitcher trigger (规划/执行档位), composer row. */
-  phaseTierSwitcher: 'phase-tier-switcher',
-  /** PhaseTierSwitcher dropdown menu (role=listbox). */
-  phaseTierMenu: 'phase-tier-menu',
+  // (phaseTierSwitcher/phaseTierMenu retired in the 02c 收敛裁决 D1 —
+  // the composer no longer carries the plan/act tier pair; Settings →
+  // 模型 is its only home: phaseTierSection below.)
   /** Global plan/act tier section on Settings→Models. */
   phaseTierSection: 'phase-tier-section',
 
@@ -41,14 +40,21 @@ export const testids = {
   modelActionClearOverride: 'model-action-clear-override',
   /** Plan-mode status strip above the input (role=status). */
   planModeBanner: 'plan-mode-banner',
-  /** Approval-mode control — the four-stop segmented group at ≥1200px
-   *  (Aurora 2026-10 裁决 B1), the chip Select below it. Same testid on
-   *  both forms. */
+  /** Approval-mode control — the ACTIVE-mode chip opening the four-stop
+   *  dropdown (02c 裁决 D3: one form at every width; the segmented group
+   *  and its 1200px breakpoint are gone). */
   approvalModePill: 'approval-mode-pill',
-  /** Composer "+" menu trigger (attach / slides / quickfix / editor). */
+  /** Composer "+" menu trigger (attach / slides / quickfix / editor /
+   *  temporary chat). */
   composerPlusMenu: 'composer-plus-menu',
-  /** Temporary-session (memory bypass) toggle. */
+  /** Temporary-session (memory bypass) item inside the "+" menu. */
   memoryBypassToggle: 'memory-bypass-toggle',
+  /** Context-% chip beside the model chip — opens the usage dialog (02c
+   *  裁决 D4; icon-only while no resolved window). */
+  usageChip: 'usage-chip',
+  /** Effort gauge chip beside the model chip — opens the four-level menu
+   *  (02c 裁决 D2; dim at the `standard` default). */
+  effortGauge: 'effort-gauge',
   /** "This session does not use memory" status strip. */
   memoryBypassBanner: 'memory-bypass-banner',
   /** No-working-dir preflight banner. */

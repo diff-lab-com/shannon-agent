@@ -522,6 +522,41 @@ export default function PermissionsSettings() {
             )}
           </section>
 
+          {/* 出站防线 (design 12-settings-security.html:214-236) — honest
+              edition, design-parity R2 (audit §3.2 M2). The design draws a
+              审计/改写/关闭 segmented control and two switches, but the repo
+              has NO engine capability behind any of the three defenses (key
+              redaction at egress, prompt-injection scanning, skill & MCP
+              update signature checks) — the honesty rule (design README
+              §5:130) forbids 「看起来可用」的死入口. So every entry renders
+              the amber dashed placeholder badge (MemoryPanel's
+              injection-preview-pending shape) reading 引擎能力对账后启用;
+              the real controls land in Wave C′ when the data sources exist. */}
+          <section
+            aria-label={t('settings.permissions.outbound.aria')}
+            className="space-y-sm p-md rounded-xl border border-outline-variant/20 bg-surface-container-low"
+            data-testid="permissions-outbound-card"
+          >
+            <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.outbound.title')}</h3>
+            <p className="text-body-sm text-on-surface-variant">{t('settings.permissions.outbound.desc')}</p>
+            <ul className="space-y-xs">
+              {([
+                { id: 'key-scan', labelKey: 'settings.permissions.outbound.keyScan' },
+                { id: 'injection-scan', labelKey: 'settings.permissions.outbound.injectionScan' },
+                { id: 'signature-check', labelKey: 'settings.permissions.outbound.signatureCheck' },
+              ] as const).map((entry) => (
+                <li key={entry.id} className="flex items-center gap-sm flex-wrap">
+                  <span className="font-label-md text-on-surface">{t(entry.labelKey)}</span>
+                  <span className="ml-auto inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-dashed border-warning/50 font-label-sm text-label-sm text-warning">
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
+                    {t('settings.permissions.outbound.pendingBadge')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-label-md text-on-surface-variant/80">{t('settings.permissions.outbound.reconcileNote')}</p>
+          </section>
+
           {/* Command sandbox (P1-3) */}
           <section aria-label={t('settings.permissions.sandbox.aria')} className="space-y-sm p-md rounded-xl border border-outline-variant/20 bg-surface-container-low">
             <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.sandbox.title')}</h3>

@@ -254,10 +254,10 @@ export default function MemoryPanel({
         >
           <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">visibility</span>
           <div className="min-w-0">
-            <p className="font-label-md text-label-md font-bold text-on-surface">
+            <p className="font-label-md text-label-md leading-5 font-bold text-on-surface">
               {t('memory.injection.title')}
             </p>
-            <p className="font-label-sm text-label-sm text-on-surface-variant">
+            <p className="font-label-sm text-label-sm leading-4 mt-0.5 text-on-surface-variant">
               {t('memory.injection.desc')}
             </p>
           </div>
@@ -297,6 +297,30 @@ export default function MemoryPanel({
                 >
                   <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">layers</span>
                   {intl.formatMessage({ id: 'memory.preview.count' }, { count: injectionPreview.count })}
+                </span>
+              )}
+              {/* R2 Wave C′ #2 (design 08:148-151): the pre-read now returns
+                  the entries themselves — render up to 3 title chips next to
+                  the count (`#标题` mono form, long titles truncate). Entries
+                  ride the SAME payload as count, so chips can only ever show
+                  what the next turn really carries; an empty list renders no
+                  chips and the honest count above stays the whole story. */}
+              {(injectionPreview?.entries ?? []).slice(0, 3).map((e) => (
+                <span
+                  key={e.id}
+                  data-testid="memory-injection-preview-chip"
+                  title={e.title}
+                  className="inline-flex items-center px-sm py-xs rounded-lg bg-surface-container-high/70 border border-outline-variant/30 max-w-[180px] font-mono text-[11.5px] text-on-surface-variant truncate"
+                >
+                  <span className="truncate">#{e.title}</span>
+                </span>
+              ))}
+              {(injectionPreview?.entries.length ?? 0) > 3 && (
+                <span
+                  data-testid="memory-injection-preview-chip-overflow"
+                  className="inline-flex items-center px-sm py-xs rounded-lg bg-surface-container-high/70 border border-outline-variant/30 font-mono text-[11.5px] text-on-surface-variant"
+                >
+                  +{Math.max((injectionPreview?.entries.length ?? 0) - 3, 0)}
                 </span>
               )}
             </>

@@ -1059,6 +1059,10 @@ export interface FileIndexEntry {
   registered_at: string
   favorite: boolean
   source: string
+  /** R2 Wave C′ (design 11 来源回跳): uuid of the chat session that was
+   *  active at registration, stamped backend-side. Absent for historical
+   *  rows and session-less registrations — callers must render no jump. */
+  session_id?: string
 }
 
 // --- MCP Types ---
@@ -1211,6 +1215,15 @@ export interface TaskItem {
   execution_mode?: 'serial' | 'parallel' | null
   /** Team / session subdir name the task file lives in. */
   team?: string | null
+  /** R2 Wave C′ (design 09:229): blocked reason, verbatim from the task
+   *  JSON's optional `blockedReason` field. Absent — never invented — when
+   *  the writer supplied none; the card falls back to deriving
+   *  「等待 N 个前置任务」 from `blocked_by` or renders 「—」. */
+  blocked_reason?: string
+  /** R2 Wave C′: epoch-ms the task last entered a blocked state, derived
+   *  backend-side from an explicit timestamp field or the task file's mtime.
+   *  Absent when the task is not blocked-family or no data exists. */
+  blocked_since_ms?: number
   /** 看板金额: ledger-attributed spend (USD) of the producing agent session,
    *  joined at `list_tasks` time when `team` is a real session uuid the
    *  usage ledger has records for (possibly 0). Absent — never an estimate

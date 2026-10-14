@@ -1,19 +1,17 @@
-// ComposerSwitchers — Aurora redesign 2026-10 (02-chat.html 三要素归位):
-// the PhaseTierSwitcher moved from the chat Header into the composer's
-// compose row. This suite pins the composer placement and keeps the
-// phase-tier write coverage that used to live in Header.test's P1-3
-// describe (the Header half pins the ABSENCE).
+// ComposerSwitchers — placement contracts for the composer's switcher row.
 //
-// 缓期批 3 收敛: the execution-mode twin is GONE from the composer — it
-// activated permission profiles, and backend 8803a519d removed the
-// activation → approval_mode overwrite, so a composer control that could
-// no longer move the send-time mode was dishonest chrome. Rule presets
-// (规则预设) live in Settings → 权限与安全 (PermissionsSettings tests own
-// the activation coverage); the composer's only mode surface is the
-// approval-mode pill (ChatInputApprovalMode.test.tsx owns that).
+// 02c 收敛裁决(2026-10-14) — D1: the PhaseTierSwitcher is GONE from the
+// composer; Settings → 模型 (PhaseTierSection, phase-tier-section testid)
+// is the plan/act tier pair's only home, so the composer can no longer
+// write a GLOBAL config from a per-chat surface, and the "继承" default
+// that leaked the precedence chain into UI language is out of the chat
+// flow entirely. D3: the approval-mode pill renders as the single
+// active-mode chip + dropdown. This suite pins the absences and the
+// surviving surfaces; the phase-tier WRITE coverage lives with the
+// Settings surface (model-profiles e2e + ModelsSettings tests).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 
@@ -46,6 +44,7 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => {
   return {
     ...actual,
     configure: vi.fn().mockResolvedValue(undefined),
+    currentGitBranch: vi.fn().mockResolvedValue(null),
   }
 })
 
@@ -66,7 +65,7 @@ function composerValue(patch: Partial<ComposerContextValue> = {}): ComposerConte
     editing: null,
     cancelEdit: vi.fn(),
     ...patch,
-  }
+  } as ComposerContextValue
 }
 
 function renderPanel(value: ComposerContextValue) {
@@ -92,35 +91,35 @@ beforeEach(() => {
   vi.mocked(api.configure).mockClear()
 })
 
-describe('ComposerSwitchers — placement (三要素归位)', () => {
-  it('renders the phase-tier switcher inside the composer and the mode pill beside it', () => {
+describe('ComposerSwitchers — placement (02c 收敛后)', () => {
+  it('the composer no longer carries the phase-tier switcher (D1 — Settings is the only home)', () => {
     renderPanel(composerValue())
-    // The compose row carries the phase-tier switcher (testid unchanged from
-    // the header era — e2e anchors by testid, not container).
-    expect(screen.getByTestId('phase-tier-switcher')).toBeInTheDocument()
-    // 缓期批 3 收敛: the execution-mode twin is retired from the composer —
-    // profile activation is a Settings concern now.
+    expect(screen.queryByTestId('phase-tier-switcher')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('phase-tier-menu')).not.toBeInTheDocument()
+  })
+
+  it('the approval mode renders as the single active-mode chip (D3), the usage chip beside the model chip', () => {
+    renderPanel(composerValue())
+    expect(screen.getByTestId('approval-mode-pill')).toBeInTheDocument()
+    expect(screen.getByTestId('usage-chip')).toBeInTheDocument()
+    expect(screen.getByTestId('effort-gauge')).toBeInTheDocument()
+    // 缓期批 3 收敛: the execution-mode twin is still retired from the
+    // composer — profile activation is a Settings concern.
     expect(screen.queryByTestId('execution-mode-switcher')).not.toBeInTheDocument()
   })
-})
 
-describe('ComposerSwitchers — phase-tier write', () => {
-  it('writes act_tier through the global config on an Act pick', async () => {
+  it('the context-% chip stays icon-only while no usage payload has a resolved window (D4 honesty)', () => {
     renderPanel(composerValue())
-    fireEvent.click(screen.getByTestId('phase-tier-switcher'))
-    const menu = await screen.findByTestId('phase-tier-menu')
-    // The approval-mode segmented control (Aurora 2026-10 裁决 B1) also
-    // renders a radiogroup in the composer — select the phase groups by
-    // accessible name, not positional index.
-    const actGroup = screen.getByRole('radiogroup', { name: 'Execution tier' })
-    const fast = Array.from(actGroup.querySelectorAll('[role="radio"]')).find(r =>
-      r.textContent?.includes('Fast'),
-    )
-    expect(fast).toBeTruthy()
-    fireEvent.click(fast!)
-    await waitFor(() => {
-      expect(api.configure).toHaveBeenCalledWith({ key: 'act_tier', value: 'fast' })
-    })
-    void menu
+    const chip = screen.getByTestId('usage-chip')
+    expect(chip).toBeInTheDocument()
+    // ctx.usage is null → no engine-resolved window → NO percentage, ever.
+    expect(chip.textContent).not.toMatch(/%/)
+  })
+
+  it('the context-% chip shows the real percent once usage reports a resolved window (D4)', () => {
+    ctx.usage = { input_tokens: 38_000, output_tokens: 36_000, context_total: 200_000, cost_usd: 0.0872 }
+    renderPanel(composerValue())
+    // 74k/200k → 37% (same math the status-bar segment used).
+    expect(screen.getByTestId('usage-chip')).toHaveTextContent('37%')
   })
 })

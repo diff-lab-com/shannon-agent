@@ -115,7 +115,11 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
   // P2-⑩: split-"New" dropdown (goal / routine entry points).
   const [newMenuOpen, setNewMenuOpen] = useState(false);
   const { createSession, sessions, sessionActivity, goalRunsBySession, currentSessionId, switchSession, renameSession, deleteSession, createSessionInWorktree, queueDepthsBySession } = useSessions();
-  const { status, loading: catalogLoading } = useCatalog();
+  // M6 (design-parity R2 §3.2, 02-chat.html:106): the 「任务」 nav row's
+  // amber dot counts failed/blocked tasks. Data source: the catalog slice
+  // AppProvider already loads eagerly at boot (`list_tasks` → `tasks`) —
+  // no extra IPC, and a failed/empty load honestly leaves the dot off.
+  const { status, loading: catalogLoading, tasks: catalogTasks } = useCatalog();
   const intl = useIntl();
   const mod = modKey();
   const newMenuItems: DropdownMenuItem[] = [
@@ -123,6 +127,18 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
     { id: 'routine', label: intl.formatMessage({ id: 'nav.new.routine' }), icon: 'event_repeat', onSelect: () => { setNewMenuOpen(false); navigate('/tasks') } },
   ];
   const { stats: inboxStats, refresh: refreshInboxStats } = useInboxStats();
+  // M6 (design 02-chat.html:106, `.dot-ind warn`): failed or blocked tasks
+  // light the 「任务」 nav row's amber dot — an aggregate attention signal
+  // (amber = something in the task domain needs you), distinct from the
+  // session rows' red health dots (a concrete error, G7 ruling keeps both).
+  // Same status vocabulary the Tasks page's badges use (failed/error +
+  // blocked; TaskDetailDrawer STATUSES). An empty catalog (still loading or
+  // the load failed) renders count 0 → dot off — never a fake signal.
+  // Defensive `?? []` like the rail's own lens load: bridges without the
+  // command (or test mocks) keep the dot off instead of crashing the rail.
+  const failedTaskCount = (catalogTasks ?? []).filter(
+    t => t.status === 'failed' || t.status === 'error' || t.status === 'blocked',
+  ).length;
 
   // 卡A 收尾: when the active list is empty, the archived lens decides
   // whether the rail still renders — archiving the last session must not
@@ -387,7 +403,20 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
                 row again (对话/文件/任务/收件箱/连接/记忆 + 指挥台). The ⌘2
                 hint migrated here from the retired top 自动化 button; the
                 global binding already lives in useKeyboardShortcuts. */}
-            <NavRow to="/tasks" icon="checklist" labelId="nav.tasks" titleId="nav.tasks" kbd={`${mod}2`} onNavigate={handleNavClick} />
+            {/* M6 (design-parity R2 §3.2 / §4-G7, 02-chat.html:106): the
+                design's amber `.dot-ind warn` (7px, shannon-ui.css:164-166)
+                on the 「任务」 row — shown only when failed/blocked tasks
+                exist, tooltip carries the count. Sits beside the label in
+                the same trail slot the inbox badge uses below. */}
+            <NavRow to="/tasks" icon="checklist" labelId="nav.tasks" titleId="nav.tasks" kbd={`${mod}2`} onNavigate={handleNavClick} trail={failedTaskCount > 0 ? (
+              <span
+                role="img"
+                aria-label={intl.formatMessage({ id: 'nav.tasks.attention.title' }, { count: failedTaskCount })}
+                title={intl.formatMessage({ id: 'nav.tasks.attention.title' }, { count: failedTaskCount })}
+                data-testid="sidebar-tasks-attention-dot"
+                className="w-[7px] h-[7px] rounded-full bg-warning shrink-0"
+              />
+            ) : undefined} />
             <NavRow
               to="/triage"
               icon="inbox"

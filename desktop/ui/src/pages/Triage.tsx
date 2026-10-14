@@ -27,12 +27,14 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useInboxItems, useInboxStats } from '@/hooks/inbox'
+import { useTauriEvent } from '@/hooks/useTauriEvent'
 import { pushComposerDraft } from '@/lib/composerBridge'
 import { useProjectDeepLink } from '@/hooks/projectDeepLink'
 import ProjectFilterChip from '@/components/ProjectFilterChip'
 import { useSessions } from '@/context/SessionContext'
 import { projectKeyOf } from '@/components/SidebarSessions'
 import type { InboxItem, InboxItemStatus, InboxSource } from '@/types'
+import { EVENT_NAMES } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { cn } from '@/lib/utils'
 
@@ -151,6 +153,35 @@ export function sourceMeta(source: InboxSource): { icon: string; color: string; 
 export const STATUS_OPTIONS: readonly (InboxItemStatus | 'all')[] = ['all', 'pending', 'read', 'archived']
 export const SOURCE_OPTIONS: readonly (InboxSource | 'all')[] = ['all', 'routine', 'scheduled_task', 'goal', 'trigger', 'batch', 'background_task', 'session_approval', 'session_failed', 'skill_candidate', 'dream_report']
 
+// ─── G6 (design-parity R2 §4, 05-inbox.html:157-161): 本周节省 ─────────────
+// The design's savings narrative: every inbox item the user processed stands
+// in for ~5 minutes of manual work. The honest-discipline conditions are part
+// of the contract: the number is ALWAYS shown with the estimation footnote,
+// and it derives only from what the list actually loaded (a lower bound —
+// `list_inbox_items` caps at 100 rows), never an invented total.
+export const MANUAL_MINUTES_PER_ITEM = 5
+
+/// Local Monday 00:00 of the week containing `now` (本周 = ISO week start).
+export function weekStartOf(now: Date): number {
+  const d = new Date(now)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  return d.getTime()
+}
+
+/// Processed = not pending (read/archived), and its last touch (the status
+/// write — upsert_pending keeps `updatedAtMs` fresh on re-failures) falls in
+/// the current week. Exported for tests (口径 is a contract).
+export function weekSavedOf(items: readonly InboxItem[], now: Date = new Date()): { count: number; minutes: number } {
+  const start = weekStartOf(now)
+  let count = 0
+  for (const it of items) {
+    if (it.status === 'pending') continue
+    if ((it.updatedAtMs ?? it.createdAtMs) >= start) count++
+  }
+  return { count, minutes: count * MANUAL_MINUTES_PER_ITEM }
+}
+
 // ─── B4 #28: URL-persisted view state ──────────────────────────────────────
 // Filters, sort and grouping live in the search params (?status=&source=
 // &sort=&group=source) so a triage session survives reloads and can be
@@ -166,12 +197,18 @@ function parseSourceParam(v: string | null): SourceFilter {
   return v !== null && v !== 'all' && SOURCE_OPTIONS.includes(v as InboxSource) ? (v as InboxSource) : undefined
 }
 
-function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport, onApprovalDecision }: {
+function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onToggleSelected, onMarkRead, onArchive, onContinue, onRerun, onOpenSource, onReview, onViewReport, onApprovalDecision }: {
   item: InboxItem
   selected: boolean
   focused?: boolean
   /** IA T2: one-shot ring when the user arrived from HistoryView. */
   highlighted?: boolean
+  /** M7 (design-parity R2 §3.2): the producing routine's machine pause
+      reason (budget / consecutive_failures) when the routine is currently
+      SYSTEM-paused, joined by sourceId from `list_scheduled_tasks` — the
+      same join Tasks.tsx renders on TaskCard. null = unknown/not paused;
+      the card must NOT claim 「已自动暂停」 without it (honesty rule). */
+  autoPausedReason?: string | null
   onToggleSelected: (id: number) => void
   onMarkRead: (id: number) => void
   onArchive: (id: number) => void
@@ -230,6 +267,13 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
   // never colour alone) so a burned routine can't pass as clear.
   const runOutcome = runOutcomeOf(item)
   const needsAction = runOutcome === 'failed' && item.status !== 'archived'
+  // M7 (design-parity R2): the failure card's badge merges into the design's
+  // 「失败 · 已自动暂停」 shape when the producing routine is SYSTEM-paused
+  // (pause_reason known — same badge wording as TaskCard's auto-paused chip,
+  // TaskCard.tsx:75-88 / 04 page). Without the reason the badge keeps the
+  // plain 「失败 · 需要处理」 form — no pause claim without evidence.
+  const pauseReason = needsAction && autoPausedReason != null ? autoPausedReason : null
+  const mergedPause = pauseReason != null
 
   return (
     // G1: list items are content cards — solid surface per the material
@@ -253,10 +297,23 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
               {runOutcome === 'failed' && (
                 <span
                   data-testid="inbox-run-status"
+                  title={pauseReason != null ? t(`tasks.routineControls.autoPausedReason.${pauseReason}`) : undefined}
                   className="inline-flex items-center gap-xs px-xs py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-label-xs font-bold uppercase tracking-wider"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">priority_high</span>
-                  {t('tasks.status.failed.label')} · {t('inbox.needsAction')}
+                  {/* M7: 「失败 · 已自动暂停 · <原因>」 when the producing
+                      routine is SYSTEM-paused (wording matches TaskCard's
+                      auto-paused badge); plain 「失败 · 需要处理」 otherwise. */}
+                  {t('tasks.status.failed.label')} ·{' '}
+                  {mergedPause ? (
+                    <>
+                      {t('tasks.routineControls.autoPausedLabel')}
+                      {t('tasks.routineControls.autoPausedReasonSeparator')}
+                      {t(`tasks.routineControls.autoPausedReason.${pauseReason}`)}
+                    </>
+                  ) : (
+                    t('inbox.needsAction')
+                  )}
                 </span>
               )}
               {runOutcome === 'succeeded' && (
@@ -396,18 +453,26 @@ function InboxCard({ item, selected, focused, highlighted, onToggleSelected, onM
           )}
           {/* IA T2: routine/scheduled_task results link back to the
               automation that produced them (opens RoutineDetailDrawer on
-              /tasks). */}
+              /tasks).
+              M7 (design-parity R2 §3.2, 05-inbox.html:211): on FAILED cards
+              the same jump reads 「查看日志」 — the failure log is what the
+              user is after, and the drawer surfaces the run's recorded
+              error directly (RoutineDetailDrawer's last-error block). The
+              drawer has no tab/anchor parameter, so the direct entry is the
+              drawer itself; its error block renders in the body without a
+              second navigation step (the「打开例行」→ find-the-error detour
+              the audit called out). Non-failed cards keep 「打开例行」. */}
           {openSource && (
             <Button
               size="sm"
               variant="ghost"
-              aria-label={t('inbox.openSource.aria')}
-              title={t('inbox.openSource.aria')}
+              aria-label={t(needsAction ? 'inbox.viewLogs.aria' : 'inbox.openSource.aria')}
+              title={t(needsAction ? 'inbox.viewLogs.aria' : 'inbox.openSource.aria')}
               className="cursor-pointer inline-flex items-center gap-xs text-on-surface-variant hover:text-primary"
               onClick={() => onOpenSource(item)}
             >
-              <span className="material-symbols-outlined icon-sm">event_repeat</span>
-              {t('inbox.openSource.label')}
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">{needsAction ? 'article' : 'event_repeat'}</span>
+              {t(needsAction ? 'inbox.viewLogs.label' : 'inbox.openSource.label')}
             </Button>
           )}
           {/* IA X1: skill candidates link to the Extensions → Pending review
@@ -549,6 +614,34 @@ export default function Triage() {
   useEffect(() => {
     setFilter({ status: statusFilter, source: sourceFilter })
   }, [statusFilter, sourceFilter, setFilter])
+
+  // M7 (design-parity R2 §3.2): the 「失败 · 已自动暂停」 merged badge needs
+  // the producing routine's machine pause reason. Reuse the same join the
+  // Tasks page renders on TaskCard (autoPausedReasons): routine disabled +
+  // pause_reason present, keyed by the routine id the item's sourceId
+  // carries. Failure of this optional join keeps the map empty — cards
+  // then stay on the plain 「失败 · 需要处理」 badge (honest: no pause
+  // claim without the routine's own pause_reason). Reloads on
+  // `inbox-updated` because a failed run is exactly when the engine pauses.
+  const [pauseReasons, setPauseReasons] = useState<Map<string, string>>(() => new Map())
+  const loadPauseReasons = useCallback(async () => {
+    try {
+      const routines = await api.listScheduledTasks()
+      const m = new Map<string, string>()
+      for (const r of routines) {
+        if (!r.enabled && r.pause_reason) m.set(r.id, r.pause_reason)
+      }
+      setPauseReasons(m)
+    } catch {
+      setPauseReasons(new Map())
+    }
+  }, [])
+  useEffect(() => { void loadPauseReasons() }, [loadPauseReasons])
+  useTauriEvent(EVENT_NAMES.INBOX_UPDATED, () => { void loadPauseReasons() })
+
+  // G6 (design 05:157-161): 本周节省 — processed-this-week items × the 5
+  // minutes-of-manual-work stand-in, always rendered with the footnote.
+  const weekSaved = useMemo(() => weekSavedOf(items), [items])
 
   // Scroll the highlighted card into view once the list has rendered.
   useEffect(() => {
@@ -838,6 +931,23 @@ export default function Triage() {
               <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">today</span>
               <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'inbox.stats.today' }, { count: stats.today })}</span>
             </div>
+            {/* G6 (design 05:157-161): 本周节省 stat — processed items this
+                week × 5 min manual-work stand-in. The estimation footnote is
+                part of the contract (honesty rule: never a bare number);
+                zero processed items renders an honest 「约 0 分钟 · 0 条」
+                rather than hiding the card, matching its two siblings. */}
+            <div
+              className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30"
+              data-testid="inbox-stat-saved"
+            >
+              <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">timer</span>
+              <span className="flex flex-col min-w-0">
+                <span className="font-label-md text-on-surface">
+                  {intl.formatMessage({ id: 'inbox.stats.saved' }, { minutes: weekSaved.minutes, count: weekSaved.count })}
+                </span>
+                <span className="font-label-xs text-on-surface-variant whitespace-nowrap">{t('inbox.stats.saved.footnote')}</span>
+              </span>
+            </div>
           </div>
         </div>
 
@@ -1051,6 +1161,7 @@ export default function Triage() {
                             selected={effectiveSelected.has(item.id)}
                             focused={focusedIndex === flatIndexById.get(item.id)}
                             highlighted={highlightId === item.id}
+                            autoPausedReason={item.sourceId != null ? pauseReasons.get(item.sourceId) ?? null : null}
                             onToggleSelected={toggleSelected}
                             onMarkRead={markRead}
                             onArchive={archive}
@@ -1072,6 +1183,7 @@ export default function Triage() {
                     selected={effectiveSelected.has(item.id)}
                     focused={focusedIndex === flatIndexById.get(item.id)}
                     highlighted={highlightId === item.id}
+                    autoPausedReason={item.sourceId != null ? pauseReasons.get(item.sourceId) ?? null : null}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}

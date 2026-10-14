@@ -258,13 +258,15 @@
           <!-- d. 执行模式 -->
           <div class="card pad" style="margin-top:12px">
             <div class="cardhead"><svg class="ic"><use href="#i-shield"/></svg>执行模式</div>
+            <!-- 2026-10-14 R2:词汇按权限命名 v2 回改(与 02c D7 同口径)——四档主词 = 询问 / 自动编辑 / 计划 / 全自动,
+                 副语对齐实现 settings.general.approvalMode.*。 -->
             <div class="seg">
-              <button class="on"><svg class="ic"><use href="#i-shield"/></svg>逐项确认</button>
+              <button class="on"><svg class="ic"><use href="#i-shield"/></svg>询问</button>
               <button>自动编辑</button>
               <button>计划</button>
-              <button>完全访问</button>
+              <button>全自动</button>
             </div>
-            <p class="muted" style="font-size:12px;margin-top:10px">逐项确认:每个高风险操作(写入、网络外发)单独询问;可在 composer 随时切换,无需回到设置</p>
+            <p class="muted" style="font-size:12px;margin-top:10px">询问:只读自由执行,每个高风险操作(写入、网络外发)先询问;可在 composer 随时切换,无需回到设置</p>
           </div>
 
           <!-- e. 底部安全说明 -->

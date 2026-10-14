@@ -279,3 +279,66 @@ describe('SessionSettings ⑤ running-send behavior (Settings R3 T10)', () => {
     expect(window.localStorage.getItem('shannon.chat.sendBehavior')).toBe('queue')
   })
 })
+
+// ④b 记忆旁路默认 card — design-parity R2 M3b (design
+// 12-settings-general.html:224-232). Purely front-end localStorage
+// ('shannon.chat.memoryBypassDefault' — the engine's configure allowlist
+// has no default field); AppContext's 新建会话 actions apply the pref to
+// each just-created session via setSessionMemoryBypass, so the badge is
+// new-session and the copy spells out the honest scope.
+describe('SessionSettings ④b memory bypass default (design-parity R2 M3b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getConfig).mockResolvedValue({ ...baseConfig })
+    window.localStorage.clear()
+  })
+
+  it('renders the card with the new-session badge and the honest scope note, default OFF', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-memory-bypass-default-card')
+    expect(within(card).getByText('Memory bypass default')).toBeInTheDocument()
+    // Nothing changes for the session you are in — new-session, not instant.
+    expect(within(card).getByText('Applies to new sessions')).toBeInTheDocument()
+    // The design hint: temporary chats by default, in-session opt-back.
+    expect(within(card).getByText(/no memory injection, no auto-extraction/i)).toBeInTheDocument()
+    // The toggle's honest scope: New Session only; existing, duplicated and
+    // branched sessions unaffected; saved on this device.
+    expect(within(card).getByText(/Applies only to the New Session action/i)).toBeInTheDocument()
+    expect(within(card).getByText(/saved on this device/i)).toBeInTheDocument()
+    const sw = within(card).getByRole('switch', { name: 'Memory bypass default' })
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    // First run writes nothing — the historical default is unchanged.
+    expect(window.localStorage.getItem('shannon.chat.memoryBypassDefault')).toBeNull()
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+
+  it('toggling on persists the localStorage pref (no configure round-trip)', async () => {
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-memory-bypass-default-card')
+    const sw = within(card).getByRole('switch', { name: 'Memory bypass default' })
+    fireEvent.click(sw)
+    expect(sw).toHaveAttribute('aria-checked', 'true')
+    expect(window.localStorage.getItem('shannon.chat.memoryBypassDefault')).toBe('true')
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+
+  it('toggling back off restores the pref to "false"', async () => {
+    window.localStorage.setItem('shannon.chat.memoryBypassDefault', 'true')
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-memory-bypass-default-card')
+    const sw = within(card).getByRole('switch', { name: 'Memory bypass default' })
+    await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+    fireEvent.click(sw)
+    expect(sw).toHaveAttribute('aria-checked', 'false')
+    expect(window.localStorage.getItem('shannon.chat.memoryBypassDefault')).toBe('false')
+  })
+
+  it('a stored "true" pref hydrates the switch on mount', async () => {
+    window.localStorage.setItem('shannon.chat.memoryBypassDefault', 'true')
+    render(wrap(<SessionSettings />))
+    const card = await screen.findByTestId('session-memory-bypass-default-card')
+    await waitFor(() =>
+      expect(within(card).getByRole('switch', { name: 'Memory bypass default' })).toHaveAttribute('aria-checked', 'true'),
+    )
+  })
+})

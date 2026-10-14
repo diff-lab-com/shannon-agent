@@ -43,8 +43,8 @@ const PERMISSION_DIALOG_TESTID = 'permission-dialog'
 function modelChip(page: Page) {
   return page.getByTestId(MODEL_CHIP_TESTID).or(page.getByRole('combobox', { name: 'Model' }))
 }
-/** The composer approval-mode control — the segmented radiogroup at the
- *  1440px CI viewport (the chip Select below 1200px), same testid on both. */
+/** The composer approval-mode control — the ACTIVE-mode chip opening the
+ *  four-stop dropdown (02c 裁决 D3: one form at every width). */
 function approvalPill(page: Page) {
   return page.getByTestId(APPROVAL_PILL_TESTID).or(page.getByRole('combobox', { name: 'Permission mode' }))
 }
@@ -119,7 +119,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     // `· session` suffix.
     await chip.click()
     await page.getByRole('option', { name: 'Deep' }).click()
-    await expect(page.getByTestId('effort-badge')).toContainText('Deep')
+    await expect(page.getByTestId('effort-gauge')).toContainText('Deep')
     await expect(chip).not.toContainText('Deep')
 
     // "Set as default" promotes the session pick to the engine-global
@@ -160,7 +160,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await chip.click()
     await page.getByTestId('model-action-clear-override').click()
     await expect(chip).toContainText('GPT-5', { timeout: 5_000 })
-    await expect(page.getByTestId('effort-badge')).toContainText('Deep', { timeout: 5_000 })
+    await expect(page.getByTestId('effort-gauge')).toContainText('Deep', { timeout: 5_000 })
     await expect(chip).not.toContainText('session', { timeout: 5_000 })
 
     await chat.send(script.turns[2]!.user)
@@ -187,9 +187,11 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await page.getByRole('link', { name: 'Permissions & safety' }).click()
     await expect(page.getByTestId('permissions-settings')).toBeVisible({ timeout: 15_000 })
 
-    // Demo defaults: profile 'balanced', engine-only mode alias 'standard'.
+    // Demo defaults: profile 'balanced', mode 'auto-edit' (R2 audit I5 —
+    // the demo seeds a REAL ladder tier; the engine-only alias
+    // 'standard' demo seed is gone, so the pill shows the translated tier).
     await expect.poll(async () => (await cfg()).active_permission_profile).toBe('balanced')
-    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('auto-edit')
 
     // The preset cards render once list_permission_profiles resolves.
     await expect(page.getByTestId('permissions-preset-card-permissive')).toBeVisible({ timeout: 15_000 })
@@ -202,7 +204,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect(page.getByTestId('permissions-preset-card-permissive').getByRole('button', { name: 'Active' })).toBeVisible({ timeout: 5_000 })
     await expect.poll(async () => (await cfg()).active_permission_profile).toBe('permissive')
     // THE contract: the mode did not move with the preset.
-    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('auto-edit')
 
     // 严格 preset: same story in the other direction (the OLD mock mapped
     // strict → ask; that silent overwrite is exactly what backend
@@ -212,7 +214,7 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
       .click()
     await expect(page.getByTestId('permissions-preset-card-strict').getByRole('button', { name: 'Active' })).toBeVisible({ timeout: 5_000 })
     await expect.poll(async () => (await cfg()).active_permission_profile).toBe('strict')
-    await expect.poll(async () => (await cfg()).approval_mode).toBe('standard')
+    await expect.poll(async () => (await cfg()).approval_mode).toBe('auto-edit')
 
     // Back to the chat: the session and its sent state survive the SPA
     // navigation (same realm — only a full goto would re-seed).
@@ -226,29 +228,22 @@ test.describe('scripted chat backend — model-mode-switch (journey #17)', () =>
     await expect(chat.sendButton()).toBeVisible({ timeout: 15_000 })
     expect((await mockSnapshot(page)).sends[0]).toMatchObject({ turnIndex: 0, model: SEEDED_MODEL })
 
-    // The pill STILL echoes the untouched engine value verbatim (rawLabel):
-    // presets never claimed to move it, and indeed nothing moved.
-    await expect(approvalPill(page)).toContainText('standard')
+    // The pill STILL echoes the untouched mode (R2 audit I5: the demo seed
+    // is the in-ladder 'auto-edit', so the SHARED-table label shows —
+    // presets never claimed to move it, and indeed nothing moved. The
+    // out-of-ladder raw echo keeps its coverage in the first test above via
+    // the seeded 'bypass_permissions'.)
+    await expect(approvalPill(page)).toContainText(/Auto Edit/i)
 
-    // The composer's one mode surface: the approval-mode pill. Picking Ask
-    // writes approval_mode — the write presets can no longer do. At the CI
-    // viewport (1440px) the pill renders as the four-stop segmented control
-    // (radiogroup); the pick goes through a REAL pointer click.
-    await page.getByTestId('approval-mode-segment-ask').click()
-    await expect(page.getByTestId('approval-mode-segment-ask')).toHaveAttribute('aria-checked', 'true', { timeout: 5_000 })
+    // The composer's one mode surface: the approval-mode chip. Picking Ask
+    // writes approval_mode — the write presets can no longer do. 02c 裁决
+    // D3: open the chip's dropdown and pick through a REAL pointer click;
+    // the chip then echoes the new tier.
+    await approvalPill(page).click()
+    const ladder = page.locator('[data-slot="select-content"]').last()
+    await ladder.getByRole('option', { name: /^Ask/ }).click()
+    await expect(approvalPill(page)).toContainText(/Ask/i, { timeout: 5_000 })
     await expect.poll(async () => (await cfg()).approval_mode).toBe('ask')
-
-    // PhaseTierSwitcher (testid already exists): Act → Fast writes the
-    // global act_tier the backend resolves on the next query. Same real
-    // pointer click as the tier switcher — the popover is portal-mounted at
-    // the z-modal token, so the hit-test reaches the radio.
-    await page.getByTestId('phase-tier-switcher').click()
-    const actFast = page.getByTestId('phase-tier-menu').getByRole('radiogroup', { name: 'Execution tier' }).getByRole('radio', { name: 'Fast' })
-    await actFast.waitFor({ timeout: 5_000 })
-    await actFast.click()
-    await expect(page.getByText('Execution tier: Fast')).toBeVisible({ timeout: 5_000 })
-    await expect(page.getByTestId('phase-tier-switcher')).toContainText('Fast')
-    await expect.poll(async () => (await getConfig(page)).act_tier).toBe('fast')
 
     // G4 — mode decides the dialog: under Ask the SAME tool still (and
     // always) surfaces the permission prompt. The seeded override also

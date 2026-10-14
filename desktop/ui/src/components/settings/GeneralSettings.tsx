@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Spinner } from '@/components/ui/loading-state'
+import { useEffect, useId, useState } from 'react'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useCatalog } from '@/context/CatalogContext'
 import { useI18n, SUPPORTED_LOCALES, type LocalePref } from '@/i18n'
@@ -14,7 +15,7 @@ import { readShowThinkingPref, setShowThinkingPref, type ShowThinkingPref } from
 import { getLinkTarget, setLinkTarget as setLinkTargetPref, type LinkTarget } from '@/lib/openLink'
 import { Switch } from '@/components/ui/switch'
 import { useArtifact } from '@/components/artifact/ArtifactContext'
-import { APPROVAL_MODES, ADVANCED_MODES, approvalModeOption } from '@/lib/approvalModes'
+import { approvalModeOption } from '@/lib/approvalModes'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import MigrationWizard from '@/components/migration/MigrationWizard'
 import PersonaPackSettings from './PersonaPackSettings'
@@ -27,6 +28,12 @@ import EffectBadge from './EffectBadge'
 // goes through the shared resolver (approvalModeOption), so out-of-table
 // engine values like the factory default "confirm" show the raw value with
 // no tier selected instead of masquerading as a pickable tier.
+//
+// design-parity R2 (Wave B′, audit §3.2): the CONTROL itself moved to the
+// 权限与安全 pane (PermissionsPane's 默认执行模式 entity card, design
+// 12-settings-security.html:163-173) — killing the two-guidance-card ring
+// jump. What stays here is a short link card: the current tier readout
+// (same honest resolver) plus a jump to where the tier is configured.
 
 export default function GeneralSettings() {
   const { config, providerStatus, refreshConfig } = useCatalog()
@@ -68,7 +75,6 @@ export default function GeneralSettings() {
     setLinkTargetPref(next)
   }
   const { localePref, setLocale } = useI18n()
-  const [saving, setSaving] = useState(false)
   // P1-6 — migration wizard (import from Claude Code / ZCode).
   const [migrationOpen, setMigrationOpen] = useState(false)
   // Settings R3 T3 — platform + keep-awake capability probe. null = the
@@ -107,23 +113,57 @@ export default function GeneralSettings() {
   // showed Permissive: a LOOSER tier than the engine's actual
   // ask-per-action, contradicting the composer's raw "confirm" readout.
   // Derived state instead: in-table values select their radio; out-of-table
-  // values select NOTHING and name the raw engine value.
+  // values select NOTHING and name the raw engine value. (R2: the radio
+  // group itself lives in PermissionsPane; this card only reads.)
   const currentMode = approvalModeOption(config?.approval_mode)
-  const selectedIndex = currentMode.rawLabel == null
-    ? APPROVAL_MODES.findIndex(m => m.value === currentMode.value)
-    : -1
 
-  const handleModeChange = async (option: (typeof APPROVAL_MODES)[number]) => {
-    setSaving(true)
+  // design-parity R2 (M3a, design 12-settings-general.html:212-217): the
+  // session-defaults' 默认工作目录 became WRITABLE. Type an absolute path
+  // or pick one with the OS directory picker (the same plugin-dialog `open`
+  // the Welcome card uses — setup.ts mocks it); the write goes through
+  // configure('working_dir'), the exact key the engine resolves sessions
+  // from (commands_config.rs "working_dir" arm). Before writing, the path
+  // is probed with get_file_tree — its "Path is not a directory" error is
+  // the only directory-existence probe on the IPC surface (path_exists is
+  // is_file()-only AND scope-gated, so it can't answer for arbitrary home
+  // subdirectories); any rejection renders as the inline 目录不存在 hint
+  // and nothing is persisted.
+  const [workingDirDraft, setWorkingDirDraft] = useState(config?.working_dir ?? '')
+  useEffect(() => {
+    setWorkingDirDraft(config?.working_dir ?? '')
+  }, [config?.working_dir])
+  const [workingDirError, setWorkingDirError] = useState<string | null>(null)
+  const [workingDirBusy, setWorkingDirBusy] = useState(false)
+  const workingDirErrorId = useId()
+
+  const browseWorkingDir = async () => {
     try {
-      await api.configure({ key: 'approval_mode', value: option.value })
+      const sel = await openDialog({ directory: true, multiple: false })
+      if (typeof sel === 'string') setWorkingDirDraft(sel)
+    } catch { /* user cancelled / picker unavailable — keep the draft */ }
+  }
+
+  const saveWorkingDir = async () => {
+    const dir = workingDirDraft.trim()
+    if (dir === '' || workingDirBusy) return
+    setWorkingDirBusy(true)
+    setWorkingDirError(null)
+    try {
+      await api.getFileTree(dir)
+    } catch {
+      // Not-a-directory / missing / inaccessible — inline error, no write.
+      setWorkingDirError(t('settings.general.sessionInfo.workingDirMissing'))
+      setWorkingDirBusy(false)
+      return
+    }
+    try {
+      await api.configure({ key: 'working_dir', value: dir })
       await refreshConfig()
-      // Approval mode is a safety switch — the read above re-derives from
-      // config once the write has actually landed (P1-10: no optimistic
-      // update here, and no separate selection state to go stale).
-      toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(option.labelKey) }))
-    } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
-    setSaving(false)
+      toast.success(intl.formatMessage({ id: 'settings.general.sessionInfo.workingDirSaved' }))
+    } catch (e) {
+      toastError(t('settings.general.sessionInfo.workingDirFailed'), e)
+    }
+    setWorkingDirBusy(false)
   }
 
   // Settings R3 T3 — write one of the System-group switches. All three are
@@ -155,92 +195,32 @@ export default function GeneralSettings() {
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
 
       <div className="space-y-lg">
-        {/* Autonomy Level */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+        {/* Autonomy Level — short link card since design-parity R2: the
+            默认执行模式 entity card (four-stop ladder + expert picker,
+            same approval_mode key as the composer) LIVES in 权限与安全
+            (PermissionsPane). One-liner keeps the honest raw-value readout;
+            the button jumps straight there. */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="approval-mode-link-card"
+        >
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
             <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
-            {saving && <Spinner className="text-primary text-body-lg" />}
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
-            {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {
+            {intl.formatMessage({ id: 'settings.general.approvalMode.managedInPermissions' }, {
               label: currentMode.rawLabel ?? t(currentMode.labelKey),
-              description: t(currentMode.descriptionKey),
             })}
           </p>
-          {/* Segmented control replaces the old range slider whose 5 label
-              columns overlapped at common widths (audit P0 §3.10). Equal
-              flex segments carry the short label only; the selected mode's
-              description moves to a single helper line below. An out-of-table
-              engine value (confirm / dont_ask / …) selects NO segment. */}
-          <div role="radiogroup" aria-label={intl.formatMessage({ id: 'settings.general.approvalMode.sliderAria' })}>
-            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
-              {APPROVAL_MODES.map((m, i) => (
-                <button
-                  key={m.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={i === selectedIndex}
-                  onClick={() => handleModeChange(m)}
-                  className={cn(
-                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
-                    'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
-                    i === selectedIndex
-                      ? 'bg-primary text-on-primary font-bold shadow-e1'
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
-                  )}
-                >
-                  <span className="block truncate">{t(m.labelKey)}</span>
-                </button>
-              ))}
-            </div>
-            {currentMode.rawLabel != null ? (
-              // Out-of-table engine value: say what it is instead of pasting
-              // a tier description that doesn't apply.
-              <p
-                className="font-body-sm text-on-surface-variant mt-sm px-xs"
-                data-testid="approval-mode-raw-hint"
-              >
-                {intl.formatMessage({ id: 'settings.general.approvalMode.rawHint' }, { value: currentMode.rawLabel })}
-              </p>
-            ) : (
-              <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
-                {t(currentMode.descriptionKey)}
-              </p>
-            )}
-            {/* GB P2-4: the tier only moves the auto-approve baseline —
-                High-risk actions keep their confirmation prompt regardless
-                (same note the composer's switcher carries). */}
-            <p className="font-body-xs text-on-surface-variant/80 mt-xs px-xs flex items-start gap-xs">
-              <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]" aria-hidden="true">gpp_maybe</span>
-              {t('chat.input.mode.highRiskNote')}
-            </p>
-            {/* Design §7.2: expert modes (readonly / dontAsk / bypass) are
-                not in the quick tiers — they live behind this advanced
-                picker. Selecting one writes the same approval_mode key. */}
-            <div className="mt-md flex items-center gap-sm px-xs">
-              <label
-                className="font-label-md text-on-surface-variant whitespace-nowrap"
-                htmlFor="approval-mode-advanced"
-              >
-                {t('settings.general.approvalMode.advanced')}
-              </label>
-              <select
-                id="approval-mode-advanced"
-                className="flex-1 min-w-0 bg-surface-container-low border border-outline-variant/30 rounded-lg px-sm py-xs font-body-md text-on-surface cursor-pointer"
-                value={ADVANCED_MODES.find(m => m.value === currentMode.value)?.value ?? ''}
-                onChange={e => {
-                  const option = ADVANCED_MODES.find(m => m.value === e.target.value)
-                  if (option) handleModeChange(option)
-                }}
-              >
-                <option value="">{t('settings.general.approvalMode.advanced.none')}</option>
-                {ADVANCED_MODES.map(m => (
-                  <option key={m.value} value={m.value}>{t(m.labelKey)}</option>
-                ))}
-              </select>
-            </div>
-          </div>
+          <Button
+            variant="outline"
+            onClick={() => navigate('/settings/permissions')}
+            data-testid="general-to-permissions-link"
+          >
+            {t('settings.general.approvalMode.managedInPermissionsAction')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">arrow_forward</span>
+          </Button>
         </section>
 
         {/* Language */}
@@ -414,9 +394,54 @@ export default function GeneralSettings() {
               <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.model')}</span>
               <span className="font-label-md text-on-surface font-bold">{providerStatus?.model ?? t('settings.general.sessionInfo.notConfigured')}</span>
             </div>
-            <div className="flex justify-between items-center py-sm">
-              <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.workingDir')}</span>
-              <span className="font-label-md text-on-surface font-bold font-mono text-sm truncate max-w-[300px]">{config?.working_dir ?? t('settings.general.sessionInfo.notSet')}</span>
+            {/* M3a — the row became a WRITABLE field (input + Browse +
+                Save). Save is disabled until the draft drifts; validation
+                and error rendering live in saveWorkingDir above. */}
+            <div className="py-sm">
+              <div className="flex justify-between items-center gap-md">
+                <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.workingDir')}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-sm mt-xs">
+                <Input
+                  value={workingDirDraft}
+                  onChange={e => { setWorkingDirDraft(e.target.value); setWorkingDirError(null) }}
+                  placeholder={t('settings.general.sessionInfo.notSet')}
+                  aria-label={t('settings.general.sessionInfo.workingDir')}
+                  aria-invalid={workingDirError != null || undefined}
+                  aria-describedby={workingDirError != null ? workingDirErrorId : undefined}
+                  className="font-mono text-sm max-w-[320px]"
+                  data-testid="settings-working-dir-input"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void browseWorkingDir()}
+                  data-testid="settings-working-dir-browse"
+                >
+                  {t('settings.general.sessionInfo.workingDirBrowse')}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={workingDirBusy || workingDirDraft.trim() === '' || workingDirDraft.trim() === (config?.working_dir ?? '')}
+                  onClick={() => void saveWorkingDir()}
+                  data-testid="settings-working-dir-save"
+                >
+                  {t('settings.general.sessionInfo.workingDirSave')}
+                </Button>
+              </div>
+              {workingDirError != null && (
+                <p
+                  id={workingDirErrorId}
+                  role="alert"
+                  className="font-label-sm text-label-sm text-error mt-xs"
+                  data-testid="settings-working-dir-error"
+                >
+                  {workingDirError}
+                </p>
+              )}
+              <p className="font-label-xs text-xs text-on-surface-variant/80 mt-xs">
+                {t('settings.general.sessionInfo.workingDirHint')}
+              </p>
             </div>
           </div>
         </section>

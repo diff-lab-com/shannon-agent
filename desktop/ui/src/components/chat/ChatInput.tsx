@@ -3,9 +3,10 @@ import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
+import { Menu } from '@base-ui/react/menu'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuSeparator, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
 import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
@@ -27,14 +28,13 @@ import {
 } from '@/lib/fileMention'
 import { imageFilesFromClipboard, clipboardHasText, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
-import type { RejectedAttachmentReason, AttachmentExtractionReport, SendCostEstimate } from '@/types'
+import type { RejectedAttachmentReason, AttachmentExtractionReport, SendCostEstimate, UsagePayload } from '@/types'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy'
 import { writeGlobalModelDefault } from '@/lib/modelSwitch'
-import { APPROVAL_MODES, PLAN_OPTION, approvalModeOption } from '@/lib/approvalModes'
-import { PhaseTierSwitcher } from '@/components/chat/PhaseTierSwitcher'
+import { APPROVAL_MODES, PLAN_OPTION, APPROVAL_MODE_CYCLE, approvalModeOption, normalizeApprovalMode } from '@/lib/approvalModes'
 import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
 /**
@@ -73,45 +73,20 @@ export function pathExtension(path: string): string {
 }
 
 /**
- * Aurora redesign 2026-10 (02 页 P1, 裁决 B1) — the composer's execution-mode
- * control is a FOUR-STOP segmented control (逐项确认 ask / 自动编辑 auto-edit /
- * 计划 plan / 完全访问 full-auto). Engine support verified: `plan` is a legal
- * `approval_mode` value (crates/shannon-engine permissions.rs ApprovalMode::Plan;
- * desktop/src/commands.rs parse_approval_mode maps "plan" → Plan, unit-tested at
- * commands.rs:4411), so plan takes its design-mandated seat in the ladder
- * instead of living behind a separate toggle. The expert modes
- * (readonly/dontAsk/bypassPermissions) stay Settings-only (lib/approvalModes).
+ * Aurora redesign 2026-10 (02 页 P1) — the composer's execution-mode control.
+ *
+ * 02c 设计提案裁决 D3(2026-10-14,二次修正): the control is a SINGLE chip
+ * showing the ACTIVE mode (icon + label), opening the approval ladder as a
+ * dropdown (逐档说明 + high-risk note). The former four-stop segmented
+ * control and its 1200px breakpoint fold (SEGMENTED_MODE_MIN_WIDTH_PX /
+ * useMinWindowWidth) are gone — one form at every width, which is exactly
+ * the Select shape the <1200px fallback already rendered; the testid stays
+ * `approval-mode-pill`. Engine support unchanged: `plan` is a legal
+ * `approval_mode` value (crates/shannon-engine permissions.rs
+ * ApprovalMode::Plan; desktop/src/commands.rs parse_approval_mode maps
+ * "plan" → Plan). The expert modes (readonly/dontAsk/bypassPermissions)
+ * stay Settings-only (lib/approvalModes).
  */
-const APPROVAL_SEGMENTS = [
-  { value: 'ask', labelKey: 'settings.general.approvalMode.ask.label', icon: 'shield' },
-  { value: 'auto-edit', labelKey: 'settings.general.approvalMode.autoEdit.label', icon: 'flash_auto' },
-  { value: 'plan', labelKey: 'chat.input.mode.plan', icon: 'route' },
-  { value: 'full-auto', labelKey: 'settings.general.approvalMode.full.label', icon: 'bolt' },
-] as const
-
-/** Design 02 规格标注: <1200px the segmented control folds back into the
- *  current-mode chip (the compact Select). Simple breakpoint switch. */
-const SEGMENTED_MODE_MIN_WIDTH_PX = 1200
-
-/** MatchMedia subscription for the segmented-control breakpoint. Defaults to
- *  WIDE when matchMedia is unavailable (jsdom/unit tests exercise the
- *  segmented form; the Select fallback is an e2e/visual-matrix surface). */
-function useMinWindowWidth(px: number): boolean {
-  const query = `(min-width: ${px}px)`
-  const [wide, setWide] = useState<boolean>(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
-    return window.matchMedia(query).matches
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const mql = window.matchMedia(query)
-    const onChange = (e: MediaQueryListEvent) => setWide(e.matches)
-    setWide(mql.matches)
-    mql.addEventListener('change', onChange)
-    return () => mql.removeEventListener('change', onChange)
-  }, [query])
-  return wide
-}
 
 /** Last path segment, no extension — used by the contextual placeholder so a
  *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
@@ -171,6 +146,13 @@ interface ChatInputProps {
   sessionWorkingDir?: string
   /** 最近一次流式 Usage payload — composer 侧会话用量弹框跟随刷新。 */
   usageTick?: unknown
+  /** 02c 裁决 D4 — the SAME streaming Usage payload, typed, feeding the
+   *  composer's context-% chip (icon + percent beside the model chip). The
+   *  percent computes exactly like ChatStatusBar's old segment:
+   *  (input+output)/context_total, and hides whenever the engine-resolved
+   *  window or the token counts are absent — an unknown window never
+   *  renders a guessed percentage (honesty contract). */
+  usage?: UsagePayload | null
   /** R2-1: the session this composer targets. When present, model-chip
    *  switches are SESSION-scoped (`set_session_model`) and the chip shows a
    *  "· session" suffix while an override is active; "Set as default" in the
@@ -203,6 +185,7 @@ export default function ChatInput({
   onSteer,
   sessionWorkingDir,
   usageTick,
+  usage,
   sessionId,
 }: ChatInputProps) {
   const intl = useIntl()
@@ -435,6 +418,33 @@ export default function ChatInput({
     }
   }
 
+  // R2 audit G2/I1 (02c A2 可选加分) — Shift+Tab walks the approval ladder
+  // (ask → auto-edit → plan → full-auto, wrapping), the Claude Code /
+  // Gemini CLI muscle-memory key; the TUI side of the naming design already
+  // plans the same loop. Same write surface as the pill's dropdown
+  // (configure('approval_mode') + refreshConfig); the toast names the NEW
+  // tier so the shortcut is never silent. An out-of-ladder current value
+  // (expert modes, engine aliases) enters the loop at `ask` — the managed
+  // base — instead of masquerading as a step it isn't.
+  const cycleApprovalMode = async () => {
+    const current = normalizeApprovalMode(
+      (config as Record<string, unknown> | undefined)?.approval_mode as string | undefined ?? '',
+    )
+    const idx = APPROVAL_MODE_CYCLE.indexOf(current)
+    const next = APPROVAL_MODE_CYCLE[(idx + 1) % APPROVAL_MODE_CYCLE.length]
+    const nextOption = approvalModeOption(next)
+    try {
+      await api.configure({ key: 'approval_mode', value: next })
+      await refreshConfig()
+      toast.success(intl.formatMessage(
+        { id: 'chat.input.mode.cycled' },
+        { mode: nextOption.rawLabel ?? intl.formatMessage({ id: nextOption.labelKey }) },
+      ))
+    } catch (err) {
+      toastError(t('chat.input.mode.failed'), err)
+    }
+  }
+
   // P0-③ (ZCode delta): composer model chip. R2-1 — with a session context
   // the switch is session-scoped (`set_session_model`); without one the
   // legacy global configure applies. "Set as default" always goes global.
@@ -580,11 +590,16 @@ export default function ChatInput({
   const currentEffort = normalizeEffort(
     (config as Record<string, unknown> | undefined)?.effort_level as string | undefined,
   )
-  const effortOptions: { value: EffortValue; labelKey: string }[] = [
-    { value: 'low', labelKey: 'chat.input.effort.low' },
-    { value: 'standard', labelKey: 'chat.input.effort.standard' },
-    { value: 'high', labelKey: 'chat.input.effort.high' },
-    { value: 'max', labelKey: 'chat.input.effort.max' },
+  // R2 audit W5 (02c S2): the gauge menu's rows wear the design's sub-
+  // labeled copy — 轻 · 最低延迟 / 标准（默认）/ 深 · 复杂推理 / 最高 ·
+  // 极限推理 (chat.input.effort.desc.*). The short words stay on the chip
+  // (`chat.input.effort.*`, also the model picker's sub-tier — 02c keeps
+  // that surface's current form) and in the aria label.
+  const effortOptions: { value: EffortValue; labelKey: string; descKey: string }[] = [
+    { value: 'low', labelKey: 'chat.input.effort.low', descKey: 'chat.input.effort.desc.low' },
+    { value: 'standard', labelKey: 'chat.input.effort.standard', descKey: 'chat.input.effort.desc.standard' },
+    { value: 'high', labelKey: 'chat.input.effort.high', descKey: 'chat.input.effort.desc.high' },
+    { value: 'max', labelKey: 'chat.input.effort.max', descKey: 'chat.input.effort.desc.max' },
   ]
   const currentEffortLabel = effortOptions.find(e => e.value === currentEffort)
     ? t(`chat.input.effort.${currentEffort}`)
@@ -598,6 +613,17 @@ export default function ChatInput({
       toastError(t('chat.input.effort.failed'), err)
     }
   }
+
+  // 02c 裁决 D4 — the context-% chip's number. Same math the ChatStatusBar
+  // segment used: sent+received tokens over the ENGINE-RESOLVED window
+  // (`context_total`), clamped, integer percent. Absent window or zero
+  // tokens → null → the chip renders icon-only (never a guessed window).
+  const contextPct = (() => {
+    const total = (usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)
+    const max = usage?.context_total
+    if (!max || total <= 0) return null
+    return Math.min(100, Math.round((total / max) * 100))
+  })()
 
   // S3-6 — pre-send cost estimate. The backend counts with the SAME
   // estimator the engine/billing stack uses (同源 DoD) and prices through the
@@ -899,6 +925,15 @@ export default function ChatInput({
         return
       }
     }
+    // G2/I1 — Shift+Tab cycles the approval ladder (ask → auto-edit → plan
+    // → full-auto). Deliberately AFTER the mention/slash blocks: while a
+    // menu is open, Tab — shift or not — belongs to that menu's commit path
+    // above, so the cycle only ever fires with BOTH menus closed.
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault()
+      void cycleApprovalMode()
+      return
+    }
     // A-22 — input-history recall. Reachable only when both menus are closed
     // (each captures the arrows above). While browsing, Up/Down walk the
     // ring; Down past the newest entry restores the pre-browse text + caret
@@ -990,10 +1025,9 @@ export default function ChatInput({
   // GB P2-4: the pill reads the SHARED five-tier table (same source as
   // Settings → General). Values outside the table (engine-only aliases)
   // render honestly via the fallback instead of masquerading as Suggest.
+  // 02c 裁决 D3: ONE form at every width — the active-mode chip + dropdown
+  // (the old segmented/breakpoint split is gone).
   const selectedMode = approvalModeOption(currentMode)
-  // Aurora 2026-10 (02 页 P1): ≥1200px renders the four-stop segmented
-  // control; below it the legacy current-mode chip Select.
-  const segmentedModeWide = useMinWindowWidth(SEGMENTED_MODE_MIN_WIDTH_PX)
 
   // The composer owns ONE mode surface (the unified pill below); the
   // keyboard shortcut and the plan banner's exit button both funnel here.
@@ -1082,11 +1116,24 @@ export default function ChatInput({
   // 三项 UX 修复 #3)。弹框点击后才挂载,首屏零开销;打开期间跟随父
   // 组件透传的 streaming usageTick 实时刷新 breakdown。
   const [usageOpen, setUsageOpen] = useState(false)
-  const plusItems: DropdownMenuItem[] = [
+  // R2 audit W6 (02c S1): the menu rows use the design copy —「添加文件…」
+  // (the shared attach key, single-surface) and a composer-specific「PPT
+  // 大纲…」(office.ppt.title stays the dialog's own title, it is reused
+  // there), and a separator groups the editor tools apart from the
+  // low-frequency 临时会话 toggle at the bottom.
+  const plusItems: DropdownMenuEntry[] = [
     { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
-    { id: 'ppt', label: t('office.ppt.title'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
+    { id: 'ppt', label: t('chat.input.plus.ppt'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
     { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
+    DropdownMenuSeparator('plus-editor-sep'),
+    // 02c 裁决 D4(菜单扩容): the low-frequency memory-bypass toggle folds
+    // into the + menu — the state rides the label (开/关) and the trigger
+    // wears a dot while active; the banner above the input keeps spelling
+    // the active state out. Same testid as the retired standalone button.
+    { id: 'memory-bypass', testid: 'memory-bypass-toggle', label: memoryBypassed
+        ? t('chat.input.memoryBypass.menu.on')
+        : t('chat.input.memoryBypass.menu.off'), icon: 'psychology', onSelect: () => { setPlusOpen(false); void handleMemoryBypassToggle() } },
   ]
 
   /* Char count UI */
@@ -1450,11 +1497,10 @@ export default function ChatInput({
         )}
 
         <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20">
-          {/* Classic AI-composer layout: one "+" menu, ONE mode surface, the
-              model pill (effort via its picker sub-tier — S3-5) on the
-              left; mic / counter / send on the right. The old row showed a
-              separate 计划模式 toggle next to the approval-mode select that
-              also held 计划/只读 — two controls for the same key. */}
+          {/* 02c 收敛后的 composer 行(裁决 D1-D5): one "+" menu, the
+              active-mode chip (dropdown ladder), the context-% chip, the
+              model chip and the effort gauge on the left; mic / counter /
+              send on the right. 状态条数字与规划/执行档位已按裁决移除。 */}
           <div className="flex items-center gap-xs flex-wrap min-w-0">
             <span className="relative shrink-0">
               <Button
@@ -1469,6 +1515,13 @@ export default function ChatInput({
               >
                 <span className="material-symbols-outlined icon-md">add_circle_outline</span>
               </Button>
+              {/* 临时会话激活时的角标(裁决 D4:状态点提示,横幅仍完整说明)。 */}
+              {memoryBypassed && (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-secondary"
+                />
+              )}
               {plusOpen && (
                 <DropdownMenu
                   open
@@ -1481,63 +1534,13 @@ export default function ChatInput({
               )}
             </span>
 
-            {/* Aurora redesign 2026-10 (02 页 P1, 裁决 B1): the approval
-                ladder is a FOUR-stop segmented control (ask / auto-edit /
-                plan / full-auto — `plan` is a legal engine approval_mode,
-                see APPROVAL_SEGMENTS). Below the 1200px breakpoint it folds
-                back into the current-mode chip Select (设计稿响应式降级).
-                The testid stays `approval-mode-pill` on BOTH forms so e2e
-                anchors survive; segments add their own
-                `approval-mode-segment-*` ids. Out-of-ladder engine values
-                (expert modes, CLI aliases) never masquerade: an honest
-                current-value badge rides inside the group. */}
-            {segmentedModeWide ? (
-              <div
-                data-testid="approval-mode-pill"
-                role="radiogroup"
-                aria-label={t('chat.input.mode.label')}
-                title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
-                className="inline-flex items-center rounded-lg border border-outline-variant/30 bg-surface-container/60 p-[2px] gap-[2px] shrink-0 max-w-full overflow-x-auto"
-              >
-                {APPROVAL_SEGMENTS.map(seg => {
-                  const active = selectedMode.value === seg.value
-                  return (
-                    <button
-                      key={seg.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      data-testid={`approval-mode-segment-${seg.value}`}
-                      aria-label={t(seg.labelKey)}
-                      title={t(seg.labelKey)}
-                      onClick={() => void handleModeChange(seg.value)}
-                      className={cn(
-                        'inline-flex items-center gap-[4px] px-sm py-[3px] rounded-md font-label-sm whitespace-nowrap cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
-                        active
-                          ? 'bg-primary-container text-on-primary-container font-bold'
-                          : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface',
-                      )}
-                    >
-                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">{seg.icon}</span>
-                      {t(seg.labelKey)}
-                    </button>
-                  )
-                })}
-                {!APPROVAL_SEGMENTS.some(s => s.value === selectedMode.value) && (
-                  /* Engine-only / expert value (readonly, dontAsk, bypass,
-                      CLI aliases): shown verbatim as the current state —
-                      the group must never claim a ladder stop it is not in. */
-                  <span
-                    data-testid="approval-mode-offladder-badge"
-                    title={`${selectedMode.rawLabel ?? t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
-                    className="inline-flex items-center gap-[4px] px-sm py-[3px] rounded-md font-label-sm whitespace-nowrap bg-surface-container-high text-on-surface-variant"
-                  >
-                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">{selectedMode.icon}</span>
-                    {selectedMode.rawLabel ?? t(selectedMode.labelKey)}
-                  </span>
-                )}
-              </div>
-            ) : (
+            {/* 02c 裁决 D3(二次修正): the approval ladder is a SINGLE chip
+                showing the ACTIVE mode, opening the four-stop dropdown (逐档
+                说明 + high-risk note) — the segmented control and its 1200px
+                breakpoint are gone; one form at every width. The testid stays
+                `approval-mode-pill`. Out-of-ladder engine values (expert
+                modes, CLI aliases) never masquerade: the raw value echoes in
+                the trigger via SelectValue's rawLabel fallback. */}
             <Select value={selectedMode.value} onValueChange={handleModeChange}>
               <SelectTrigger
                 size="sm"
@@ -1587,44 +1590,31 @@ export default function ChatInput({
                 </div>
               </SelectContent>
             </Select>
-            )}
 
-            {/* 会话用量入口 — 模型 chip 旁一次点击(2026-09 三项 UX 修复 #3)。
-                弹框点击后才挂载,composer 首屏零开销。 */}
+            {/* 02c 裁决 D4 — 会话用量入口保留在模型 chip 旁,升级为上下文
+                百分比 chip:引擎已解析窗口时显示 icon + N%,否则只有 icon
+                (诚实契约——绝不猜窗口)。点击打开会话用量弹框,状态条的
+                上下文/缓存/花费/预算数字全部收编其中。弹框点击后才挂载,
+                composer 首屏零开销。 */}
             <Button
               variant="ghost"
               aria-haspopup="dialog"
               aria-expanded={usageOpen}
+              data-testid="usage-chip"
               aria-label={t('chat.input.usage.aria')}
               title={t('chat.input.usage.title')}
-              className="p-md text-on-surface-variant hover:text-primary shrink-0"
+              className={cn(
+                'flex items-center gap-[4px] shrink-0 rounded-full border transition-colors px-sm py-[3px]',
+                contextPct != null
+                  ? 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50'
+                  : 'border-transparent text-on-surface-variant hover:text-primary',
+              )}
               onClick={() => setUsageOpen(true)}
             >
-              <span className="material-symbols-outlined icon-md" aria-hidden="true">data_usage</span>
-            </Button>
-
-            {/* P2-5 — 临时会话 toggle (memory bypass). aria-pressed + a
-                distinct active treatment so the state is never silent; the
-                status strip below spells it out. */}
-            <Button
-              variant="ghost"
-              aria-pressed={memoryBypassed}
-              data-testid="memory-bypass-toggle"
-              aria-label={memoryBypassed
-                ? t('chat.input.memoryBypass.on.aria')
-                : t('chat.input.memoryBypass.off.aria')}
-              title={memoryBypassed
-                ? t('chat.input.memoryBypass.on.title')
-                : t('chat.input.memoryBypass.off.title')}
-              className={cn(
-                'p-md shrink-0 transition-colors',
-                memoryBypassed
-                  ? 'bg-primary-container/70 text-on-primary-container hover:bg-primary-container'
-                  : 'text-on-surface-variant hover:text-primary',
+              <span className="material-symbols-outlined icon-sm" aria-hidden="true">data_usage</span>
+              {contextPct != null && (
+                <span className="font-label-sm text-label-sm tabular-nums">{contextPct}%</span>
               )}
-              onClick={() => void handleMemoryBypassToggle()}
-            >
-              <span className="material-symbols-outlined icon-md" aria-hidden="true">psychology</span>
             </Button>
 
             <Select
@@ -1794,31 +1784,116 @@ export default function ChatInput({
                 )}
               </SelectContent>
             </Select>
-            {/* S3-5 (P2-19): the effort badge — an independent status chip,
-                no longer part of the model name (`name · High` is dead). It
-                is a READ-ONLY indicator (no new switching surface): the
-                interaction lives in the picker's effort sub-tier. Hidden at
-                the `standard` default so the resting composer stays clean. */}
-            {currentEffort !== 'standard' && (
-              <span
-                data-testid="effort-badge"
-                title={t('chat.input.effort.title')}
-                className="inline-flex shrink-0 items-center gap-[2px] rounded-full bg-secondary-container/70 px-xs py-[2px] text-label-2xs font-bold text-on-secondary-container"
-              >
-                <span className="material-symbols-outlined icon-xs leading-none" aria-hidden="true">bolt</span>
-                {currentEffortLabel}
-              </span>
-            )}
-            {/* Aurora redesign 2026-10 (02-chat.html 三要素归位) put the
-                phase-tier switcher in the composer; 缓期批 3 收敛 removes its
-                execution-mode twin: that control activated permission
-                profiles, and since backend 8803a519d activation no longer
-                writes approval_mode, a composer control that couldn't move
-                the send-time mode was mislabeled chrome. Rule presets
-                (规则预设) live in Settings → 权限与安全; the composer keeps
-                the ONE mode surface it genuinely owns — the approval-mode
-                pill above (same testid/IPC contract as before). */}
-            <PhaseTierSwitcher compact />
+            {/* 02c 裁决 D2 — the effort dial is a CLICKABLE gauge chip beside
+                the model chip (the ChatGPT/Codex-desktop "compact composer
+                gauge"): four dots + the current level word, opening the
+                four-level menu in one click. The model picker's effort
+                sub-tier above stays — both surfaces write the same
+                configure('effort_level'). At the `standard` default the chip
+                rests dim (text + dots de-emphasized) so the row stays quiet;
+                a non-default level lights it up. testid: effort-gauge;
+                options carry effort-gauge-option-* (the picker's
+                effort-option-* ids are untouched). */}
+            <Menu.Root modal={false}>
+              <Menu.Trigger
+                render={
+                  <button
+                    type="button"
+                    data-testid="effort-gauge"
+                    aria-label={intl.formatMessage({ id: 'chat.input.effort.gauge.aria' }, { label: currentEffortLabel })}
+                    title={t('chat.input.effort.title')}
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-[4px] rounded-full border px-sm py-[3px] font-label-sm transition-colors cursor-pointer',
+                      currentEffort !== 'standard'
+                        ? 'border-transparent bg-secondary-container/70 font-bold text-on-secondary-container hover:bg-secondary-container'
+                        : 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50',
+                    )}
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">speed</span>
+                    <span className="flex items-center gap-[2.5px] max-[1199px]:hidden" aria-hidden="true">
+                      {effortOptions.map(e => (
+                        <span
+                          key={e.value}
+                          className={cn(
+                            'size-[5px] rounded-full',
+                            effortOptions.findIndex(x => x.value === currentEffort) >= effortOptions.findIndex(x => x.value === e.value)
+                              ? currentEffort !== 'standard' ? 'bg-secondary' : 'bg-on-surface-variant/50'
+                              : 'bg-on-surface-variant/20',
+                          )}
+                        />
+                      ))}
+                    </span>
+                    {currentEffortLabel}
+                    <span className="material-symbols-outlined icon-sm opacity-60" aria-hidden="true">expand_more</span>
+                  </button>
+                }
+              />
+              <Menu.Portal>
+                {/* z-modal rides the POSITIONER (same token scale as the
+                    composer's other floating surfaces). */}
+                <Menu.Positioner align="start" side="top" sideOffset={8} className="isolate z-modal">
+                  <Menu.Popup
+                    role="dialog"
+                    aria-labelledby={undefined}
+                    aria-label={t('chat.input.effort.label')}
+                    data-testid="effort-gauge-menu"
+                    className="glass-overlay animate-panel-in w-[248px] rounded-xl py-sm outline-none"
+                  >
+                    <div className="px-md pt-xs pb-sm">
+                      <div className="font-headline-sm text-on-surface font-bold">{t('chat.input.effort.label')}</div>
+                      <div className="text-label-sm text-on-surface-variant">{t('chat.input.effort.title')}</div>
+                    </div>
+                    <Menu.RadioGroup
+                      value={currentEffort}
+                      onValueChange={v => { void handleEffortChange(v as string | null) }}
+                      className="px-md pb-xs"
+                    >
+                      {effortOptions.map(effort => (
+                        <Menu.RadioItem
+                          key={effort.value}
+                          value={effort.value}
+                          data-testid={`effort-gauge-option-${effort.value}`}
+                          label={t(effort.descKey)}
+                          className="flex items-center gap-xs rounded-lg px-md py-xs font-label-md cursor-pointer outline-none text-on-surface-variant data-[highlighted]:bg-primary/10 data-[highlighted]:text-on-surface"
+                        >
+                          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                            {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
+                          </span>
+                          <span className={currentEffort === effort.value ? 'font-medium text-on-surface' : undefined}>
+                            {t(effort.descKey)}
+                          </span>
+                        </Menu.RadioItem>
+                      ))}
+                    </Menu.RadioGroup>
+                    {currentModel?.reasoning === false && (
+                      /* Three-state honesty (mirrors the picker's sub-tier
+                          note): the engine passes effort through and the
+                          PROVIDER arbitrates — a known-no-reasoning model
+                          gets the note, not a lockout. */
+                      <div
+                        role="note"
+                        data-testid="effort-gauge-not-applicable"
+                        className="mx-md mb-sm border-t border-outline-variant/20 pt-xs text-label-2xs text-on-surface-variant"
+                      >
+                        {t('chat.input.effort.notApplicable')}
+                      </div>
+                    )}
+                    {/* R2 audit W5 (02c S2 cnote): the ALWAYS-on footer
+                        note — 力度随会话生效；标准时 gauge 低对比显示. It
+                        coexists with the conditional honesty line above
+                        (which only renders for known-no-reasoning models)
+                        and stays last, at the menu's bottom. */}
+                    <div
+                      role="note"
+                      data-testid="effort-gauge-note"
+                      className="mx-md mb-sm border-t border-outline-variant/20 pt-xs text-label-2xs text-on-surface-variant"
+                    >
+                      {t('chat.input.effort.note')}
+                    </div>
+                  </Menu.Popup>
+                </Menu.Positioner>
+              </Menu.Portal>
+            </Menu.Root>
           </div>
 
           <div className="flex items-center gap-xs shrink-0">
