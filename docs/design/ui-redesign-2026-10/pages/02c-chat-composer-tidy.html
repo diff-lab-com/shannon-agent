@@ -179,6 +179,7 @@
         竞品基准:Cursor/Claude Code/ChatGPT 的 composer 常驻控件 3-4 个;上下文用量一律做成小 gauge 或 tooltip;
         没有任何竞品把分阶段模型档位常驻输入框(Cline 将其收在设置里,且为 opt-in)。
         <b>2026-10-14 裁决:D1/D2 通过;D3 二次修正 — 权限改为下拉选择、平时只常显激活档;D4 修正 — 用量入口保留在模型旁(% 图标),上下文/金额等数字收进弹框,状态条不再显示数字。</b>
+        <b>2026-10-14 R2:词汇按权限命名 v2 回改(设计稿回改批次 D7,见 docs/reviews/2026-10-14-design-parity-audit-r2.md §3.4/G1)——权限档主词全线对齐 询问 / 自动编辑 / 计划 / 全自动;effort S2 四档副语维持不变(实现已按此落地)。</b>
         方案已确认,按 ⑥ 清单实施。
       </div>
     </div>
@@ -188,6 +189,7 @@
       <span class="st vio">D3 二次修正:权限下拉化,常显当前档</span>
       <span class="st warn">D4 修正:用量入口留模型旁,数字入弹框</span>
       <span class="st ok">D5 更新:状态条仅留 目录 + 分支</span>
+      <span class="st ok">2026-10-14 R2:词汇按权限命名 v2 回改</span>
     </div>
   </div>
 
@@ -203,11 +205,13 @@
           <div class="compose-row">
             <span class="pt" data-n="1"><button class="iconbtn"><svg class="ic"><use href="#i-plus"/></svg></button></span>
             <span class="pt" data-n="2">
+              <!-- 2026-10-14 R2 词汇回改(D7):权限档全线对齐《权限命名设计 v2》(2026-10-04,实现 approvalModes.ts 单词汇表)——
+                   「逐项确认」→「询问」、「完全访问」→「全自动」;四档主词 = 询问 / 自动编辑 / 计划 / 全自动。 -->
               <span class="seg">
-                <button><svg class="ic"><use href="#i-shield"/></svg>逐项确认</button>
+                <button><svg class="ic"><use href="#i-shield"/></svg>询问</button>
                 <button class="on"><svg class="ic"><use href="#i-edit"/></svg>自动编辑</button>
                 <button><svg class="ic"><use href="#i-route"/></svg>计划</button>
-                <button><svg class="ic"><use href="#i-bolt"/></svg>完全访问</button>
+                <button><svg class="ic"><use href="#i-bolt"/></svg>全自动</button>
               </span>
             </span>
             <span class="pt" data-n="3"><button class="iconbtn"><svg class="ic"><use href="#i-chart"/></svg></button></span>
@@ -386,10 +390,11 @@
         <div class="sb-stage">
           <div class="cpop" style="left:50%;transform:translateX(-50%);bottom:98px;width:264px">
             <div class="csec">权限模式</div>
-            <div class="ci"><svg class="ic"><use href="#i-shield"/></svg><span>逐项确认<span style="color:var(--t3);font-size:10.5px"> · 每步确认</span></span></div>
-            <div class="ci sel"><svg class="ic"><use href="#i-check"/></svg><span>自动编辑<span style="color:var(--t3);font-size:10.5px"> · 编辑自动放行</span></span></div>
-            <div class="ci"><svg class="ic"><use href="#i-route"/></svg><span>计划<span style="color:var(--t3);font-size:10.5px"> · 只读产出计划</span></span></div>
-            <div class="ci"><svg class="ic"><use href="#i-bolt"/></svg><span>完全访问<span style="color:var(--t3);font-size:10.5px"> · 自动批准</span></span></div>
+            <!-- 2026-10-14 R2 词汇回改(D7):主词对齐权限命名 v2,副语同步实现 settings.general.approvalMode.* 描述 -->
+            <div class="ci"><svg class="ic"><use href="#i-shield"/></svg><span>询问<span style="color:var(--t3);font-size:10.5px"> · 只读自由执行,其余操作先询问</span></span></div>
+            <div class="ci sel"><svg class="ic"><use href="#i-check"/></svg><span>自动编辑<span style="color:var(--t3);font-size:10.5px"> · 自动批准文件编辑</span></span></div>
+            <div class="ci"><svg class="ic"><use href="#i-route"/></svg><span>计划<span style="color:var(--t3);font-size:10.5px"> · 共享上下文,批准计划</span></span></div>
+            <div class="ci"><svg class="ic"><use href="#i-bolt"/></svg><span>全自动<span style="color:var(--t3);font-size:10.5px"> · 批准除高危外的全部操作</span></span></div>
             <div class="cnote">高危操作(如删除文件)不受档位影响,始终弹出确认——档位只调整自动批准基线。</div>
           </div>
           <div class="composer mini">

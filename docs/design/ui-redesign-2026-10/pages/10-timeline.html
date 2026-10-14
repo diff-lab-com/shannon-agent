@@ -178,7 +178,10 @@
         </div>
       </div>
 
-      <!-- 执行瀑布 -->
+      <!-- 执行瀑布 —— 按 2026-10-14 裁决回改(D6,README §5 追认):撤销原稿独立「检查点行」卡,
+           检查点还原改为每轮卡内的「还原到此轮」chip(与实现 TurnTimeline 一致:一轮一卡,chip 挂轮头)。
+           /rewind 语义与确认流保留:仅有检查点的轮次可还原(诚实门控,checkpointTurns),点击后确认流守卫——
+           该轮消息与其后内容移除、文件修改回滚(chat.message.rewind.confirm.*)。 -->
       <div style="padding:8px 24px 0">
         <div class="card pad">
           <div class="row mb12">
@@ -188,7 +191,7 @@
             <span class="src-chain">events.jsonl · 4m12s</span>
           </div>
 
-          <div class="group-label" style="padding:2px 0 6px">第 1 轮 · 用户报障</div>
+          <div class="group-label" style="padding:2px 0 6px;display:flex;align-items:center;gap:8px">第 1 轮 · 用户报障 <button class="chip" style="height:20px;font-size:10.5px;padding:0 8px" title="/rewind · 还原到第 1 轮之前(确认流守卫)"><svg class="ic" style="width:11px;height:11px"><use href="#i-history"/></svg><span class="cv">还原到此轮</span></button></div>
           <div class="tl-row"><span class="nm">think 已思考</span><div class="tl-track"><span class="tl-bar" style="left:0%;width:3%"></span></div><span class="tl-dur">6.0s</span></div>
           <div class="tl-row"><span class="nm">grep signature</span><div class="tl-track"><span class="tl-bar read" style="left:3.4%;width:0.8%"></span></div><span class="tl-dur">0.4s</span></div>
           <div class="tl-row"><span class="nm">read verify.rs</span><div class="tl-track"><span class="tl-bar read" style="left:4.5%;width:0.6%"></span></div><span class="tl-dur">0.2s</span></div>
@@ -199,7 +202,7 @@
           <div class="tl-row"><span class="nm">edit tests.rs</span><div class="tl-track"><span class="tl-bar write" style="left:19.7%;width:1%"></span></div><span class="tl-dur">0.4s</span></div>
           <div class="tl-row"><span class="nm">terminal cargo test</span><div class="tl-track"><span class="tl-bar read" style="left:21.2%;width:7%"></span></div><span class="tl-dur">14.8s</span></div>
 
-          <div class="group-label" style="padding:10px 0 6px">第 2 轮 · 用户确认创建 PR</div>
+          <div class="group-label" style="padding:10px 0 6px;display:flex;align-items:center;gap:8px">第 2 轮 · 用户确认创建 PR <button class="chip" style="height:20px;font-size:10.5px;padding:0 8px;opacity:.55;cursor:default" title="该轮之后尚无检查点,不可还原(诚实门控)"><svg class="ic" style="width:11px;height:11px"><use href="#i-history"/></svg><span class="cv">无检查点</span></button></div>
           <div class="tl-row"><span class="nm">gh pr create</span><div class="tl-track"><span class="tl-bar net" style="left:88%;width:1.8%"></span></div><span class="tl-dur">2.1s</span></div>
 
           <div class="row mt12" style="gap:16px;font-size:11px;color:var(--t3)">
@@ -207,6 +210,10 @@
             <span class="row" style="gap:6px"><span class="lgd" style="background:var(--vio-dim-2);border:1px solid rgba(139,124,247,.5)"></span>write 写</span>
             <span class="row" style="gap:6px"><span class="lgd" style="background:var(--aur-dim);border:1px solid rgba(86,200,221,.4)"></span>network 网络</span>
             <span class="row" style="gap:6px"><span class="lgd" style="background:var(--warn-dim);border:1px solid rgba(245,184,61,.45)"></span>高风险</span>
+          </div>
+          <div class="row mt8" style="gap:7px;font-size:10.5px;color:var(--t3)">
+            <svg class="ic" style="width:12px;height:12px;flex:none"><use href="#i-history"/></svg>
+            <span>检查点还原:<span class="mono">/rewind</span> 语义 —— 每轮卡内「还原到此轮」chip,点击后确认流守卫(该轮消息与其后内容移除、文件修改回滚);仅存在检查点的轮次可还原,右停靠「检查点」tab 提供同款 chips。</span>
           </div>
         </div>
       </div>
@@ -259,20 +266,8 @@
         </div>
       </div>
 
-      <!-- 检查点行 -->
-      <div style="padding:12px 24px 24px">
-        <div class="card pad" style="display:flex;align-items:center;gap:10px">
-          <svg class="ic" style="color:var(--vio-2)"><use href="#i-history"/></svg>
-          <b style="font-size:13px">检查点</b>
-          <button class="chip">T1 报障</button>
-          <button class="chip">T2 定位完成</button>
-          <button class="chip acc">T3 修复验证</button>
-          <button class="chip">T4 PR 已建</button>
-          <span class="spacer"></span>
-          <span class="muted" style="font-size:11.5px">任意检查点可一键还原代码与对话</span>
-          <button class="btn ghost sm mono">/rewind</button>
-        </div>
-      </div>
+      <!-- 独立「检查点行」卡已按 2026-10-14 裁决回改(D6)撤销:检查点还原收敛为每轮卡内「还原到此轮」chip
+           (见上方执行瀑布卡),/rewind 语义与确认流注记保留在瀑布卡图例下方。 -->
 
     </div>
   </div>

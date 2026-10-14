@@ -162,24 +162,24 @@
         </div>
       </div>
 
-      <!-- 目录 tabs -->
+      <!-- 目录 tabs —— 按 2026-10-14 裁决回改(D1,见 docs/reviews/2026-10-14-design-parity-audit-r2.md §3.4
+           与 README §5-1):撤销原稿 8 平铺 tab,改为「3 主 tab + 高级管理下拉」,与实现 Extensions.tsx 一致:
+           primaryTabs = 精选 / 已安装(计数) / 待处理(待评审计数徽章);
+           高级管理下拉(Advanced management)= MCP 服务器 / 技能 / 智能体 / 数据源 / 插件 —— 五条管理路由不变,只收拢入口。 -->
       <div style="padding:0 24px;border-bottom:1px solid var(--hair)">
         <div class="tabs">
           <button class="tab on">精选</button>
-          <button class="tab">MCP 服务器</button>
-          <button class="tab">技能</button>
-          <button class="tab">智能体</button>
-          <button class="tab">数据源</button>
-          <button class="tab">插件</button>
           <button class="tab">已安装 <span class="n">7</span></button>
-          <button class="tab">待审核 <span class="n" style="background:var(--vio-dim-2);color:var(--vio-2)">1</span></button>
+          <button class="tab">待处理 <span class="n" style="background:var(--vio-dim-2);color:var(--vio-2)">1</span></button>
+          <span class="spacer"></span>
+          <button class="tab" style="display:inline-flex;align-items:center;gap:6px"><svg class="ic" style="width:13px;height:13px"><use href="#i-sliders"/></svg>高级管理<svg class="ic" style="width:12px;height:12px;opacity:.6"><use href="#i-chev-d"/></svg></button>
         </div>
       </div>
 
       <!-- 目录 grid:3 列 × 3 行 + 安全横幅 -->
-      <div class="catgrid">
+      <div class="catgrid" style="padding-bottom:12px">
 
-        <!-- 1 GitHub -->
+        <!-- 1 GitHub(已授权态示范:已连接 → 管理,见 D2 回改注) -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 vio"><svg class="ic"><use href="#i-branch"/></svg></div>
@@ -210,19 +210,21 @@
           </div>
         </div>
 
-        <!-- 3 Slack -->
+        <!-- 3 Slack —— 按 2026-10-14 裁决回改(D8):市场卡不再画「需认证/去认证」——市场卡无实时认证状态
+             (实现 Featured.tsx F-11 诚实契约:未安装 OAuth 厂商只画「添加/去授权」,认证动作落在已安装管理行,
+             见页尾「已安装 · 管理行」注记)。 -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-chat"/></svg></div>
             <b>Slack</b>
             <span class="spacer"></span>
-            <span class="st info"><svg class="ic"><use href="#i-key"/></svg>需认证</span>
+            <span class="st mute">未连接</span>
           </div>
           <p class="desc">频道消息摘要与定时播报</p>
           <div class="foot">
             <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
             <span class="spacer"></span>
-            <button class="btn soft sm"><svg class="ic"><use href="#i-key"/></svg>去认证</button>
+            <button class="btn soft sm"><svg class="ic"><use href="#i-key"/></svg>去授权</button>
           </div>
         </div>
 
@@ -257,19 +259,23 @@
           </div>
         </div>
 
-        <!-- 6 Claude 远程连接(诚实化示范卡:桌面端暂不支持) -->
-        <div class="card pad catcard" style="opacity:.55">
+        <!-- 6 Claude 远程连接 —— 按 2026-10-14 裁决回改(D2):撤销「桌面端即将支持 · 请先使用 CLI」琥珀徽章
+             (实现已支持 OAuth loopback:Featured.tsx installMcpOAuthLoopback 一键授权,P KCE 全程本机完成)。
+             改画真实连接状态形态:未连接 → 主操作「去授权」(授权即安装,loopback 回调后变为「已授权 · 管理」)。
+             市场卡不画实时认证状态开关——认证动作的撤销(去认证)落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
+        <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-link"/></svg></div>
             <b>Claude 远程连接</b>
             <span class="spacer"></span>
-            <span class="st mute mono" style="font-size:10.5px">url-only</span>
+            <span class="st mute mono" style="font-size:10.5px">OAuth</span>
           </div>
-          <p class="desc">云端托管的远程 MCP 服务(OAuth)</p>
-          <span class="honest" style="align-self:flex-start">桌面端即将支持 · 请先使用 CLI</span>
+          <p class="desc">云端托管的远程 MCP 服务,一键跳浏览器授权(loopback 本机回调)</p>
           <div class="foot">
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
             <span class="spacer"></span>
-            <button class="btn ghost sm" style="opacity:.45;cursor:default"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
+            <span class="st mute">未连接</span>
+            <button class="btn sm soft"><svg class="ic"><use href="#i-key"/></svg>去授权</button>
           </div>
         </div>
 
@@ -326,6 +332,44 @@
           <button class="btn ghost sm">安全白皮书</button>
         </div>
 
+      </div>
+
+      <!-- 已安装 · 管理行 —— 按 2026-10-14 裁决回改(D8):「去认证」从市场卡移到已安装管理区。
+           市场卡无实时认证状态(实现 F-11 诚实契约),认证动作落在「已安装」tab / 高级管理 → MCP 服务器 的行内:
+           重新认证 = 登录过期时重放 OAuth loopback(McpServers.tsx W3-B 恢复动作);
+           去认证 = 撤销授权、清除本机 keyring 凭据,回到未连接;移除/重启/工具权限等行内操作照旧。 -->
+      <div style="padding:0 24px 24px">
+        <div class="card">
+          <div class="row" style="padding:10px 16px;border-bottom:1px solid var(--hair)">
+            <b style="font-size:12.5px">已安装 · 管理行</b>
+            <span class="muted" style="font-size:10.5px;margin-left:6px">认证动作在已装行内 —— 市场卡不画认证态</span>
+            <span class="spacer"></span>
+            <span class="muted mono" style="font-size:10.5px">已安装 tab → MCP 服务器</span>
+          </div>
+          <div class="itemrow">
+            <div class="ico ok"><svg class="ic"><use href="#i-chat"/></svg></div>
+            <div class="body">
+              <div class="h"><span class="t">Slack</span><span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已连接</span><span class="st mute">12 个工具</span></div>
+              <div class="src-chain" style="margin-top:4px">OAuth · 凭据存本机 keyring · 上次授权 9-30</div>
+            </div>
+            <div class="ops">
+              <button class="btn ghost sm">重新认证</button>
+              <button class="btn ghost sm">去认证</button>
+              <button class="iconbtn"><svg class="ic"><use href="#i-more"/></svg></button>
+            </div>
+          </div>
+          <div class="itemrow dim">
+            <div class="ico"><svg class="ic"><use href="#i-link"/></svg></div>
+            <div class="body">
+              <div class="h"><span class="t">Notion</span><span class="st warn"><svg class="ic"><use href="#i-clock"/></svg>登录已过期</span></div>
+              <div class="src-chain" style="margin-top:4px">保存的登录凭证已失效,请重新认证以恢复连接</div>
+            </div>
+            <div class="ops">
+              <button class="btn sm pri"><svg class="ic"><use href="#i-key"/></svg>重新认证</button>
+              <button class="btn ghost sm">去认证</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
