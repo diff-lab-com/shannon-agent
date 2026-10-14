@@ -305,10 +305,41 @@ pub fn build_server(
     state: &crate::commands::AppState,
 ) -> ShannonApiServer {
     let tools = build_loopback_tools(desktop_config, state);
-    ShannonApiServer::new(client_config)
+    let mut server = ShannonApiServer::new(client_config)
         .with_tools(tools)
         .host(LOOPBACK_HOST)
-        .port(LOOPBACK_PORT)
+        .port(LOOPBACK_PORT);
+    // #400 follow-up: the user's `approval_mode` config finally governs the
+    // engine face this app hosts (mobile/IM loopback turns) — it used to
+    // drive only the goal/batch unattended flows while mobile turns read
+    // settings/profile behind its back. A session pin (mobile tighten,
+    // desktop switcher) still outranks it.
+    if let Some(mode) = ambient_approval_mode(desktop_config) {
+        server = server.ambient_approval_mode(mode);
+    }
+    server
+}
+
+/// The desktop `approval_mode` config as the loopback engine's ambient
+/// approval default. `None` when unset (settings/profile govern — behavior
+/// unchanged) or when the value asks for bypass and the bypass guardrails
+/// refuse (root / `SHANNON_DISABLE_BYPASS=1`). Unrecognised values degrade
+/// to `Ask` — [`crate::commands::parse_approval_mode`] semantics, the same
+/// safe default the unattended flows use.
+fn ambient_approval_mode(
+    desktop_config: &DesktopConfig,
+) -> Option<shannon_engine::permissions::ApprovalMode> {
+    let raw = desktop_config.approval_mode.as_deref()?;
+    let parsed = crate::commands::parse_approval_mode(raw);
+    if parsed == shannon_engine::permissions::ApprovalMode::BypassPermissions {
+        if let Err(e) = shannon_engine::permissions::ensure_bypass_allowed() {
+            tracing::warn!(
+                "loopback engine: config approval_mode 'bypass' refused ({e}); keeping the settings/profile chain"
+            );
+            return None;
+        }
+    }
+    Some(parsed)
 }
 
 /// Build the loopback tool registry: sandboxed default tools + the B2-4
@@ -401,6 +432,50 @@ mod tests {
     use shannon_core::scheduled_routines::ScheduledRoutine;
     use shannon_core::scheduled_runs::ScheduledRunsStore;
     use tower::ServiceExt;
+
+    /// #400 follow-up: the config `approval_mode` resolves into the loopback
+    /// engine's ambient default — engine-vocabulary tokens pass through, and
+    /// the unset case keeps the settings/profile chain (no ambient).
+    #[test]
+    fn ambient_approval_mode_maps_config_values() {
+        // NOTE: `DesktopConfig::default()` carries `Some("auto-edit")` — the
+        // None case is a config file with the key explicitly null.
+        let mut cfg = DesktopConfig {
+            approval_mode: None,
+            ..DesktopConfig::default()
+        };
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            None,
+            "explicit null → no ambient"
+        );
+
+        cfg.approval_mode = Some("auto-edit".to_string());
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            Some(shannon_engine::permissions::ApprovalMode::AutoEdit)
+        );
+
+        cfg.approval_mode = Some("full-auto".to_string());
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            Some(shannon_engine::permissions::ApprovalMode::FullAuto)
+        );
+
+        cfg.approval_mode = Some("ask".to_string());
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            Some(shannon_engine::permissions::ApprovalMode::Ask)
+        );
+
+        // Unrecognised values degrade to the safe default (Ask), matching
+        // the unattended-flow philosophy — a typo must never WIDEN power.
+        cfg.approval_mode = Some("turbo".to_string());
+        assert_eq!(
+            ambient_approval_mode(&cfg),
+            Some(shannon_engine::permissions::ApprovalMode::Ask)
+        );
+    }
 
     /// Desktop config carrying only the sandbox-relevant fields (P1-3).
     fn sandbox_cfg(mode: Option<&str>) -> DesktopConfig {

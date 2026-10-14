@@ -963,7 +963,14 @@ export interface MobileApprovalItem {
 /** P3-3: result of `shannon/approval.state` — the approval token currently
  *  in effect for the device's attached session. */
 export interface ApprovalStateResult {
+  /** The EFFECTIVE approval mode a new turn on the session would run under. */
   mode: string;
+  /**
+   * #400 follow-up: where the mode comes from — `"session"` | `"ambient"` |
+   * `"settings"` | `"profile"` | `"default"`. Null when served by an engine
+   * predating the field (additive wire; older engines omit the key).
+   */
+  source: string | null;
 }
 
 /** P3-3: params for `shannon/approval.set` — the mobile TIGHTEN route; the

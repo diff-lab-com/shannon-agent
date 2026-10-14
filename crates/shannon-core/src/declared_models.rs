@@ -360,7 +360,7 @@ pub(crate) mod test_support {
     /// poison-tolerant, like the registry accessors above).
     pub(crate) struct RegistryGuard(
         // Only ever held, never read — the value is the critical section.
-        #[allow(dead_code)] MutexGuard<'static, ()>,
+        #[allow(dead_code)] MutexGuard<'static, ()>, // KEEP: held only so Drop clears the registry on scope exit
     );
 
     impl Drop for RegistryGuard {

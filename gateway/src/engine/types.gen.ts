@@ -77,6 +77,7 @@ export type ApprovalDecision =
 
 export interface ApprovalModeState {
   mode: string;
+  source: string | null;
 }
 
 export interface ApprovalModeRequest {
@@ -168,6 +169,7 @@ export interface TrustRevokeResponse {
 
 export interface ApprovalModeState {
   mode: string;
+  source: string | null;
 }
 
 export interface ApprovalModeRequest {
