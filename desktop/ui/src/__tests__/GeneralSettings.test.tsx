@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
@@ -35,20 +35,20 @@ describe('GeneralSettings', () => {
     expect(screen.getByText('Approval Mode')).toBeInTheDocument()
   })
 
-  it('renders the three shared ladder tiers (4+3: ask/auto-edit/full-auto)', () => {
+  // design-parity R2 (Wave B′): the 默认执行模式 entity card (four-stop
+  // segmented ladder + expert picker, same approval_mode key as the
+  // composer) LIVES in 权限与安全 (PermissionsPaneExecutionMode.test.tsx
+  // pins it there). General keeps only the short link card — and the
+  // honest raw-value read the Round-2 review introduced.
+  it('carries no approval radios — the control moved to PermissionsPane', () => {
     render(wrap(<GeneralSettings />))
-    expect(screen.getAllByText('Ask').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Auto Edit').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText('Full').length).toBeGreaterThanOrEqual(1)
-    // The expert tiers (Strict et al.) live behind the Advanced picker, not
-    // the quick segmented control.
+    expect(screen.getByTestId('approval-mode-link-card')).toBeInTheDocument()
+    expect(screen.queryByRole('radio', { name: 'Ask' })).not.toBeInTheDocument()
     expect(screen.queryByRole('radio', { name: 'Strict' })).not.toBeInTheDocument()
+    expect(document.getElementById('approval-mode-advanced')).toBeNull()
+    expect(screen.getByTestId('general-to-permissions-link')).toBeInTheDocument()
   })
 
-  // Round-2 review: the factory-default `approval_mode: "confirm"` is an
-  // out-of-table engine value (R3) — it must show the RAW value with NO tier
-  // selected, never masquerade as a pickable tier (the old index-based read
-  // fell back to Permissive, looser than the engine's actual ask-every-time).
   const configWith = (approvalMode: string) => ({
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
@@ -57,48 +57,32 @@ describe('GeneralSettings', () => {
     approval_mode: approvalMode,
   })
 
-  it('legacy factory-default "confirm" normalizes into the Ask tier', async () => {
+  it('legacy factory-default "confirm" names its resolved tier in the link card', async () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('confirm'))
     render(wrap(<GeneralSettings />))
-    // Legacy values normalize for display: confirm ≡ ask, and the ask tier
-    // radio is the one that selects. (Scope: the approval-mode group — the
-    // show-thinking card (T9) adds its own radiogroup on the same page.)
-    await waitFor(() => {
-      const approvalGroup = within(screen.getByRole('radiogroup', { name: 'Approval mode' }))
-      const radios = approvalGroup.getAllByRole('radio')
-      expect(radios).toHaveLength(3)
-      expect(approvalGroup.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'true')
-      for (const radio of radios) {
-        if (radio !== approvalGroup.getByRole('radio', { name: 'Ask' })) {
-          expect(radio).toHaveAttribute('aria-checked', 'false')
-        }
-      }
-    })
-    expect(screen.queryByTestId('approval-mode-raw-hint')).not.toBeInTheDocument()
+    // confirm is a legacy alias: normalizeApprovalMode resolves it to the
+    // ask tier, so the one-liner shows Ask (never the raw engine value).
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-mode-link-card')).toHaveTextContent('Current: Ask'),
+    )
   })
 
-  it('an in-table config still selects its tier (auto_edit → Auto Edit)', async () => {
+  it('an in-table config names its tier (auto_edit → Auto Edit)', async () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('auto_edit'))
     render(wrap(<GeneralSettings />))
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Auto Edit' })).toHaveAttribute('aria-checked', 'true'))
-    expect(screen.getByRole('radio', { name: 'Ask' })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.getByRole('radio', { name: 'Full' })).toHaveAttribute('aria-checked', 'false')
-    expect(screen.queryByTestId('approval-mode-raw-hint')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-mode-link-card')).toHaveTextContent('Current: Auto Edit'),
+    )
   })
 
-  it('an expert config (bypass_permissions) selects no quick tier and names itself', async () => {
+  it('an expert config (bypass_permissions) names its resolved tier in the link card', async () => {
     vi.mocked(api.getConfig).mockResolvedValueOnce(configWith('bypass_permissions'))
     render(wrap(<GeneralSettings />))
-    // Expert modes are not quick tiers: no radio selects, but the current
-    // mode line still states the truth (Bypass approvals). (Scoped to the
-    // approval-mode group; the show-thinking card (T9) has its own radios.)
-    await waitFor(() => {
-      const approvalGroup = within(screen.getByRole('radiogroup', { name: 'Approval mode' }))
-      for (const radio of approvalGroup.getAllByRole('radio')) {
-        expect(radio).toHaveAttribute('aria-checked', 'false')
-      }
-    })
-    expect(screen.getByText(/Current:/)).toHaveTextContent(/bypass/i)
+    // bypass_permissions normalizes to the bypassPermissions expert mode;
+    // its label travels verbatim in the Current readout.
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-mode-link-card')).toHaveTextContent('Current: Bypass approvals'),
+    )
   })
 
   it('renders provider section', () => {
@@ -109,6 +93,74 @@ describe('GeneralSettings', () => {
   it('renders working directory label', () => {
     render(wrap(<GeneralSettings />))
     expect(screen.getByText('Working Directory')).toBeInTheDocument()
+  })
+
+  // design-parity R2 (M3a, design 12-settings-general.html:212-217): the
+  // 默认工作目录 row became WRITABLE — input + Browse + Save over the same
+  // configure('working_dir') key the engine resolves sessions from. The
+  // write is gated by a get_file_tree probe (the only dir-existence probe
+  // on the IPC surface): a miss renders the inline 目录不存在 error and
+  // persists NOTHING.
+  describe('Default working directory (writable)', () => {
+    it('renders the input prefilled from the config, save disabled while unchanged', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue(configWith('/tmp'))
+      render(wrap(<GeneralSettings />))
+      const input = await screen.findByTestId('settings-working-dir-input') as HTMLInputElement
+      await waitFor(() => expect(input).toHaveValue('/tmp'))
+      expect(screen.getByTestId('settings-working-dir-save')).toBeDisabled()
+      expect(screen.queryByTestId('settings-working-dir-error')).not.toBeInTheDocument()
+    })
+
+    it('save is disabled for a blank draft', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue(configWith('/tmp'))
+      render(wrap(<GeneralSettings />))
+      const input = await screen.findByTestId('settings-working-dir-input') as HTMLInputElement
+      await waitFor(() => expect(input).toHaveValue('/tmp'))
+      fireEvent.change(input, { target: { value: '   ' } })
+      expect(screen.getByTestId('settings-working-dir-save')).toBeDisabled()
+      expect(api.getFileTree).not.toHaveBeenCalled()
+    })
+
+    it('a valid path probes get_file_tree, then writes configure(working_dir)', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue(configWith('/tmp'))
+      vi.mocked(api.getFileTree).mockResolvedValue([{ name: 'proj', path: '/home/me/proj', is_dir: true, children: [] }])
+      render(wrap(<GeneralSettings />))
+      const input = await screen.findByTestId('settings-working-dir-input') as HTMLInputElement
+      await waitFor(() => expect(input).toHaveValue('/tmp'))
+      fireEvent.change(input, { target: { value: '/home/me/proj' } })
+      fireEvent.click(screen.getByTestId('settings-working-dir-save'))
+      await waitFor(() => {
+        expect(api.configure).toHaveBeenCalledWith({ key: 'working_dir', value: '/home/me/proj' })
+      })
+      expect(screen.queryByTestId('settings-working-dir-error')).not.toBeInTheDocument()
+    })
+
+    it('a missing path shows the inline error and persists nothing', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue(configWith('/tmp'))
+      vi.mocked(api.getFileTree).mockRejectedValue('Path is not a directory')
+      render(wrap(<GeneralSettings />))
+      const input = await screen.findByTestId('settings-working-dir-input') as HTMLInputElement
+      await waitFor(() => expect(input).toHaveValue('/tmp'))
+      fireEvent.change(input, { target: { value: '/home/me/does-not-exist' } })
+      fireEvent.click(screen.getByTestId('settings-working-dir-save'))
+      const err = await screen.findByTestId('settings-working-dir-error')
+      expect(err).toHaveTextContent('Directory does not exist or is not accessible')
+      expect(err).toHaveAttribute('role', 'alert')
+      expect(api.configure).not.toHaveBeenCalledWith({ key: 'working_dir', value: '/home/me/does-not-exist' })
+    })
+
+    it('Browse fills the draft from the OS directory picker without writing', async () => {
+      vi.mocked(api.getConfig).mockResolvedValue(configWith('/tmp'))
+      const { open } = await import('@tauri-apps/plugin-dialog')
+      vi.mocked(open).mockResolvedValueOnce('/picked/dir')
+      render(wrap(<GeneralSettings />))
+      const input = await screen.findByTestId('settings-working-dir-input') as HTMLInputElement
+      await waitFor(() => expect(input).toHaveValue('/tmp'))
+      fireEvent.click(screen.getByTestId('settings-working-dir-browse'))
+      await waitFor(() => expect(input).toHaveValue('/picked/dir'))
+      // The picker only fills the draft — persisting is the explicit Save.
+      expect(api.configure).not.toHaveBeenCalledWith({ key: 'working_dir', value: '/picked/dir' })
+    })
   })
 
   it('shows current mode description', () => {

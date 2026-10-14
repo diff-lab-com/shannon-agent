@@ -6,6 +6,7 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { cn } from '@/lib/utils'
 import { readSendBehavior, setSendBehavior, type SendBehavior } from '@/lib/sendBehaviorPref'
+import { readMemoryBypassDefault, setMemoryBypassDefault } from '@/lib/memoryBypassPref'
 import { Switch } from '@/components/ui/switch'
 import EffectBadge from './EffectBadge'
 import { readGroupingPrefs, writeGroupingPref, type ToolGroupKind } from '@/lib/toolGrouping'
@@ -30,6 +31,13 @@ import { readGroupingPrefs, writeGroupingPref, type ToolGroupKind } from '@/lib/
  *    both re-read live on every 6h scan pass.
  * ④ 「提问自动继续」 (Settings R3 T8) — the `chat_ask_user_auto_continue`
  *    switch: auto-answer an agent question left unanswered for 5 minutes.
+ * ④b 「记忆旁路默认」 (design-parity R2 M3b, design
+ *    12-settings-general.html:224-232) — the 「新建会话默认开启临时会话」
+ *    toggle. localStorage-backed (lib/memoryBypassPref — the engine's
+ *    configure allowlist has no default field); AppContext's 新建会话
+ *    actions apply it to each just-created session via
+ *    set_session_memory_bypass, so it scopes to sessions created after the
+ *    flip (new-session badge).
  * ⑤ 「运行中发送消息」 (Settings R3 T10) — what a plain send (Enter / send
  *    button) does while a run streams: steer (interrupt now) or queue.
  *    Pure front-end localStorage pref; the bolt / Ctrl+Enter stays an
@@ -87,6 +95,23 @@ export default function SessionSettings() {
   useEffect(() => {
     setAskAutoContinue(config?.chat_ask_user_auto_continue ?? false)
   }, [config?.chat_ask_user_auto_continue])
+
+  // ④b 记忆旁路默认 (design-parity R2 M3b, design 12-settings-general.html:
+  // 224-232): when on, sessions created via 「新建会话」 start as temporary
+  // chats. Default OFF (memory on) — the historical behavior. localStorage
+  // persistence (lib/memoryBypassPref) because the engine's configure
+  // allowlist has no default field; AppContext.createSession /
+  // createSessionInWorktree apply the pref to each just-created session via
+  // setSessionMemoryBypass, and ChatInput re-reads the flag per focused id —
+  // so a flip lands on every session created AFTER it (new-session badge).
+  const [memoryBypassDefault, setMemoryBypassDefaultState] = useState(readMemoryBypassDefault)
+  useEffect(() => {
+    setMemoryBypassDefaultState(readMemoryBypassDefault())
+  }, [])
+  const handleMemoryBypassDefaultToggle = (value: boolean) => {
+    setMemoryBypassDefaultState(value)
+    setMemoryBypassDefault(value)
+  }
 
   // ⑤ Send-while-running (T10): default 'queue' — the status quo (a plain
   // send while this session streams joins its FIFO queue; the bolt /
@@ -283,6 +308,41 @@ export default function SessionSettings() {
               <option value="90">{t('settings.session.autoArchive.retentionDays', { days: 90 })}</option>
             </select>
             <p className="font-label-sm text-label-xs text-on-surface-variant mt-xs">{t('settings.session.autoArchive.retentionDesc')}</p>
+          </div>
+        </section>
+
+        {/* ④b 记忆旁路默认 — design-parity R2 M3b (design
+            12-settings-general.html:224-232). Sits right after ③ 自动归档,
+            matching the design card's row order (工作目录 → 草稿/归档 →
+            记忆旁路默认). OFF = memory on, the status quo. The badge is
+            new-session (not instant) ON PURPOSE: nothing changes for the
+            session you are in — the pref arms AppContext's 新建会话 actions
+            only, and the toggleDesc spells out that honest scope (existing
+            sessions untouched, duplicated/branched sessions unaffected,
+            pref saved on this device). */}
+        <section
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          data-testid="session-memory-bypass-default-card"
+        >
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">psychology_alt</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.session.memoryBypassDefault.title')}</h3>
+            <span className="flex-1" />
+            <EffectBadge kind="new-session" />
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.memoryBypassDefault.help')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <span className="min-w-0">
+              <span className="font-label-md text-body-sm text-on-surface font-semibold mb-xs block">{t('settings.session.memoryBypassDefault.toggle')}</span>
+              <span className="font-label-sm text-label-sm text-on-surface-variant leading-tight block">{t('settings.session.memoryBypassDefault.toggleDesc')}</span>
+            </span>
+            <Switch
+              checked={memoryBypassDefault}
+              onCheckedChange={handleMemoryBypassDefaultToggle}
+              className="shrink-0"
+              aria-label={t('settings.session.memoryBypassDefault.title')}
+              data-testid="session-memory-bypass-default-switch"
+            />
           </div>
         </section>
 

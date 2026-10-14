@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { AppProvider } from '@/context/AppContext'
 import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
@@ -32,7 +32,8 @@ describe('merged settings panes (IA 8-section merge)', () => {
     // Group headings (nav.general / nav.session).
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Sessions' })).toBeInTheDocument()
-    // GeneralSettings' approval segmented control (the section's marker card).
+    // GeneralSettings' approval link card (the section's marker card since
+    // design-parity R2 moved the control to PermissionsPane).
     expect(await screen.findByText('Approval Mode')).toBeInTheDocument()
     // SessionSettings' lead-in (settings.session.title).
     expect(screen.getByText('Session lifecycle and storage')).toBeInTheDocument()
@@ -93,7 +94,13 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(await screen.findByText(/Proxy, bypass list and custom CA/)).toBeInTheDocument()
   })
 
-  it('PermissionsPane opens with the default-tier guidance card that jumps to General', async () => {
+  it('PermissionsPane opens with the 默认执行模式 entity card over the same approval_mode key', async () => {
+    // design-parity R2 (Wave B′): the two-guidance-card ring jump is dead —
+    // the REAL control lives here now (README §5-5: the approval ladder and
+    // the permission presets are two configs, never merged). Setup's config
+    // mock seeds approval_mode: 'normal', an out-of-table engine value, so
+    // the honest contract is pinned twice over: four stops render and NONE
+    // selects; the raw value names itself.
     render(
       wrap(
         <Routes>
@@ -103,10 +110,64 @@ describe('merged settings panes (IA 8-section merge)', () => {
         ['/settings/permissions'],
       ),
     )
-    expect(screen.getByText('Default execution tier lives in General')).toBeInTheDocument()
-    screen.getByTestId('permissions-to-general-link').click()
+    const card = await screen.findByTestId('permissions-execution-mode-card')
+    const group = within(card).getByRole('radiogroup', { name: 'Approval mode' })
+    const radios = within(group).getAllByRole('radio')
+    expect(radios).toHaveLength(4)
+    expect(within(group).getByRole('radio', { name: 'Ask' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: 'Plan' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: 'Full' })).toBeInTheDocument()
+    for (const radio of radios) {
+      expect(radio).toHaveAttribute('aria-checked', 'false')
+    }
+    expect(within(card).getByTestId('approval-mode-raw-hint')).toHaveTextContent('normal')
+    // The two-configs distinction note (approval_mode vs permission_profile).
+    expect(within(card).getByTestId('permissions-execution-mode-distinction')).toBeInTheDocument()
+    // The expert picker moved here together with the entity card.
+    expect(within(card).getByLabelText('Advanced')).toBeInTheDocument()
+  })
+
+  it('PermissionsPane carries the honest 出站防线 card — badges, never switches', async () => {
+    // design-parity R2 (audit §3.2 M2, design 12-settings-security.html:
+    // 214-236): no engine capability backs the three outbound defenses yet,
+    // so every entry renders the amber dashed placeholder and the card
+    // contains ZERO switch-looking controls (the honesty rule: no dead
+    // entries that look usable).
+    render(
+      wrap(
+        <Routes>
+          <Route path="/settings/permissions" element={<PermissionsPane />} />
+        </Routes>,
+        ['/settings/permissions'],
+      ),
+    )
+    const card = await screen.findByTestId('permissions-outbound-card')
+    expect(within(card).getByText('Outbound key scanning')).toBeInTheDocument()
+    expect(within(card).getByText('Prompt-injection scanning')).toBeInTheDocument()
+    expect(within(card).getByText('Skill & MCP signature verification')).toBeInTheDocument()
+    const badges = within(card).getAllByText('Enables after engine capability reconciliation')
+    expect(badges).toHaveLength(3)
+    expect(within(card).queryByRole('switch')).not.toBeInTheDocument()
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument()
+  })
+
+  it('GeneralPane closes the ring with a short link card pointing at 权限与安全', async () => {
+    render(
+      wrap(
+        <Routes>
+          <Route path="/settings/general" element={<GeneralPane />} />
+          <Route path="/settings/permissions" element={<div data-testid="permissions-pane-marker">permissions pane</div>} />
+        </Routes>,
+        ['/settings/general'],
+      ),
+    )
+    const card = await screen.findByTestId('approval-mode-link-card')
+    // The one-liner keeps the honest raw-value readout (config mock seeds
+    // 'normal', an out-of-table engine value).
+    expect(within(card).getByText(/Current: normal — configured in Permissions & safety/)).toBeInTheDocument()
+    screen.getByTestId('general-to-permissions-link').click()
     await waitFor(() =>
-      expect(screen.getByTestId('general-pane-marker')).toBeInTheDocument(),
+      expect(screen.getByTestId('permissions-pane-marker')).toBeInTheDocument(),
     )
   })
 })
