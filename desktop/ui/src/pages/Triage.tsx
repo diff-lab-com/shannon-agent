@@ -1063,6 +1063,9 @@ export default function Triage() {
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
+      {/* R3 wording audit: sr-only h1 keeps the page self-identifying
+          for AT/axe without re-adopting a visible title (Tasks.tsx pattern). */}
+      <h1 className="sr-only">{t('header.title.triage')}</h1>
       <div className="max-w-medium mx-auto px-lg py-xl">
         {/* Header — the page title is rendered globally in the app Header;
             here we keep the one-line subtitle so first-time users get the

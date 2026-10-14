@@ -515,7 +515,6 @@
   "palette.action.newChat": "开始新对话",
   "palette.action.openCompanion": "打开快速捕获窗口",
   "palette.action.newTask": "创建计划任务",
-  "palette.action.newRoutine": "创建例行程序",
   "palette.action.browseAgents": "浏览智能体",
   "palette.action.changeTheme": "切换主题",
   "palette.page.today": "今天",

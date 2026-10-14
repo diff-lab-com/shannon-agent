@@ -65,6 +65,9 @@ export default function OPC() {
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
+      {/* R3 wording audit: sr-only h1 keeps the page self-identifying
+          for AT/axe without re-adopting a visible title (Tasks.tsx pattern). */}
+      <h1 className="sr-only">{intl.formatMessage({ id: 'header.title.opc' })}</h1>
       <div className="max-w-wide mx-auto animate-in fade-in duration-(--duration-slower)">
         {/* ui-redesign 09 pagehead: the H1 lives in the app Header (TITLE_MAP);
             the page contributes the muted subtitle line above the tabs. */}
