@@ -162,23 +162,32 @@
             <button class="on">列表</button>
             <button>日历</button>
           </div>
-          <button class="btn pri"><svg class="ic"><use href="#i-plus"/></svg>新建</button>
+          <!-- 分裂按钮(与实现 TasksHeader.tsx createCluster 一致):主 CTA「新建」= 例行自动化(ScheduleForm);
+               caret 二级项 = 新建后台任务 / 多方案对比(one-off 后台任务与 best-of-N 批次入口收进下拉,
+               页面保持单一主操作层级)。按 2026-10-14 裁决回改(D3)。 -->
+          <span style="display:inline-flex;align-items:stretch">
+            <button class="btn pri" style="border-radius:9px 0 0 9px"><svg class="ic"><use href="#i-plus"/></svg>新建</button>
+            <button class="btn pri" title="更多新建方式:新建后台任务 · 多方案对比" style="border-radius:0 9px 9px 0;border-left:1px solid rgba(255,255,255,.28);padding:0 9px"><svg class="ic" style="width:12px;height:12px"><use href="#i-chev-d"/></svg></button>
+          </span>
         </div>
       </div>
 
+      <!-- 主 tab —— 按 2026-10-14 裁决回改(D3,见 docs/reviews/2026-10-14-design-parity-audit-r2.md §3.4):
+           撤销原稿五子区平铺 tab(自动化/目标/后台任务/多方案对比/历史),改为实现 IA(Tasks.tsx):
+           主 tab = 运行 / 历史;目标、后台任务、多方案对比降为「运行」tab 内分区块(见下方 group-label 分区)。 -->
       <div class="tabs" style="padding:0 24px;border-bottom:1px solid var(--hair)">
-        <button class="tab on">自动化 <span class="n">6</span></button>
-        <button class="tab">目标</button>
-        <button class="tab">后台任务</button>
-        <button class="tab">多方案对比</button>
+        <button class="tab on">运行 <span class="n">6</span></button>
         <button class="tab">历史</button>
       </div>
 
       <div class="taskgrid">
-        <!-- 左列 -->
+        <!-- 左列:「运行」tab 内分区块 —— 按 2026-10-14 裁决回改(D3):
+             分区块① 自动化例行(NL 创建 + 例行列表) → ② 后台任务 → ③ 多方案对比;
+             「目标」分区块在右列。 -->
         <div class="col">
 
-          <!-- 自然语言创建 · 结构化预览(Manus 式:预览 → 激活确认) -->
+          <!-- 分区块① 自动化例行 · 自然语言创建(Manus 式:预览 → 激活确认) -->
+          <div class="group-label" style="padding:2px 2px 0">分区块 · 自动化例行</div>
           <div class="glasscard glass-1 aurora-line" style="padding:16px">
             <div class="nl-head">
               <svg class="ic" style="color:var(--vio-2)"><use href="#i-spark"/></svg>
@@ -199,7 +208,7 @@
             </div>
           </div>
 
-          <!-- 例行任务列表 -->
+          <!-- 分区块①(续) 例行任务列表 -->
           <div class="card">
             <div class="itemrow">
               <div class="ico vio"><svg class="ic"><use href="#i-bolt"/></svg></div>
@@ -238,6 +247,44 @@
             </div>
           </div>
 
+          <!-- 分区块② 后台任务(运行/排队中的后台会话,结果进收件箱) -->
+          <div class="group-label" style="padding:8px 2px 0">分区块 · 后台任务</div>
+          <div class="card">
+            <div class="itemrow">
+              <div class="ico vio"><svg class="ic"><use href="#i-play"/></svg></div>
+              <div class="body">
+                <div class="h"><span class="t">迁移 legacy/auth 模块测试</span><span class="st vio">运行中 · 4m</span></div>
+                <div class="src-chain" style="margin-top:4px">后台会话 · 已运行 4 分钟,完成结果汇入收件箱</div>
+              </div>
+              <div class="ops">
+                <button class="btn ghost sm">查看</button>
+                <button class="iconbtn"><svg class="ic"><use href="#i-stop"/></svg></button>
+              </div>
+            </div>
+            <div class="itemrow">
+              <div class="ico"><svg class="ic"><use href="#i-clock"/></svg></div>
+              <div class="body">
+                <div class="h"><span class="t">整理 screenshots 目录</span><span class="st mute">排队中</span></div>
+              </div>
+              <div class="ops">
+                <button class="btn ghost sm">查看</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 分区块③ 多方案对比(并排评审入口,整页形态见 04b-best-of-n.html) -->
+          <div class="group-label" style="padding:8px 2px 0">分区块 · 多方案对比</div>
+          <div class="card">
+            <div class="itemrow">
+              <div class="ico vio"><svg class="ic"><use href="#i-branch"/></svg></div>
+              <div class="body">
+                <div class="h"><span class="t">修复 billing webhook 签名校验</span><span class="st vio">评审中</span></div>
+                <div class="src-chain" style="margin-top:4px">3 分支 · 合计 <span class="money">$1.24</span> · 基线 main@7f3a9c2</div>
+              </div>
+              <div class="ops"><button class="btn ghost sm">并排评审</button></div>
+            </div>
+          </div>
+
         </div>
 
         <!-- 右列 300px -->
@@ -266,6 +313,8 @@
             </div>
           </div>
 
+          <!-- 分区块④ 目标(运行 tab 内,右列) -->
+          <div class="group-label" style="padding:8px 2px 0">分区块 · 目标</div>
           <!-- 目标 -->
           <div class="card pad">
             <div class="row mb12">

@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Menu } from '@base-ui/react/menu'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuSeparator, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
 import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
@@ -34,7 +34,7 @@ import { cn } from '@/lib/utils'
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow'
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy'
 import { writeGlobalModelDefault } from '@/lib/modelSwitch'
-import { APPROVAL_MODES, PLAN_OPTION, approvalModeOption } from '@/lib/approvalModes'
+import { APPROVAL_MODES, PLAN_OPTION, APPROVAL_MODE_CYCLE, approvalModeOption, normalizeApprovalMode } from '@/lib/approvalModes'
 import { VISION_IMAGE_EXTENSIONS as IMAGE_EXTENSIONS } from '@/lib/fileRefs'
 
 /**
@@ -418,6 +418,33 @@ export default function ChatInput({
     }
   }
 
+  // R2 audit G2/I1 (02c A2 可选加分) — Shift+Tab walks the approval ladder
+  // (ask → auto-edit → plan → full-auto, wrapping), the Claude Code /
+  // Gemini CLI muscle-memory key; the TUI side of the naming design already
+  // plans the same loop. Same write surface as the pill's dropdown
+  // (configure('approval_mode') + refreshConfig); the toast names the NEW
+  // tier so the shortcut is never silent. An out-of-ladder current value
+  // (expert modes, engine aliases) enters the loop at `ask` — the managed
+  // base — instead of masquerading as a step it isn't.
+  const cycleApprovalMode = async () => {
+    const current = normalizeApprovalMode(
+      (config as Record<string, unknown> | undefined)?.approval_mode as string | undefined ?? '',
+    )
+    const idx = APPROVAL_MODE_CYCLE.indexOf(current)
+    const next = APPROVAL_MODE_CYCLE[(idx + 1) % APPROVAL_MODE_CYCLE.length]
+    const nextOption = approvalModeOption(next)
+    try {
+      await api.configure({ key: 'approval_mode', value: next })
+      await refreshConfig()
+      toast.success(intl.formatMessage(
+        { id: 'chat.input.mode.cycled' },
+        { mode: nextOption.rawLabel ?? intl.formatMessage({ id: nextOption.labelKey }) },
+      ))
+    } catch (err) {
+      toastError(t('chat.input.mode.failed'), err)
+    }
+  }
+
   // P0-③ (ZCode delta): composer model chip. R2-1 — with a session context
   // the switch is session-scoped (`set_session_model`); without one the
   // legacy global configure applies. "Set as default" always goes global.
@@ -563,11 +590,16 @@ export default function ChatInput({
   const currentEffort = normalizeEffort(
     (config as Record<string, unknown> | undefined)?.effort_level as string | undefined,
   )
-  const effortOptions: { value: EffortValue; labelKey: string }[] = [
-    { value: 'low', labelKey: 'chat.input.effort.low' },
-    { value: 'standard', labelKey: 'chat.input.effort.standard' },
-    { value: 'high', labelKey: 'chat.input.effort.high' },
-    { value: 'max', labelKey: 'chat.input.effort.max' },
+  // R2 audit W5 (02c S2): the gauge menu's rows wear the design's sub-
+  // labeled copy — 轻 · 最低延迟 / 标准（默认）/ 深 · 复杂推理 / 最高 ·
+  // 极限推理 (chat.input.effort.desc.*). The short words stay on the chip
+  // (`chat.input.effort.*`, also the model picker's sub-tier — 02c keeps
+  // that surface's current form) and in the aria label.
+  const effortOptions: { value: EffortValue; labelKey: string; descKey: string }[] = [
+    { value: 'low', labelKey: 'chat.input.effort.low', descKey: 'chat.input.effort.desc.low' },
+    { value: 'standard', labelKey: 'chat.input.effort.standard', descKey: 'chat.input.effort.desc.standard' },
+    { value: 'high', labelKey: 'chat.input.effort.high', descKey: 'chat.input.effort.desc.high' },
+    { value: 'max', labelKey: 'chat.input.effort.max', descKey: 'chat.input.effort.desc.max' },
   ]
   const currentEffortLabel = effortOptions.find(e => e.value === currentEffort)
     ? t(`chat.input.effort.${currentEffort}`)
@@ -893,6 +925,15 @@ export default function ChatInput({
         return
       }
     }
+    // G2/I1 — Shift+Tab cycles the approval ladder (ask → auto-edit → plan
+    // → full-auto). Deliberately AFTER the mention/slash blocks: while a
+    // menu is open, Tab — shift or not — belongs to that menu's commit path
+    // above, so the cycle only ever fires with BOTH menus closed.
+    if (e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault()
+      void cycleApprovalMode()
+      return
+    }
     // A-22 — input-history recall. Reachable only when both menus are closed
     // (each captures the arrows above). While browsing, Up/Down walk the
     // ring; Down past the newest entry restores the pre-browse text + caret
@@ -1075,11 +1116,17 @@ export default function ChatInput({
   // 三项 UX 修复 #3)。弹框点击后才挂载,首屏零开销;打开期间跟随父
   // 组件透传的 streaming usageTick 实时刷新 breakdown。
   const [usageOpen, setUsageOpen] = useState(false)
-  const plusItems: DropdownMenuItem[] = [
+  // R2 audit W6 (02c S1): the menu rows use the design copy —「添加文件…」
+  // (the shared attach key, single-surface) and a composer-specific「PPT
+  // 大纲…」(office.ppt.title stays the dialog's own title, it is reused
+  // there), and a separator groups the editor tools apart from the
+  // low-frequency 临时会话 toggle at the bottom.
+  const plusItems: DropdownMenuEntry[] = [
     { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
-    { id: 'ppt', label: t('office.ppt.title'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
+    { id: 'ppt', label: t('chat.input.plus.ppt'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
     { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
+    DropdownMenuSeparator('plus-editor-sep'),
     // 02c 裁决 D4(菜单扩容): the low-frequency memory-bypass toggle folds
     // into the + menu — the state rides the label (开/关) and the trigger
     // wears a dot while active; the banner above the input keeps spelling
@@ -1759,11 +1806,11 @@ export default function ChatInput({
                       'inline-flex shrink-0 items-center gap-[4px] rounded-full border px-sm py-[3px] font-label-sm transition-colors cursor-pointer',
                       currentEffort !== 'standard'
                         ? 'border-transparent bg-secondary-container/70 font-bold text-on-secondary-container hover:bg-secondary-container'
-                        : 'border-outline-variant/50 text-on-surface-variant/80 hover:text-primary hover:bg-surface-container-low/50',
+                        : 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50',
                     )}
                   >
                     <span className="material-symbols-outlined icon-sm" aria-hidden="true">speed</span>
-                    <span className="flex items-center gap-[2.5px]" aria-hidden="true">
+                    <span className="flex items-center gap-[2.5px] max-[1199px]:hidden" aria-hidden="true">
                       {effortOptions.map(e => (
                         <span
                           key={e.value}
@@ -1806,14 +1853,14 @@ export default function ChatInput({
                           key={effort.value}
                           value={effort.value}
                           data-testid={`effort-gauge-option-${effort.value}`}
-                          label={t(effort.labelKey)}
+                          label={t(effort.descKey)}
                           className="flex items-center gap-xs rounded-lg px-md py-xs font-label-md cursor-pointer outline-none text-on-surface-variant data-[highlighted]:bg-primary/10 data-[highlighted]:text-on-surface"
                         >
                           <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                             {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
                           </span>
                           <span className={currentEffort === effort.value ? 'font-medium text-on-surface' : undefined}>
-                            {t(effort.labelKey)}
+                            {t(effort.descKey)}
                           </span>
                         </Menu.RadioItem>
                       ))}
@@ -1831,6 +1878,18 @@ export default function ChatInput({
                         {t('chat.input.effort.notApplicable')}
                       </div>
                     )}
+                    {/* R2 audit W5 (02c S2 cnote): the ALWAYS-on footer
+                        note — 力度随会话生效；标准时 gauge 低对比显示. It
+                        coexists with the conditional honesty line above
+                        (which only renders for known-no-reasoning models)
+                        and stays last, at the menu's bottom. */}
+                    <div
+                      role="note"
+                      data-testid="effort-gauge-note"
+                      className="mx-md mb-sm border-t border-outline-variant/20 pt-xs text-label-2xs text-on-surface-variant"
+                    >
+                      {t('chat.input.effort.note')}
+                    </div>
                   </Menu.Popup>
                 </Menu.Positioner>
               </Menu.Portal>

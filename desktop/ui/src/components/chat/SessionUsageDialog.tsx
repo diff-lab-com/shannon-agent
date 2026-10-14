@@ -21,11 +21,23 @@ export interface SessionUsageDialogProps {
   usageTick?: unknown
 }
 
+/** Compact token formatting for the peak row (96K / 9.6万). The dialog's
+ *  own locale (intl.locale) — unlike the rail chip, which reads the runtime
+ *  default because it has no intl — so every number in this dialog follows
+ *  one locale. */
+function fmtCompactTokens(n: number, locale: string): string {
+  try {
+    return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+  } catch {
+    return n.toLocaleString()
+  }
+}
+
 export default function SessionUsageDialog({ open, onClose, usageTick }: SessionUsageDialogProps) {
   const t = useT()
   const intl = useIntl()
   const navigate = useNavigate()
-  const { currentSessionId } = useSessions()
+  const { currentSessionId, sessions } = useSessions()
   const { budget, usage: sessionUsage, refresh: refreshBudget } = useSessionBudget(currentSessionId)
   const [budgetOpen, setBudgetOpen] = useState(false)
 
@@ -40,6 +52,16 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
   const usd = (v: number) =>
     new Intl.NumberFormat(intl.locale, { style: 'currency', currency: 'USD', maximumFractionDigits: 4 }).format(v)
 
+  // 设计稿 02c S3 (W8): the window-peak row reads SessionInfo
+  // .max_context_tokens — the same L0 session-index peak the rail's chip
+  // shows. The contract has no separate per-window peak beyond this
+  // session-level one, so the row is labelled 「会话峰值」; hidden entirely
+  // when the backend reports nothing (数字缺席即隐藏, honesty contract).
+  const sessionPeak = currentSessionId != null
+    ? sessions?.find(s => s.id === currentSessionId)?.max_context_tokens ?? null
+    : null
+  const peakLabel = sessionPeak != null && sessionPeak > 0 ? fmtCompactTokens(sessionPeak, intl.locale) : null
+
   return (
     <>
       <Modal open onClose={onClose} title={t('chat.input.usage.title')} size="md">
@@ -47,20 +69,38 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
           {currentSessionId ? (
             <>
               <ContextBreakdownCard sessionId={currentSessionId} usageTick={usageTick} />
-              {/* 预算摘要一行 — 编辑走既有 BudgetDialog,与右侧 Dock 同源。 */}
-              <div className="flex items-center justify-between gap-sm px-md py-sm rounded-xl bg-surface-container border border-outline-variant/10">
-                <span className="font-body-sm text-on-surface-variant truncate tabular-nums">
-                  {hasCap ? `${usd(spent)} / ${usd(budget!)}` : t('budget.dialog.label')}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="cursor-pointer shrink-0"
-                  onClick={() => setBudgetOpen(true)}
-                >
-                  <span className="material-symbols-outlined icon-sm mr-xs" aria-hidden="true">payments</span>
-                  {t('budget.menu.set')}
-                </Button>
+              {/* 摘要区(设计稿 02c S3):会话峰值行 + 预算摘要行 — 编辑走
+                  既有 BudgetDialog,与右侧 Dock 同源。预算行口径为
+                  「花费 / 预算余」(余 = 上限 − 已花,可超支为负);无预算
+                  时保持诚实占位,不虚构上限。 */}
+              <div className="px-md py-sm rounded-xl bg-surface-container border border-outline-variant/10 space-y-xs">
+                {peakLabel != null && (
+                  <div className="flex items-center justify-between gap-sm" data-testid="session-usage-peak">
+                    <span
+                      className="font-body-sm text-on-surface-variant truncate"
+                      title={t('sidebar.sessions.contextPeak.title', { tokens: peakLabel })}
+                    >
+                      {t('chat.input.usage.sessionPeak')}
+                    </span>
+                    <span className="font-body-sm text-on-surface tabular-nums">{peakLabel}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-sm">
+                  <span className="font-body-sm text-on-surface-variant truncate tabular-nums">
+                    {hasCap
+                      ? `${usd(spent)} / ${usd(budget! - spent)} ${t('chat.input.usage.budgetRemaining')}`
+                      : t('budget.dialog.label')}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="cursor-pointer shrink-0"
+                    onClick={() => setBudgetOpen(true)}
+                  >
+                    <span className="material-symbols-outlined icon-sm mr-xs" aria-hidden="true">payments</span>
+                    {t('budget.menu.set')}
+                  </Button>
+                </div>
               </div>
             </>
           ) : (

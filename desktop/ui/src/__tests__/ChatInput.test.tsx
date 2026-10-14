@@ -269,7 +269,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test message', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const textarea = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' })
 
     expect(onSend).toHaveBeenCalledTimes(1)
@@ -280,7 +280,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: 'Test\nmessage', onChange, onSend })
 
-    const textarea = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const textarea = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter', shiftKey: true })
 
     expect(onSend).not.toHaveBeenCalled()
@@ -291,7 +291,7 @@ describe('ChatInput', () => {
   it('sends on Ctrl+Enter', () => {
     const onSend = vi.fn()
     renderChatInput({ value: 'a', onSend })
-    const ta = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const ta = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.keyDown(ta, { key: 'Enter', code: 'Enter', ctrlKey: true })
     expect(onSend).toHaveBeenCalledTimes(1)
   })
@@ -349,15 +349,17 @@ describe('ChatInput', () => {
     expect(onOpenEditor).toHaveBeenCalledTimes(1)
   })
 
-  // office Wave 2 B2 — "Build a presentation" opens the outline dialog and
-  // Generate inserts the draft into the composer. The composer receives the
-  // text via pushComposerDraft's event; nothing is auto-sent (trust theme).
+  // office Wave 2 B2 — the "PPT outline…" menu row (R2 audit W6 renamed it
+  // from "Build a presentation"; the dialog title keeps that string) opens
+  // the outline dialog and Generate inserts the draft into the composer.
+  // The composer receives the text via pushComposerDraft's event; nothing
+  // is auto-sent (trust theme).
   it('opens the PPT outline dialog from the "+" menu and inserts the draft into the composer', () => {
     const onChange = vi.fn()
     renderChatInput({ onChange })
 
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Build a presentation' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'PPT outline…' }))
 
     const outline = screen.getByTestId('ppt-outline-input')
     expect(outline).toBeInTheDocument()
@@ -454,7 +456,7 @@ describe('ChatInput', () => {
   it('shows correct icons for querying states', () => {
     renderChatInput()
 
-    const container = screen.getByPlaceholderText(/Try: "Explain this repo"/).closest('.group')
+    const container = screen.getByRole('textbox', { name: 'Message' }).closest('.group')
     expect(container).not.toHaveClass('ring-2')
 
     fireEvent.dragOver(container!, { dataTransfer: { files: [] } })
@@ -467,7 +469,7 @@ describe('ChatInput', () => {
     const onChange = vi.fn()
     renderChatInput({ value: '', onChange })
 
-    const textarea = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const textarea = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(textarea, { target: { value: 'New message' } })
 
     expect(onChange).toHaveBeenCalledWith('New message')

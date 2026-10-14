@@ -61,6 +61,11 @@ export const MOCK_TASKS: TaskItem[] = [
     active_form: 'Awaiting migration review',
     execution_mode: 'serial',
     team: 'engineering',
+    // R2 Wave C′ (design 09:229): blocked-card 「原因 · 已等待 N 分钟」 —
+    // verbatim reason + epoch-ms since the task entered blocked, matching
+    // the real TaskInfo projection (both optional; absent renders 「—」).
+    blocked_reason: 'DB migration review pending',
+    blocked_since_ms: now - 12 * minMs,
   },
   {
     id: 'task-004',

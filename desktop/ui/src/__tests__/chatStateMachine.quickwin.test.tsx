@@ -139,14 +139,15 @@ function seedTurn(opts: { content?: string; attachments?: string[] } = {}) {
 async function attachViaMenu(path: string) {
   vi.mocked(dialog.open).mockResolvedValueOnce(path)
   fireEvent.click(screen.getByLabelText('Attachments and tools'))
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
   await screen.findByText(path.split('/').pop()!)
 }
 
 function composerInput() {
-  // The placeholder flips with query state ("Reply generating — press Enter
-  // to queue" while streaming) — match the shared prefix.
-  return screen.getByPlaceholderText(/Try: "Explain this repo"|Reply generating/)
+  // The placeholder flips with query state (queued copy while streaming) and
+  // the old "Try: …" default is long gone — locate by the STABLE aria-label,
+  // the same contract the e2e helpers pin.
+  return screen.getByRole('textbox', { name: 'Message' })
 }
 
 /**

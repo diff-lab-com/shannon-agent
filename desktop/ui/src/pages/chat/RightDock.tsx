@@ -200,6 +200,9 @@ export default function RightDock({
     try { localStorage.setItem('shannon.dock.hintSeen', '1') } catch { /* noop */ }
   }, [])
   const draggingRef = useRef(false)
+  // R2 审查 G9: set once the user (or an explicit auto-dock) navigates tabs —
+  // the conditional diff default below never overrides a chosen position.
+  const userPickedTabRef = useRef(false)
 
   // F-9: narrow windows start with the dock COLLAPSED — the responsive
   // default governs the INITIAL mount only (one shot; no resize listener).
@@ -297,6 +300,7 @@ export default function RightDock({
   const prevActiveId = useRef(activeId)
   useEffect(() => {
     if (activeId && activeId !== prevActiveId.current) {
+      userPickedTabRef.current = true
       setTab(`a:${activeId}`)
       onOpen()
     }
@@ -306,6 +310,7 @@ export default function RightDock({
   // Q11: dismiss the Ctrl+\ hint once the user actively picks a tab —
   // engagement is a stronger dismissal signal than time alone.
   const handleTabPick = useCallback((next: DockTab) => {
+    userPickedTabRef.current = true
     setTab(next)
     if (!hintDismissed) dismissHint()
   }, [hintDismissed, dismissHint])
@@ -328,18 +333,55 @@ export default function RightDock({
   // session (idle hides it); it then persists — even in the done/failed
   // snapshot — until the next send resets the aggregation.
   const runVisible = runProcess.status !== 'idle'
+  // R2 审查 M8a/G9: the diff tab is reachable as soon as the session has
+  // changed files — not only once a single-file review target is set.
+  const pendingDiffCount = changedPaths?.length ?? 0
+  const hasPendingDiffs = pendingDiffCount > 0
+  const diffReachable = diffPath != null || hasPendingDiffs
   const orderedTabs = useMemo<DockTab[]>(
     () => [
-      ...UTILITY_TABS.filter(key => !(key === 'diff' && !diffPath) && !(key === 'run' && !runVisible)),
+      ...UTILITY_TABS.filter(key => !(key === 'diff' && !diffReachable) && !(key === 'run' && !runVisible)),
       ...artifacts.map(a => `a:${a.id}` as DockTab),
     ],
-    [diffPath, artifacts, runVisible],
+    [diffReachable, artifacts, runVisible],
   )
 
   // A hidden run tab must not stay active — fall back to context.
   useEffect(() => {
     if (tab === 'run' && !runVisible) setTab('context')
   }, [runVisible, tab])
+
+  // Same for the diff tab once nothing is left to review (all changes
+  // accepted / rewound away while it was active): a dead end falls back to
+  // context, whether the tab was reached by the default below or by hand.
+  useEffect(() => {
+    if (tab === 'diff' && !diffPath && !hasPendingDiffs) setTab('context')
+  }, [tab, diffPath, hasPendingDiffs])
+
+  // R2 审查 G9 (docs/reviews/2026-10-14-design-parity-audit-r2.md §4):
+  // conditional default tab — review-first. 设计稿 03 页默认 Diff;恒 context
+  // 与评审动线相悖,但无 diff 时落空也不对。Until the user picks a tab
+  // themselves (strip clicks / explicit auto-docks set userPickedTabRef), a
+  // session that carries unreviewed changes defaults the dock to the diff
+  // tab; with none, context stays. A live run owns the dock (运行 tab
+  // auto-activation) — the diff-onset edge is deferred, not consumed, so the
+  // default still lands once the run settles. The persisted
+  // shannon.dock.tab keeps its existing semantics for manual picks.
+  const prevPendingDiffsRef = useRef(false)
+  useEffect(() => {
+    const pending = pendingDiffCount > 0
+    if (userPickedTabRef.current) {
+      prevPendingDiffsRef.current = pending
+      return
+    }
+    if (pending && !prevPendingDiffsRef.current) {
+      if (runProcess.status === 'running') return
+      prevPendingDiffsRef.current = true
+      setTab('diff')
+    } else if (!pending) {
+      prevPendingDiffsRef.current = false
+    }
+  }, [pendingDiffCount, runProcess.status])
 
   const onTablistKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft' && e.key !== 'Home' && e.key !== 'End') return
@@ -361,6 +403,7 @@ export default function RightDock({
   const prevPlanMode = useRef(planModeActive)
   useEffect(() => {
     if (planModeActive && !prevPlanMode.current) {
+      userPickedTabRef.current = true
       setTab('plan')
       onOpen()
     }
@@ -371,6 +414,7 @@ export default function RightDock({
   const prevDiffPath = useRef(diffPath)
   useEffect(() => {
     if (diffPath && diffPath !== prevDiffPath.current) {
+      userPickedTabRef.current = true
       setTab('diff')
       onOpen()
     }
@@ -525,7 +569,7 @@ export default function RightDock({
               {(Object.keys(utilityLabels) as UtilityTab[]).map(key => {
                 if (key === 'run' && !runVisible) return null
                 const meta = utilityLabels[key]
-                const disabled = key === 'diff' && !diffPath
+                const disabled = key === 'diff' && !diffReachable
                 return (
                   <Button
                     key={key}
@@ -543,6 +587,18 @@ export default function RightDock({
                   >
                     <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{meta.icon}</span>
                     <span className="align-middle ml-xs hidden md:inline">{meta.label}</span>
+                    {/* R2 审查 M8a (03 页 tab 形态 `.tab .n`): 「Diff n」计数
+                        badge — n 为会话变更文件数;无变更时不渲染(保持现状)。
+                        Not aria-hidden: the tab's accessible name reads
+                        "Diff n" so AT users get the pending-change count. */}
+                    {key === 'diff' && pendingDiffCount > 0 && (
+                      <span
+                        data-testid="dock-diff-count"
+                        className="shrink-0 align-middle ml-[2px] px-[6px] rounded-full bg-surface-container-high text-on-surface-variant text-label-2xs leading-4 tabular-nums"
+                      >
+                        {pendingDiffCount}
+                      </span>
+                    )}
                   </Button>
                 )
               })}
@@ -657,6 +713,26 @@ export default function RightDock({
                       onClose={onCloseDiff}
                       active={open}
                       onDecisionsChange={handleDockDecisionsChange}
+                    />
+                  </div>
+                </div>
+              ) : changedPaths != null && changedPaths.length > 0 ? (
+                // R2 审查 G9 companion: the diff tab is now reachable before
+                // any single file is selected (the conditional default and
+                // the M8a badge both lead here) — the sidebar alone lists the
+                // session's changed files; picking one docks the review body.
+                // The default never yanks the dock open on its own.
+                <div className="-m-lg flex flex-col min-h-0 h-full">
+                  {checkpoints != null && checkpoints.length > 0 && onRewindCheckpoint && (
+                    <CheckpointChips checkpoints={checkpoints} onRewind={onRewindCheckpoint} />
+                  )}
+                  <div className="flex flex-1 min-h-0">
+                    <DockDiffSidebar
+                      files={changedPaths}
+                      currentPath={diffPath}
+                      decisionsByPath={dockDecisions}
+                      onSelectPath={onSelectDiffPath}
+                      className="w-72 max-w-full"
                     />
                   </div>
                 </div>
@@ -954,11 +1030,13 @@ function CheckpointChips({ checkpoints, onRewind }: {
  *  FileDiff once per path (failures degrade that row to stats-less); the
  *  per-file decisions lift (decisionsByPath) keeps the status badges live
  *  with the review body's a/r/u toggles. */
-function DockDiffSidebar({ files, currentPath, decisionsByPath, onSelectPath }: {
+function DockDiffSidebar({ files, currentPath, decisionsByPath, onSelectPath, className }: {
   files: string[]
   currentPath: string | null
   decisionsByPath: Map<string, Map<string, HunkDecision>>
   onSelectPath?: (path: string) => void
+  /** G9: the sidebar-only branch (no review body beside it) goes wider. */
+  className?: string
 }) {
   const [diffs, setDiffs] = useState<Map<string, FileDiff>>(new Map())
   const [filter, setFilter] = useState<FileFilter>('all')
@@ -988,7 +1066,7 @@ function DockDiffSidebar({ files, currentPath, decisionsByPath, onSelectPath }: 
       filter={filter}
       onSelectPath={path => onSelectPath?.(path)}
       onFilterChange={setFilter}
-      className="w-44"
+      className={className ?? 'w-44'}
     />
   )
 }

@@ -203,7 +203,10 @@ let demoBudgetUsd: number | null = null
 // office Wave 2 B9' — demo file index (list_file_index / register /
 // favorite). Newest first is enforced by the list handler; this seed is
 // already ordered that way. `old-deck.md` intentionally dangles so the
-// missing-file state is demoable.
+// missing-file state is demoable. R2 Wave C′: the first two entries carry a
+// `session_id` (a demo rail session) so the 「来源会话」 jump is demoable;
+// the dangling historical row has none — the same honest absence as real
+// pre-contract rows.
 const demoFileIndex: FileIndexEntry[] = [
   {
     path: '/Users/demo/Documents/q3-review.pptx',
@@ -212,6 +215,7 @@ const demoFileIndex: FileIndexEntry[] = [
     registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
     favorite: true,
     source: 'generated',
+    session_id: 'sess-001',
   },
   {
     path: '/Users/demo/Downloads/notes.md',
@@ -220,6 +224,7 @@ const demoFileIndex: FileIndexEntry[] = [
     registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
     favorite: false,
     source: 'attachment',
+    session_id: 'sess-002',
   },
   {
     path: '/Users/demo/Documents/old-deck.md',
@@ -1783,6 +1788,11 @@ export const handlers: Record<string, MockHandler> = {
       ),
     )
   },
+  // R2 Wave C′: the real backend resolves the ACTIVE session itself
+  // (registry.active_key) and stamps it on new rows — the invoke args stay
+  // {path, source}. The demo realm has no session registry, so fresh demo
+  // registrations honestly stay session-less (no jump button) instead of
+  // inventing an origin.
   async register_file_index_entry(args: { path: string; source: string }) {
     await delay(20)
     const existing = demoFileIndex.find(f => f.path === args.path)
@@ -2484,15 +2494,16 @@ export const handlers: Record<string, MockHandler> = {
     }))
   },
   // 缓期项 #6: the Memory banner's 「将携带 N 条」 pre-read. Demo answers
-  // from the same seeded demo memories the page already shows (capped at 3,
-  // mirroring get_session_injected_memories) — the count derives from real
-  // demo rows, it is not invented.
+  // from the same seeded demo memories the page already shows. Contract
+  // parity with desktop/src/commands_memory.rs::injection_preview: count ==
+  // entries.length over the WHOLE scoped selection (the banner chips cap the
+  // display client-side) — count is not invented and not truncated.
   async memory_injection_preview(args?: { project?: string | null }) {
     await delay()
     const scoped = args?.project
       ? MOCK_MEMORIES.filter((m) => m.project === args.project)
       : MOCK_MEMORIES
-    const entries = scoped.slice(0, 3).map((m) => ({
+    const entries = scoped.map((m) => ({
       id: m.id,
       title: m.content.split('\n')[0].slice(0, 80),
     }))

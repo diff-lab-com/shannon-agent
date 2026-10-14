@@ -151,3 +151,31 @@
 4. **04b 对比 chips 为「多选并排评审」而非本稿的单选切换**:并排对照效率更高(与「不建议做」清单一致:不恢复每分支单选)。重绘 04b 时按多选并排形态画。
 5. **composer 执行模式四档分段采纳,但两个引擎概念不能完全合一**:「权限档(严格/平衡/宽松)」(auto-approve 基线,`permission_profile`)与「审批梯(ask/auto-edit/full-auto)」(`approval_mode`)是两份配置;设置里模型页放执行模式入口卡、权限与安全放权限档,通用放审批模式,三处互链。完全合一只待统一命名设计(参考 2026-10-04 权限命名文档)。
 6. **命令面板极光线 = 采纳**:静态稿未画,但实现为面板加了 aurora-line(与 composer「信号发出」隐喻一致,§3-B6 裁决);本稿 14 页重绘时补上。
+
+---
+
+## 6. 2026-10-14 回改记录(设计稿回改批次 D1-D8)
+
+> 依据 [2026-10-14 设计保真度审查 R2](../../reviews/2026-10-14-design-parity-audit-r2.md) §3.4(「设计稿自身过时,裁决已定,HTML 未回改」清单)对本稿 `pages/*.html` 的回改。原则:**实现是事实标准,设计稿向实现对齐**;每处回改均在页内留有「按 2026-10-14 裁决回改」HTML 注记。
+
+1. **D1 · 07-connectors**:8 平铺 tab →「3 主 tab(精选 / 已安装 / 待处理)+ 高级管理下拉(MCP 服务器 / 技能 / 智能体 / 数据源 / 插件)」,与实现 `Extensions.tsx`(primaryTabs + manageEntries,管理路由不变)一致;即本文件 §5-1 的落地。
+2. **D2 · 07-connectors**:撤销 remote/OAuth「桌面端即将支持 · 请先使用 CLI」琥珀徽章,改画真实连接状态形态(已授权「已连接 · 管理」/ 未连接「去授权」主操作),对齐实现 `Featured.tsx` 的 OAuth loopback 一键授权(`installMcpOAuthLoopback`);即 §5-2 的撤销落地。
+3. **D3 · 04-tasks**:五子区平铺 tab(自动化/目标/后台任务/多方案对比/历史)→ 主 tab「运行 / 历史」,目标 / 后台任务 / 多方案对比降为「运行」tab 内分区块(group-label 分区);页头「新建」补分裂按钮二级项(新建后台任务 / 多方案对比),对齐实现 `Tasks.tsx` + `TasksHeader.tsx` createCluster。
+4. **D4 · 04b-best-of-n**:分支单选切换 →「多选并排评审」(chips 带 checkbox 语义、默认全选已完成分支、勾选分支并排成列、每列各自「采纳此份」;>3 列横向滚动),chips 上浮信息(文件数 · 增删 · 成本 · 推荐)保留,对齐实现 `BatchDiffCompare.tsx`;即 §5-4 的落地。
+5. **D5 · 08-memory**:删除条目级「注入时机:…自动携带」行——引擎无触发器数据,维持缺失是诚实态;列表底部补设计注记「注入时机由引擎检索决定,不做人工触发器」。
+6. **D6 · 10-timeline**:独立「检查点行」卡撤销,改为每轮卡内「还原到此轮」chip(与实现 `TurnTimeline.tsx` 一致);/rewind 语义、确认流守卫与「仅有检查点的轮次可还原」诚实门控注记保留在瀑布卡内。
+7. **D7 · 02c-chat-composer-tidy**:权限档词汇全线对齐《权限命名设计 v2》(2026-10-04)——「逐项确认」→「询问」、「完全访问」→「全自动」;S4 弹层四档主词 + 副语同步实现 `settings.general.approvalMode.*`(只读自由执行,其余操作先询问 / 自动批准文件编辑 / 共享上下文,批准计划 / 批准除高危外的全部操作);effort S2 四档副语维持不变(实现已按此落地);页头裁决注记补「2026-10-14 R2:词汇按权限命名 v2 回改」。出处:R2 审查 §3.4-D7 + §4-G1。
+8. **D8 · 07-connectors**:市场卡不再画「需认证 / 去认证」(市场卡无实时认证状态,`Featured.tsx` F-11 诚实契约);「去认证」移入新增的「已安装 · 管理行」注记区(已装行提供 重新认证 / 去认证,重新认证 = OAuth loopback 重放,对齐 `McpServers.tsx` W3-B),卡解剖注释同步。
+
+**截图**:改动页面(07 / 04 / 04b / 08 / 10 / 02c)已用 `assets/shot.mjs` 重新生成同名 PNG 覆盖 `screenshots/`。
+**§3 横切核对**:与「3 主 tab」相关的横切条目(§3-1 术语、§3-3 导航分区)经核对无矛盾,未改动。
+
+### 6.1 2026-10-14 收口补记(D7 残留清账 + 两处顺带对齐)
+
+> 首轮回改(上列 D1-D8)完成后的收口批次,依据同为 [R2 审查](../../reviews/2026-10-14-design-parity-audit-r2.md) §3.1-W3/§3.2-M3/M5 与 §4-G1,口径与 D7 完全一致。
+
+1. **D7 残留清账(四页)**:权限档旧词全线清零——`02-chat.html`(composer 四档分段、高危工具行注释与说明句)、`03-chat-review.html`(composer 四档分段)、`12-settings.html`(执行模式卡)、`12-settings-security.html`(默认执行模式卡)的「逐项确认」→「询问」、「完全访问」→「全自动」;两处设置卡副语同步实现 `settings.general.approvalMode.*`(询问 = 只读自由执行,写入、网络外发等其余操作先询问)。各页均留「2026-10-14 R2:词汇按权限命名 v2 回改」注记。
+2. **顺带① · 12-settings-general 会话默认卡对齐已落实现**:「默认工作目录」行升级为可写形态(input + 浏览… + 保存 + 生效说明,= `GeneralSettings.tsx` M3a);「记忆旁路默认」行按实现措辞更名「新会话默认开启临时会话(不写入记忆)」并同步帮助句(= `SessionSettings.tsx` M3b,`settings.session.memoryBypassDefault.*`)。
+3. **顺带② · 06-usage 页头「导出 CSV」核对**:稿内已有(`06-usage.html:146`,与实现 `Usage.tsx` M5a / `usage.export.csv` 一致),未改动。
+
+**截图(收口批)**:02-chat / 03-chat-review / 12-settings / 12-settings-security / 12-settings-general 已重新出图覆盖同名 PNG(06-usage 未改动故不出图)。

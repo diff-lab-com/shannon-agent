@@ -210,7 +210,10 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
           <div className="flex justify-between text-body-sm">
             <span className="text-on-surface-variant">{t('chat.context.cacheHitRate')}</span>
             {cacheHitRate != null ? (
-              <span className="font-bold text-primary tabular-nums">{cacheHitRate.toFixed(1)}%</span>
+              // 设计稿 02c S3 (W7): the cache hit value is a *good* signal —
+              // success green (var(--ok)), matching InlineDiffCard's
+              // text-success usage, not the interactive-primary blue.
+              <span className="font-bold text-success tabular-nums">{cacheHitRate.toFixed(1)}%</span>
             ) : (
               <span className="text-on-surface-variant">{t('chat.context.cacheHitRate.none')}</span>
             )}

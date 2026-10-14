@@ -876,6 +876,16 @@ pub struct FileIndexEntry {
     /// Free-form origin tag supplied by the caller (e.g. `"attachment"`,
     /// `"export"`).
     pub source: String,
+    /// R2 Wave C′ (design 11 来源回跳): the chat session that was ACTIVE
+    /// when the file was registered, as a uuid string. Joined at registration
+    /// time from the session registry's active pointer — the same 「active
+    /// session」 convention the memory-bypass commands use for `null` — and
+    /// NEVER synthesized for historical rows: they deserialize with the
+    /// field absent and the Files card renders no jump. A re-registration
+    /// from a different session re-points it; a re-registration with no
+    /// active session keeps the previous value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Resolve the index file path: `~/.shannon/desktop/file-index.json` — same
@@ -938,9 +948,20 @@ pub async fn list_file_index() -> Result<Vec<FileIndexEntry>, String> {
 
 /// `register_file_index_entry` command: canonicalize + scope-check `path`
 /// (exactly the `open_with_default_app` / `copy_file` rules), then upsert.
+///
+/// R2 Wave C′: the wire contract is unchanged — the session context is
+/// resolved BACKEND-side from the registry's active pointer (`active_key()`,
+/// non-materializing: a registration never spawns a session), so historical
+/// callers that pass only `{path, source}` keep working and rows registered
+/// with no live session simply carry no `session_id`.
 #[tauri::command]
-pub async fn register_file_index_entry(path: String, source: String) -> Result<(), String> {
-    register_file_index_entry_inner(&file_index_path(), &path, &source)
+pub async fn register_file_index_entry(
+    state: tauri::State<'_, AppState>,
+    path: String,
+    source: String,
+) -> Result<(), String> {
+    let session_id = state.registry.active_key().map(|k| k.0.to_string());
+    register_file_index_entry_inner(&file_index_path(), &path, &source, session_id)
 }
 
 /// Internal helper for [`register_file_index_entry`] — takes the index path
@@ -949,6 +970,7 @@ pub(crate) fn register_file_index_entry_inner(
     index_path: &Path,
     path: &str,
     source: &str,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     // Same scope contract as the surface side: must exist and canonicalize
     // inside `$HOME/**` / `$TEMP/**` (rejects `..`, symlink escapes, and
@@ -973,10 +995,15 @@ pub(crate) fn register_file_index_entry_inner(
         // Duplicate registration: refresh the metadata that can drift
         // (size — and with it the file's mtime story), keep the original
         // registration stamp and the user's favorite flag, and update the
-        // origin tag to the latest caller.
+        // origin tag to the latest caller. The session stamp re-points only
+        // when a live active session exists — an unresolvable session must
+        // not erase the historical origin.
         Some(entry) => {
             entry.size_bytes = size;
             entry.source = source.to_string();
+            if let Some(sid) = session_id {
+                entry.session_id = Some(sid);
+            }
             if !entry.name.is_empty() {
                 entry.name = name;
             }
@@ -988,6 +1015,7 @@ pub(crate) fn register_file_index_entry_inner(
             registered_at: chrono::Utc::now().to_rfc3339(),
             favorite: false,
             source: source.to_string(),
+            session_id,
         }),
     }
     save_file_index_inner(index_path, &entries)
@@ -2711,10 +2739,10 @@ mod tests {
         let b = dir.path().join("table.xlsx");
         std::fs::write(&b, "workbook").expect("write b");
 
-        register_file_index_entry_inner(&index, &a.to_string_lossy(), "attachment")
+        register_file_index_entry_inner(&index, &a.to_string_lossy(), "attachment", None)
             .expect("register a");
         std::thread::sleep(std::time::Duration::from_millis(5));
-        register_file_index_entry_inner(&index, &b.to_string_lossy(), "export")
+        register_file_index_entry_inner(&index, &b.to_string_lossy(), "export", None)
             .expect("register b");
 
         let mut entries = load_file_index_inner(&index);
@@ -2742,7 +2770,7 @@ mod tests {
         // size + source, keeping the original stamp and favorite flag.
         std::fs::write(&b, "workbook-with-more-data").expect("grow b");
         set_file_index_favorite_inner(&index, &b.to_string_lossy(), true).expect("favorite b");
-        register_file_index_entry_inner(&index, &b.to_string_lossy(), "re-export")
+        register_file_index_entry_inner(&index, &b.to_string_lossy(), "re-export", None)
             .expect("re-register b");
 
         let entries = load_file_index_inner(&index);
@@ -2762,7 +2790,7 @@ mod tests {
         let index = dir.path().join("file-index.json");
         let f = dir.path().join("notes.txt");
         std::fs::write(&f, "notes").expect("write");
-        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment")
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment", None)
             .expect("register");
 
         set_file_index_favorite_inner(&index, &f.to_string_lossy(), true).expect("favorite");
@@ -2772,6 +2800,62 @@ mod tests {
         set_file_index_favorite_inner(&index, &f.to_string_lossy(), false).expect("unfavorite");
         let entries = load_file_index_inner(&index);
         assert!(!entries[0].favorite);
+    }
+
+    // R2 Wave C′ (design 11 来源回跳): the session stamp rides on
+    // registration. A stamped registration round-trips; a session-less one
+    // (historical rows, or no live session) stays absent — never invented —
+    // and a re-registration without a session must not erase the origin.
+    #[test]
+    fn file_index_session_stamp_roundtrips_and_stays_absent_without_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        let f = dir.path().join("notes.txt");
+        std::fs::write(&f, "notes").expect("write");
+        let session = uuid::Uuid::new_v4().to_string();
+
+        register_file_index_entry_inner(
+            &index,
+            &f.to_string_lossy(),
+            "attachment",
+            Some(session.clone()),
+        )
+        .expect("register with session");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].session_id.as_deref(), Some(session.as_str()));
+
+        // Historical row shape (no session_id key) still deserializes.
+        let historical: FileIndexEntry = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/old.md", "name": "old.md", "size_bytes": 12,
+            "registered_at": "2026-01-01T00:00:00+00:00",
+            "favorite": false, "source": "attachment"
+        }))
+        .expect("historical row must deserialize");
+        assert_eq!(historical.session_id, None);
+
+        // Re-registration with NO active session keeps the origin.
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "re-export", None)
+            .expect("re-register without session");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 1, "dedupe by path still holds");
+        assert_eq!(
+            entries[0].session_id.as_deref(),
+            Some(session.as_str()),
+            "session-less re-register must not erase the origin"
+        );
+
+        // Re-registration from another session re-points the stamp.
+        let other = uuid::Uuid::new_v4().to_string();
+        register_file_index_entry_inner(
+            &index,
+            &f.to_string_lossy(),
+            "attachment",
+            Some(other.clone()),
+        )
+        .expect("re-register from other session");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries[0].session_id.as_deref(), Some(other.as_str()));
     }
 
     #[test]
@@ -2792,21 +2876,23 @@ mod tests {
 
         // Exists, but outside $HOME/$TEMP (same rejection as copy_file's
         // source check).
-        let err = register_file_index_entry_inner(&index, "/etc/hosts", "attachment")
+        let err = register_file_index_entry_inner(&index, "/etc/hosts", "attachment", None)
             .expect_err("out-of-scope path must be rejected");
         assert!(err.contains("outside"), "got: {err}");
 
         // Inside the tempdir but missing on disk.
         let missing = dir.path().join("ghost.txt");
-        let err = register_file_index_entry_inner(&index, &missing.to_string_lossy(), "attachment")
-            .expect_err("missing path must be rejected");
+        let err =
+            register_file_index_entry_inner(&index, &missing.to_string_lossy(), "attachment", None)
+                .expect_err("missing path must be rejected");
         assert!(err.contains("not accessible"), "got: {err}");
 
         // A directory is not a file.
         let subdir = dir.path().join("a-directory");
         std::fs::create_dir(&subdir).expect("mkdir");
-        let err = register_file_index_entry_inner(&index, &subdir.to_string_lossy(), "attachment")
-            .expect_err("directories must be rejected");
+        let err =
+            register_file_index_entry_inner(&index, &subdir.to_string_lossy(), "attachment", None)
+                .expect_err("directories must be rejected");
         assert!(err.contains("not a regular file"), "got: {err}");
 
         assert!(
@@ -2829,7 +2915,7 @@ mod tests {
         // The next successful write replaces the corrupt file wholesale.
         let f = dir.path().join("fresh.txt");
         std::fs::write(&f, "fresh").expect("write");
-        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment")
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment", None)
             .expect("register after corruption");
         let entries = load_file_index_inner(&index);
         assert_eq!(entries.len(), 1);

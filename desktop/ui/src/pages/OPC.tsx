@@ -18,6 +18,7 @@ import { useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { useCatalog } from '@/context/CatalogContext'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
 import OPCMissionFocus from '@/components/opc/OPCMissionFocus'
@@ -54,6 +55,14 @@ export default function OPC() {
     return tasks.filter((t) => (t as { team?: string | null }).team === teamFilter || t.assignee === teamFilter)
   }, [tasks, teamFilter])
 
+  // G4 (R2 audit §4-G4): with a mission configured the hero absorbs the
+  // budget/deadline/progress chips (single aurora card, design 09) and the
+  // MissionCard moves into this 「管理使命」 dialog — its editor (and its
+  // linked-task progress read model) unchanged, just no longer a second
+  // aurora card parked under the hero.
+  const mission = config?.mission ?? null
+  const [missionManagerOpen, setMissionManagerOpen] = useState(false)
+
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
       <div className="max-w-wide mx-auto animate-in fade-in duration-(--duration-slower)">
@@ -63,17 +72,33 @@ export default function OPC() {
           {intl.formatMessage({ id: 'opc.subtitle' })}
         </p>
 
-        <OPCMissionFocus config={config} tasks={tasks} />
-
-        {/* 缓期批 2 使命卡 — the config-backed mission entity (configure
-            'mission'), rendered right under the focus hero it extends with
-            budget/deadline/linked-task progress. Hides itself entirely when
-            no mission is configured (absent stays absent). */}
-        <MissionCard
-          mission={config?.mission ?? null}
+        <OPCMissionFocus
+          config={config}
           tasks={tasks}
-          refreshConfig={refreshConfig}
+          mission={mission}
+          onManageMission={mission ? () => setMissionManagerOpen(true) : undefined}
         />
+
+        {/* G4 使命管理弹层 — the MissionCard (display + editor + linked-task
+            progress) opens from the hero's 管理使命 button instead of rendering
+            as a second aurora card below it. Unchanged component, new home. */}
+        <Dialog open={missionManagerOpen} onOpenChange={setMissionManagerOpen}>
+          <DialogContent className="sm:max-w-xl" data-testid="mission-manage-dialog">
+            <DialogHeader>
+              <DialogTitle>{intl.formatMessage({ id: 'opc.missionFocus.manage' })}</DialogTitle>
+              <DialogDescription>
+                {intl.formatMessage({ id: 'opc.missionManager.description' })}
+              </DialogDescription>
+            </DialogHeader>
+            {mission && (
+              <MissionCard
+                mission={mission}
+                tasks={tasks}
+                refreshConfig={refreshConfig}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* P2-8 — 看板 / 运行 view tabs. Radiogroup semantics: the two views
             are mutually exclusive page states, not links. */}

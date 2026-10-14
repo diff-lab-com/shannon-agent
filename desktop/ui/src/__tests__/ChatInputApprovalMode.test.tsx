@@ -219,3 +219,59 @@ describe('ChatInput approval-mode chip + dropdown (02c 裁决 D3)', () => {
     expect(document.querySelectorAll('[role="radiogroup"][aria-label="Permission mode"]')).toHaveLength(0)
   })
 })
+
+// R2 audit G2/I1 (02c A2 可选加分) — Shift+Tab walks the approval ladder
+// without opening the dropdown: ask → auto-edit → plan → full-auto, then
+// wraps. Same configure('approval_mode') + refreshConfig write the pill
+// commits, with a toast naming the NEW tier as the feedback channel.
+describe('ChatInput approval-mode Shift+Tab cycle (R2 G2/I1)', () => {
+  it('cycles ask → auto-edit → plan → full-auto → ask, writing configure each step', async () => {
+    configOverride = makeConfig('ask')
+    // The write lands in the config the catalog hands back (same mirror
+    // recipe as ChatInputEffort) so the NEXT keystroke reads the new tier.
+    vi.mocked(api.configure).mockImplementation(async (update?: { key: string; value: string }) => {
+      if (update?.key === 'approval_mode') configOverride = makeConfig(update.value)
+    })
+    const view = renderChatInput()
+    const textarea = screen.getByRole('textbox')
+    for (const next of ['auto-edit', 'plan', 'full-auto', 'ask']) {
+      fireEvent.keyDown(textarea, { key: 'Tab', shiftKey: true })
+      await waitFor(
+        () => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: next }),
+        { timeout: 15_000 },
+      )
+      await waitFor(() => expect(mockRefreshConfig).toHaveBeenCalled(), { timeout: 15_000 })
+      // The real refreshConfig re-reads the catalog and re-renders; the mock
+      // needs the re-render spelled out (same recipe as ChatInputEffort) or
+      // the next keystroke would read the stale render's config closure.
+      view.rerender(<ChatInput value="" onChange={vi.fn()} onSend={vi.fn()} onExecuteSlash={vi.fn()} attachedFiles={[]} onAttach={vi.fn()} onDetachAll={vi.fn()} isQuerying={false} onCancelQuery={vi.fn()} onOpenQuickFix={vi.fn()} onOpenEditor={vi.fn()} />)
+    }
+  })
+
+  it('toasts the NEW tier as the feedback channel (no alert)', async () => {
+    const { toast } = await import('sonner')
+    renderChatInput()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab', shiftKey: true })
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Permission mode: Auto Edit'), { timeout: 15_000 })
+  })
+
+  it('plain Tab (no shift) never cycles the ladder', () => {
+    renderChatInput()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab' })
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+
+  it('an out-of-ladder current value (expert mode) enters the loop at ask', async () => {
+    configOverride = makeConfig('bypass_permissions')
+    renderChatInput()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab', shiftKey: true })
+    await waitFor(() => expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'ask' }), { timeout: 15_000 })
+  })
+
+  it('Shift+Tab with the slash menu open commits the menu, not the ladder', () => {
+    renderChatInput({ value: '/' })
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab', shiftKey: true })
+    // The menu commit path above owns the keystroke — no configure write.
+    expect(api.configure).not.toHaveBeenCalled()
+  })
+})

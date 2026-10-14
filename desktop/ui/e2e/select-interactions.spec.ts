@@ -29,9 +29,9 @@ test.describe('Select interactions', () => {
     // 02c 裁决 D3: the chip echoes the ACTIVE tier; opening it lists the
     // four ladder stops + the high-risk note. Picking Auto Edit writes
     // `auto-edit` — a REAL state change the demo configure persists, so the
-    // chip echoes the new tier. A seeded out-of-ladder value (e.g.
-    // 'standard') echoes verbatim with nothing selected — covered by
-    // chat-script.model-mode.
+    // chip echoes the new tier. (R2 audit I5: the demo seed IS 'auto-edit'
+    // now; an out-of-ladder value echoes verbatim with nothing selected —
+    // covered by chat-script.model-mode's seeded 'bypass_permissions'.)
     const chip = page.getByTestId('approval-mode-pill')
     await expect(chip).toBeVisible()
     await chip.click()

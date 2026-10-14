@@ -13,6 +13,7 @@ import { I18nProvider } from '@/i18n'
 import { ArtifactProvider, useArtifact } from '@/components/artifact/ArtifactContext'
 import RightDock from '@/pages/chat/RightDock'
 import { openLink, resetLinkPanelRouterForTests } from '@/lib/openLink'
+import { initialRunProcess } from '@/lib/runProcess'
 
 // The context tab body pulls the whole session-provider stack; its content
 // is irrelevant here.
@@ -33,8 +34,11 @@ function ArtifactSeeder() {
   )
 }
 
-function renderDock() {
-  return render(
+type DockProps = Parameters<typeof RightDock>[0]
+
+/** Full tree for render()/rerender() — props override the idle defaults. */
+function dockTree(props: Partial<DockProps> = {}) {
+  return (
     <I18nProvider>
       <ArtifactProvider>
         <RightDock
@@ -47,11 +51,23 @@ function renderDock() {
           planModeActive={false}
           diffPath={null}
           onCloseDiff={vi.fn()}
+          runProcess={initialRunProcess()}
+          {...props}
         />
         <ArtifactSeeder />
       </ArtifactProvider>
-    </I18nProvider>,
+    </I18nProvider>
   )
+}
+
+function renderDock(props: Partial<DockProps> = {}) {
+  return render(dockTree(props))
+}
+
+function selectedTabId(): string | undefined {
+  return within(screen.getByRole('tablist'))
+    .getAllByRole('tab')
+    .find(t => t.getAttribute('aria-selected') === 'true')?.id
 }
 
 beforeEach(() => {
@@ -275,5 +291,72 @@ describe('RightDock — Aurora F-9 mount default + palette dock-solid', () => {
       window.dispatchEvent(new CustomEvent('shannon:palette-visibility', { detail: { open: false } }))
     })
     expect(aside.className).not.toContain('dock-solid')
+  })
+})
+
+// R2 审查 (docs/reviews/2026-10-14-design-parity-audit-r2.md §3.2 M8 / §4 G9):
+//   G9   — conditional default tab: a session with unreviewed changes
+//          defaults the dock to the diff tab (03 页「评审优先」), otherwise
+//          context; a manual pick always wins and persistence
+//          (shannon.dock.tab) keeps its existing semantics.
+//   M8a  — the Diff tab carries a count badge (「Diff n」, the design's
+//          `.tab .n` pill) while changed files exist, and the tab becomes
+//          reachable before any single file is selected (sidebar-only body).
+describe('RightDock — G9 conditional default tab + M8a diff count badge', () => {
+  const CHANGED = ['/proj/a.ts', '/proj/b.ts', '/proj/c.ts']
+
+  it('defaults to the diff tab when the session has changed files', () => {
+    renderDock({ changedPaths: CHANGED })
+    expect(selectedTabId()).toBe('dock-tab-diff')
+    // The tab is enabled and its accessible name carries the count.
+    const diffTab = screen.getByRole('tab', { name: 'Diff 3' })
+    expect(diffTab).not.toBeDisabled()
+    expect(screen.getByTestId('dock-diff-count')).toHaveTextContent('3')
+    // Sidebar-only body: the changed files are listed for picking even
+    // before any review target is set.
+    expect(screen.getByText('/proj/a.ts')).toBeInTheDocument()
+  })
+
+  it('defaults to context when the session has no changed files', () => {
+    renderDock()
+    expect(selectedTabId()).toBe('dock-tab-context')
+    // No badge, tab disabled — the pre-G9 status quo for diff-less sessions.
+    expect(screen.queryByTestId('dock-diff-count')).toBeNull()
+    expect(screen.getByRole('tab', { name: 'Diff' })).toBeDisabled()
+  })
+
+  it('never overrides a manual tab pick', () => {
+    const { rerender } = render(dockTree())
+    fireEvent.click(screen.getByRole('tab', { name: 'Plan' }))
+    expect(selectedTabId()).toBe('dock-tab-plan')
+    // Changed files arriving afterwards do not yank a picked position.
+    rerender(dockTree({ changedPaths: CHANGED }))
+    expect(selectedTabId()).toBe('dock-tab-plan')
+  })
+
+  it('falls back to context when the changed-file list empties while the diff tab is active', () => {
+    const { rerender } = render(dockTree({ changedPaths: CHANGED }))
+    expect(selectedTabId()).toBe('dock-tab-diff')
+    // Everything accepted/rewound away — a dead diff tab falls back.
+    rerender(dockTree({ changedPaths: [] }))
+    expect(selectedTabId()).toBe('dock-tab-context')
+  })
+
+  it('defers the default while a run is in flight, then lands on diff', () => {
+    const { rerender } = render(dockTree())
+    expect(selectedTabId()).toBe('dock-tab-context')
+    // Files change mid-run: the running session's 运行 tab owns the dock
+    // (run auto-activation) — the diff onset edge is deferred, not consumed.
+    rerender(dockTree({
+      changedPaths: CHANGED,
+      runProcess: { ...initialRunProcess(), status: 'running', startedAt: 1, hadChanges: true },
+    }))
+    expect(selectedTabId()).toBe('dock-tab-run')
+    // The run settles — the deferred default lands (评审优先).
+    rerender(dockTree({
+      changedPaths: CHANGED,
+      runProcess: { ...initialRunProcess(), status: 'done', endedAt: 2, hadChanges: true, outputs: CHANGED },
+    }))
+    expect(selectedTabId()).toBe('dock-tab-diff')
   })
 })

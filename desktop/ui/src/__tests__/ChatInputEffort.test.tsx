@@ -217,6 +217,16 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     for (const v of ['low', 'standard', 'high', 'max']) {
       expect(menu.querySelector(`[data-testid="effort-gauge-option-${v}"]`)).toBeInTheDocument()
     }
+    // R2 audit W5 (02c S2): the rows wear the sub-labeled copy —
+    // 轻 · 最低延迟 / 标准（默认）/ 深 · 复杂推理 / 最高 · 极限推理 —
+    // while the CHIP keeps the short word (the /Deep/i assertions above).
+    expect(menu.textContent).toContain('lowest latency')
+    expect(menu.textContent).toContain('Standard (default)')
+    expect(menu.textContent).toContain('complex reasoning')
+    expect(menu.textContent).toContain('maximum reasoning')
+    // …and the ALWAYS-on footer note rides at the menu's bottom.
+    expect(menu.querySelector('[data-testid="effort-gauge-note"]')).toBeInTheDocument()
+    expect(menu.querySelector('[data-testid="effort-gauge-note"]')!.textContent).toContain('dims while at Standard')
     // Pick "Max" straight from the gauge — the one-click dial the read-only
     // badge never offered. Same write the model picker's sub-tier commits.
     fireEvent.click(menu.querySelector('[data-testid="effort-gauge-option-max"]')!)
@@ -234,6 +244,9 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     // A note, not a lockout — the levels stay pickable.
     expect(menu.querySelector('[data-testid="effort-gauge-not-applicable"]')).toBeInTheDocument()
     expect(menu.querySelector('[data-testid="effort-gauge-option-high"]')).toBeInTheDocument()
+    // R2 audit W5: the conditional honesty line COEXISTS with the always-on
+    // footer note (conditional one renders only for no-reasoning models).
+    expect(menu.querySelector('[data-testid="effort-gauge-note"]')).toBeInTheDocument()
   })
 
   it('shows no note for a reasoning-capable effective model', () => {

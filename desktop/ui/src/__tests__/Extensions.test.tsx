@@ -68,4 +68,19 @@ describe('Extensions', () => {
 
   // CTA button navigation — removed in P0-5 (CTAs were no-ops).
   // The search input is now the only top-bar widget on all sub-routes.
+
+  // M1 (design-parity R2 §3.2, 07-connectors.html:141,322-327): the hub
+  // carries the page-level security narrative — the header crumb next to
+  // the capability subtitle and the page-bottom banner.
+  it('shows the header security crumb next to the subtitle', () => {
+    renderWithRoute('/extensions')
+    expect(screen.getByText('Catalog entries are security-scanned')).toBeInTheDocument()
+  })
+
+  it('shows the page-bottom security banner', () => {
+    renderWithRoute('/extensions')
+    expect(screen.getByTestId('extensions-security-banner')).toHaveTextContent(
+      'Every catalog entry runs an on-device prompt-injection scan before install; credentials stay on this machine and never leave it.',
+    )
+  })
 })

@@ -205,15 +205,21 @@
               </div>
             </div>
 
-            <!-- d. 会话默认 -->
+            <!-- d. 会话默认 —— 2026-10-14 R2 顺带对齐(实现已落,R2 审查 M3a/M3b):
+                 ① 默认工作目录 = 可写 input + 浏览… + 保存(GeneralSettings.tsx M3a;
+                   hint「输入绝对路径或通过「浏览…」选择;作为新会话的默认工作目录生效」);
+                 ② 记忆旁路默认行按实现措辞更名「新会话默认开启临时会话(不写入记忆)」
+                   (SessionSettings.tsx M3b,settings.session.memoryBypassDefault.*)。 -->
             <div class="card pad">
               <div class="cardhead"><svg class="ic"><use href="#i-chat"/></svg>会话默认</div>
               <div class="field">
-                <label>默认工作目录</label>
+                <label>默认工作目录(可写)</label>
                 <div class="row" style="gap:8px">
-                  <div class="input mono" style="flex:1">~/work</div>
-                  <button class="btn ghost sm">浏览</button>
+                  <input class="mono" style="flex:1;background:rgba(255,255,255,.04);border:1px solid var(--hair-2);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--t1)" value="~/work">
+                  <button class="btn ghost sm">浏览…</button>
+                  <button class="btn sm pri">保存</button>
                 </div>
+                <p class="hint" style="margin-top:5px">输入绝对路径或通过「浏览…」选择;作为新会话的默认工作目录生效</p>
               </div>
               <div class="row" style="margin:2px 0 12px">
                 <span class="sw-lb">草稿自动保存</span>
@@ -224,11 +230,11 @@
               </div>
               <div style="margin-bottom:0">
                 <div class="row">
-                  <span class="sw-lb" style="font-weight:600;color:var(--t2)">记忆旁路默认</span>
+                  <span class="sw-lb" style="font-weight:600;color:var(--t2)">新会话默认开启临时会话(不写入记忆)</span>
                   <span class="spacer"></span>
                   <div class="switch"></div>
                 </div>
-                <p class="hint" style="margin-top:5px">开启后新会话默认不注入记忆,可在会话内临时开</p>
+                <p class="hint" style="margin-top:5px">开启后,通过「新建会话」创建的会话默认开启临时会话:不注入记忆、不提取新记忆;可随时在会话内恢复使用记忆</p>
               </div>
             </div>
 

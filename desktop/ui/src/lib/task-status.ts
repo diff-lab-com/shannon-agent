@@ -147,3 +147,18 @@ export function groupTasksByFamily<T extends { status?: string; priority?: strin
   }
   return map
 }
+
+/** R2 Wave C′ (design 09:229 「原因 · 已等待 N 分钟」): how long a blocked
+ *  task has been waiting, in whole minutes, from the backend's
+ *  `blocked_since_ms` projection (an explicit timestamp field or the task
+ *  file's mtime — a lower bound on the real wait). Returns null when the
+ *  timestamp is absent or in the future (clock skew) — callers render the
+ *  honest 「—」 instead of a negative or invented wait. */
+export function blockedWaitMinutes(
+  sinceMs: number | undefined | null,
+  nowMs: number = Date.now(),
+): number | null {
+  if (sinceMs == null || !Number.isFinite(sinceMs)) return null
+  const elapsed = Math.floor((nowMs - sinceMs) / 60_000)
+  return elapsed >= 0 ? elapsed : null
+}
