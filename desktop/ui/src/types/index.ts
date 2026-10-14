@@ -770,6 +770,12 @@ export interface DesktopConfig {
    *  = unset — the sidebar shows the trailing 7-day cost and no threshold
    *  alerts fire. Written via `configure('monthly_budget_usd')`. */
   monthly_budget_usd?: number | null
+  /** 补2 (design-parity R2 §7.1): minutes-of-manual-work stand-in per
+   *  processed inbox item — the Triage 本周节省 footnote's editable dial.
+   *  null/undefined = the standing default (5). Written via
+   *  `configure('manual_minutes_per_item')`; the backend rejects values
+   *  outside 1-120. */
+  manual_minutes_per_item?: number | null
   /** S3-5 (P2-19): effort dial — canonical `low` | `standard` | `high` |
    *  `max`. null/undefined = the engine default (`standard`, which sends no
    *  thinking parameters). Written via `configure('effort_level')`; the

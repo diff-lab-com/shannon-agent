@@ -91,24 +91,69 @@ function isImagePath(path: string): boolean {
   return ext != null && IMAGE_EXTENSIONS.has(ext)
 }
 
-/* ─────── Header — avatar + role + timestamp ─────── */
+/* ─────── Header — avatar + role + timestamp + turn meta ─────── */
+
+/**
+ * 补1 (R2 审查 §7.1 · 02-chat msg-meta): per-turn aggregate segments shown
+ * after the header timestamp on assistant bubbles — the design's
+ * 「… · 12 个工具调用 · 2.4 分钟」tail. Every field is DERIVED from data the
+ * bubble already holds; the renderer drops any field that could not be
+ * derived (honesty contract: never a 0, never a placeholder). Turn-level
+ * cost is deliberately absent — see the turnMeta derivation comment.
+ */
+export interface TurnMeta {
+  /** Tool calls across the WHOLE turn (summed over the turn's messages). */
+  toolCount: number
+  /** lastTs − firstTs across the turn's messages (ms); null when the
+   *  timestamps don't yield a positive, finite span. */
+  durationMs: number | null
+}
+
+/** Turn duration → the design's 「N 秒 / N 分钟」 granularity. Sub-second
+ *  spans round to 0 and yield null — a duration below the displayed
+ *  granularity is OMITTED, never shown as 0 (honesty contract). */
+export function turnDurationValue(ms: number): { seconds: number } | { minutes: number } | null {
+  if (!Number.isFinite(ms) || ms <= 0) return null
+  const sec = Math.round(ms / 1000)
+  if (sec < 1) return null
+  if (sec < 60) return { seconds: sec }
+  return { minutes: Math.round((ms / 60_000) * 10) / 10 }
+}
 
 function MessageHeader({
   role,
   timestamp,
   isBranch,
+  turnMeta,
 }: {
   role: 'user' | 'assistant' | 'tool'
   timestamp?: number
   isBranch?: boolean
+  /** 补1: aggregate meta for assistant turns — null/undefined renders no
+   *  meta segments (user/tool headers never receive one). */
+  turnMeta?: TurnMeta | null
 }) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, number | string>) => intl.formatMessage({ id }, values)
   const label =
     role === 'user' ? t('chat.message.header.user')
       : role === 'tool' ? t('chat.message.header.tool')
       : t('chat.message.header.assistant')
   const time = timestamp ? new Date(timestamp).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' }) : ''
+  // 补1 (02-chat msg-meta): the secondary tail after the timestamp. Each
+  // segment renders only when its value was actually derived; with neither
+  // derivable the whole tail (and its separator) stays unrendered. Placement
+  // note: this line lives in the header row, the ActionToolbar is a separate
+  // flow row at the bubble's foot — one can never cover the other.
+  const toolsText = turnMeta != null && turnMeta.toolCount > 0
+    ? t('chat.message.turnMeta.toolCalls', { count: turnMeta.toolCount })
+    : null
+  const duration = turnMeta?.durationMs != null ? turnDurationValue(turnMeta.durationMs) : null
+  const durationText = duration == null
+    ? null
+    : 'seconds' in duration
+      ? t('chat.message.turnMeta.durationSec', { seconds: duration.seconds })
+      : t('chat.message.turnMeta.durationMin', { minutes: duration.minutes })
   // P2-17 (B1): the whole header used to be aria-hidden, leaving screen
   // readers unable to tell who spoke or when. The role label and <time> are
   // real content now; only the decorative separators and icon stay hidden.
@@ -126,6 +171,24 @@ function MessageHeader({
         <>
           <span aria-hidden="true">·</span>
           <time dateTime={new Date(timestamp!).toISOString()} className="font-mono">{time}</time>
+        </>
+      )}
+      {(toolsText != null || durationText != null) && (
+        <>
+          <span aria-hidden="true">·</span>
+          {/* a11y: the visual fragments are decorative; AT gets ONE coherent
+              sentence via the group's aria-label (汇总), not two bare
+              fragments ("2.4 分钟" alone has no antecedent). */}
+          <span
+            role="group"
+            aria-label={t('chat.message.turnMeta.aria', { detail: [toolsText, durationText].filter(Boolean).join(' · ') })}
+            data-testid="turn-meta"
+            className="flex items-center gap-xs text-on-surface-variant"
+          >
+            {toolsText != null && <span aria-hidden="true">{toolsText}</span>}
+            {toolsText != null && durationText != null && <span aria-hidden="true">·</span>}
+            {durationText != null && <span aria-hidden="true" className="tabular-nums">{durationText}</span>}
+          </span>
         </>
       )}
     </div>
@@ -270,7 +333,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const [isRewinding, setIsRewinding] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
-  const { sendMessage, feedback, recordFeedback, isQuerying } = useChat()
+  const { sendMessage, feedback, recordFeedback, isQuerying, messages: listMessages } = useChat()
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -371,6 +434,57 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     () => (!isUser ? detectArtifacts(message.content) : []),
     [isUser, message.content],
   )
+
+  // 补1 (R2 审查 §7.1 · 02-chat msg-meta): assistant-turn aggregate — the
+  // tool-call count and the wall-clock span of the conversation turn this
+  // message belongs to. Turn math matches the list parents' convention
+  // (firstAssistantOfTurnFlags / rewindInfoFor): a turn spans from the last
+  // user message at/before this message up to (excluding) the NEXT user
+  // message; non-user roles interleave freely. Count sums every non-user
+  // message's tool_calls in that window (one committed assistant message
+  // carries the whole turn's calls); duration is lastTs − firstTs over the
+  // same window. HONESTY CONTRACT: a dimension that cannot be derived
+  // (no/invalid timestamps, zero-width span, zero calls) is simply absent
+  // from TurnMeta — never a 0, never a placeholder.
+  //
+  // Cost is intentionally NOT part of this aggregate: the only turn-level
+  // cost on the wire is TimelineTurn.cost_usd (trace_timeline IPC), which is
+  // projected into the bubbles as tool durations only (MessageArea's
+  // durationLookup). Neither ChatMessage nor the context's usage readout
+  // (a live, per-frame composer-footer payload) attributes cost to a
+  // committed turn — surfacing the design's "$0.087" segment would need a
+  // new per-bubble IPC or a MessageArea-side lookup extension, both out of
+  // scope here. Absent data, the segment does not render.
+  const turnMeta = useMemo<TurnMeta | null>(() => {
+    if (isUser || message.role === 'tool') return null
+    // Only trust the context list when this bubble IS that list's row
+    // (identity) — isolated renders (tests, previews) fall back to the
+    // single message so the derivation stays over real data either way.
+    const list = listMessages != null && Array.isArray(listMessages) && listMessages[messageIndex] === message
+      ? listMessages
+      : [message]
+    let startIdx = 0
+    for (let i = Math.min(messageIndex, list.length - 1); i >= 0; i--) {
+      if (list[i]?.role === 'user') { startIdx = i; break }
+    }
+    let endIdx = list.length - 1
+    for (let i = messageIndex + 1; i < list.length; i++) {
+      if (list[i]?.role === 'user') { endIdx = i - 1; break }
+    }
+    let toolCount = 0
+    let lastTs = 0
+    const firstRaw = list[startIdx]?.timestamp
+    const firstTs = typeof firstRaw === 'number' && Number.isFinite(firstRaw) && firstRaw > 0 ? firstRaw : null
+    for (let i = startIdx; i <= endIdx; i++) {
+      const m = list[i]
+      if (!m) continue
+      if (Array.isArray(m.tool_calls)) toolCount += m.tool_calls.length
+      if (typeof m.timestamp === 'number' && Number.isFinite(m.timestamp) && m.timestamp > lastTs) lastTs = m.timestamp
+    }
+    const durationMs = firstTs != null && lastTs > firstTs ? lastTs - firstTs : null
+    if (toolCount === 0 && durationMs == null) return null
+    return { toolCount, durationMs }
+  }, [isUser, message, messageIndex, listMessages])
 
   if (isUser) {
     return (
@@ -487,7 +601,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
-        <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} />
+        <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} turnMeta={isTool ? null : turnMeta} />
         {/* W3-4: citation chips for the memories this turn's prompt carried —
             hidden entirely for a bypass / zero-injection turn (empty list). */}
         {!isTool && <MemoryCitationChips memories={message.injected_memories} />}
