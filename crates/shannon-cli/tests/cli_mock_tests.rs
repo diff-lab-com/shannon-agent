@@ -255,6 +255,32 @@ fn shannon_with_mock(server_url: &str, workspace: &Path) -> Command {
     cmd
 }
 
+/// #400: like [`shannon_with_mock`], but against a PRIVATE hermetic home the
+/// test seeds itself — the shared [`hermetic_home`] is process-lifetime, so a
+/// `settings.json` dropped there would leak `defaultMode` into every later
+/// test in this binary. A fresh home passes the startup gate like first-run.
+fn shannon_with_home_settings(
+    server_url: &str,
+    workspace: &Path,
+    home: &Path,
+    settings: &str,
+) -> Command {
+    let shannon_dir = home.join(".shannon");
+    fs::create_dir_all(&shannon_dir).expect("create ~/.shannon in test home");
+    fs::write(shannon_dir.join("settings.json"), settings).expect("write test settings.json");
+    let mut cmd = Command::cargo_bin(BIN).unwrap();
+    cmd.env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("SHANNON_BASE_URL", server_url)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_MODEL", "test-model")
+        .env("SHANNON_API_KEY", "test-key")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace);
+    cmd
+}
+
 fn shannon_openai(server_url: &str, workspace: &Path) -> Command {
     let mut cmd = shannon();
     cmd.env("SHANNON_BASE_URL", server_url)
@@ -454,6 +480,64 @@ async fn test_task_bash_command() {
     assert!(
         stdout.contains("task-test-output"),
         "Output should contain tool execution result, got: {stdout}"
+    );
+}
+
+// ── Test: #400 — headless honors the configured approval mode ─────────────
+
+/// With `permissions.defaultMode: "ask"` in the user settings, a headless
+/// `--prompt` run must keep the configured mode (ask) instead of clobbering
+/// it with full-auto. There is no approval outlet on this path, so a
+/// write-class tool call fails closed (denied + reported) and the probe
+/// file never lands. Before #400 this run silently executed the command
+/// under a forced full-auto.
+#[serial]
+#[tokio::test]
+async fn test_headless_honors_settings_default_mode_ask() {
+    let workspace = create_workspace();
+    let probe = workspace.path().join("probe-400.txt");
+    let home = tempfile::tempdir().expect("private test home");
+
+    let mut server = mockito::Server::new_async().await;
+    let tool_input = serde_json::json!({
+        "command": "touch probe-400.txt && echo written"
+    });
+    let _m1 = mount_tool_use(&mut server, "toolu_1", "Bash", tool_input);
+    let _m2 = mount_text_after_tool(&mut server, "Done.");
+
+    let result = shannon_with_home_settings(
+        &server.url(),
+        workspace.path(),
+        home.path(),
+        r#"{"permissions":{"defaultMode":"ask"}}"#,
+    )
+    .args([
+        "--prompt",
+        "Run the shell command: touch probe-400.txt && echo written",
+        "--output-format",
+        "json",
+    ])
+    .timeout(std::time::Duration::from_secs(30))
+    .assert();
+
+    // The write never executed — fail-closed, not silently allowed.
+    assert!(
+        !probe.exists(),
+        "the write probe must not run under a configured ask mode"
+    );
+
+    // The headless run says which mode it kept and how to override.
+    let stderr = String::from_utf8_lossy(&result.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("honoring the configured approval mode 'ask'"),
+        "expected the config-mode notice on stderr, got: {stderr}"
+    );
+
+    // The tool result surfaces the denial to the model/user.
+    let stdout = stdout_string(&result);
+    assert!(
+        stdout.contains("Permission required") || stdout.contains("denied"),
+        "expected the fail-closed denial in the output, got: {stdout}"
     );
 }
 
