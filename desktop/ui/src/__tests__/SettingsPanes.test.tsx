@@ -33,15 +33,16 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(screen.getByRole('heading', { name: 'General' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Sessions' })).toBeInTheDocument()
     // GeneralSettings' approval link card (the section's marker card since
-    // design-parity R2 moved the control to PermissionsPane).
-    expect(await screen.findByText('Approval Mode')).toBeInTheDocument()
+    // design-parity R2 moved the control to PermissionsPane; R3 wording
+    // audit aligned its title with that pane's 默认执行模式).
+    expect(await screen.findByText('Default execution mode')).toBeInTheDocument()
     // SessionSettings' lead-in (settings.session.title).
     expect(screen.getByText('Session lifecycle and storage')).toBeInTheDocument()
   })
 
   it('GeneralPane closes with the honest 数据 card (design 12-settings-general:236-243)', async () => {
     render(wrap(<GeneralPane />))
-    expect(await screen.findByText('Approval Mode')).toBeInTheDocument()
+    expect(await screen.findByText('Default execution mode')).toBeInTheDocument()
     // Group heading + card marker.
     expect(screen.getByRole('heading', { name: 'Data' })).toBeInTheDocument()
     // 缓期批 2: the engine ships export_all_sessions, so the IA redesign's
