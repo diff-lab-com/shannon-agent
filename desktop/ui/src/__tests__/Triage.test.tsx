@@ -13,7 +13,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
 import Triage from '@/pages/Triage'
 import * as api from '@/lib/tauri-api'
-import type { InboxItem, InboxListFilter } from '@/types'
+import type { InboxItem, InboxListFilter, ScheduledRoutine } from '@/types'
 
 // Test locale messages (minimal set for test assertions)
 const testMessages: Record<string, string> = {
@@ -102,6 +102,16 @@ const testMessages: Record<string, string> = {
   'tasks.status.failed.label': 'Failed',
   'inbox.needsAction': 'Needs action',
   'inbox.runStatus.succeeded': 'Succeeded',
+  // M7 (design-parity R2): merged pause badge + 查看日志 direct entry.
+  'tasks.routineControls.autoPausedLabel': 'Auto-paused',
+  'tasks.routineControls.autoPausedReasonSeparator': ' · ',
+  'tasks.routineControls.autoPausedReason.budget': 'Monthly budget reached',
+  'tasks.routineControls.autoPausedReason.consecutive_failures': 'Consecutive failures',
+  'inbox.viewLogs.label': 'View logs',
+  'inbox.viewLogs.aria': 'Open the error log of the routine that produced this item',
+  // G6 (design-parity R2): 本周节省 stat + mandatory estimation footnote.
+  'inbox.stats.saved': '≈{minutes} min saved · {count} items',
+  'inbox.stats.saved.footnote': 'Estimated at ~5 min of manual work per item',
 }
 
 // Hook spies — useInboxItems returns
@@ -130,6 +140,9 @@ vi.mock('@/lib/tauri-api', async () => {
     ...actual,
     updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
     respondPermission: vi.fn().mockResolvedValue(undefined),
+    // M7: the merged pause badge joins the producing routine's pause_reason
+    // through list_scheduled_tasks (empty list = nothing auto-paused).
+    listScheduledTasks: vi.fn().mockResolvedValue([] as ScheduledRoutine[]),
   }
 })
 
@@ -225,6 +238,9 @@ beforeEach(() => {
   vi.mocked(api.updateInboxItemStatus).mockClear()
   vi.mocked(api.respondPermission).mockReset()
   vi.mocked(api.respondPermission).mockResolvedValue(undefined)
+  // M7: default fixture set = nothing auto-paused; merge tests override.
+  vi.mocked(api.listScheduledTasks).mockReset()
+  vi.mocked(api.listScheduledTasks).mockResolvedValue([])
   vi.mocked(toast.success).mockClear()
   vi.mocked(toast.error).mockClear()
   setItems([])
@@ -1052,5 +1068,94 @@ describe('Triage — 来源链 #N (design 05)', () => {
   it('hides the run number on non-run sources (honesty rule)', () => {
     renderPageWithItem({ id: 2, source: 'session_approval', runId: null })
     expect(screen.queryByTestId('inbox-run-number')).not.toBeInTheDocument()
+  })
+})
+
+// ── M7 (design-parity R2 §3.2): the failure card's merged
+// 「失败 · 已自动暂停」 badge and the 「查看日志」 direct entry. ─────────────
+describe('M7 — merged pause badge and View logs direct entry', () => {
+  it('merges 「Failed · Auto-paused · <reason>」 when the producing routine is system-paused', async () => {
+    vi.mocked(api.listScheduledTasks).mockResolvedValue([
+      { id: 'sched-001', enabled: false, pause_reason: 'consecutive_failures' },
+    ] as unknown as ScheduledRoutine[])
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'NAS disk full' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    // Same wording family as TaskCard's auto-paused badge (TaskCard.tsx:75-88).
+    expect(chip).toHaveTextContent('Failed')
+    expect(chip).toHaveTextContent('Auto-paused')
+    expect(chip).toHaveTextContent('Consecutive failures')
+    expect(chip).not.toHaveTextContent('Needs action')
+    // The tooltip carries the reason phrase, matching TaskCard's badge.
+    expect(chip).toHaveAttribute('title', 'Consecutive failures')
+  })
+
+  it('keeps the plain 「Failed · Needs action」 badge when the routine is not paused', async () => {
+    vi.mocked(api.listScheduledTasks).mockResolvedValue([
+      { id: 'sched-001', enabled: true, pause_reason: null },
+    ] as unknown as ScheduledRoutine[])
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Needs action')
+    expect(chip).not.toHaveTextContent('Auto-paused')
+  })
+
+  it('keeps the plain badge when the routine list fails to load (no pause claim without evidence)', async () => {
+    vi.mocked(api.listScheduledTasks).mockRejectedValue(new Error('ipc down'))
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Needs action')
+    expect(chip).not.toHaveTextContent('Auto-paused')
+  })
+
+  it('reads 「View logs」 on a failed card and lands on the routine drawer deep link', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the error log of the routine that produced this item' })
+    expect(btn).toHaveTextContent('View logs')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/tasks')
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ openRoutineId: 'sched-001' })
+    // The generic source wording is REPLACED on failed cards (design 05's
+    // ops row draws 继续会话 + 查看日志, not a third source button).
+    expect(screen.queryByRole('button', { name: 'Open the automation that produced this item' })).not.toBeInTheDocument()
+  })
+
+  it('keeps 「View source automation」 on healthy (non-failed) cards', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: null })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the automation that produced this item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open the error log of the routine that produced this item' })).not.toBeInTheDocument()
+  })
+})
+
+// ── G6 (design-parity R2 §4, 05-inbox.html:157-161): 本周节省 stat. ─────────
+describe('G6 — weekly-saved stat (5 min/item stand-in)', () => {
+  it('derives minutes from items processed this week and always shows the footnote', () => {
+    const now = Date.now()
+    setItems([
+      makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 }),
+      makeItem({ id: 2, status: 'archived', updatedAtMs: now - 86_400_000 }),
+      // Pending = not processed; last-week = outside 本周.
+      makeItem({ id: 3, status: 'pending', updatedAtMs: now - 1_000 }),
+      makeItem({ id: 4, status: 'read', updatedAtMs: now - 8 * 86_400_000 }),
+    ])
+    renderPage()
+    const stat = screen.getByTestId('inbox-stat-saved')
+    expect(stat).toHaveTextContent('≈10 min saved')
+    expect(stat).toHaveTextContent('2 items')
+    // Honesty discipline: the estimation footnote is always attached.
+    expect(stat).toHaveTextContent('Estimated at ~5 min of manual work per item')
+  })
+
+  it('renders an honest ≈0 min · 0 items when nothing was processed this week', () => {
+    setItems([makeItem({ id: 1, status: 'pending' })])
+    renderPage()
+    const stat = screen.getByTestId('inbox-stat-saved')
+    expect(stat).toHaveTextContent('≈0 min saved')
+    expect(stat).toHaveTextContent('0 items')
   })
 })
