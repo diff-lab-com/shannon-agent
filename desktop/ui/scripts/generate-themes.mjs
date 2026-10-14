@@ -72,11 +72,13 @@ for (const [id, theme] of Object.entries(source.themes)) {
 // retires its composite check.
 const chipPatterns = chipCompositesInUse(join(root, 'src'))
 const auditInput = {}
+const modes = {}
 for (const [id, theme] of Object.entries(source.themes)) {
   auditInput[id] = { ...source.base, ...theme.vars }
+  modes[id] = theme.mode
 }
 auditInput.material = { ...auditInput.material } // base ⊂ material by construction
-const failures = auditThemes(auditInput, { chipPatterns })
+const failures = auditThemes(auditInput, { chipPatterns, modes })
 if (failures.length > 0) {
   console.error('generate-themes: AA pair contract FAILED:')
   for (const f of failures) {

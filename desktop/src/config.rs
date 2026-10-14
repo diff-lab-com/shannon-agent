@@ -378,6 +378,16 @@ pub struct DesktopConfig {
     /// via `configure("suggestions.enabled")`.
     #[serde(default = "default_true")]
     pub suggestions_enabled: bool,
+    /// 补2 (design-parity R2 §7.1): minutes-of-manual-work stand-in for ONE
+    /// processed inbox item — the dial behind the Triage 本周节省 stat's
+    /// 「按人工处理约 N 分钟/条估算」 footnote. `None` — the default — means
+    /// the UI falls back to the standing 5 minutes/条. Written via
+    /// `configure("manual_minutes_per_item")`, which rejects non-numeric
+    /// values and anything outside `1..=120` (an estimate the backend
+    /// silently bent would be a fiction the footnote prints); an empty
+    /// value clears back to the default.
+    #[serde(default)]
+    pub manual_minutes_per_item: Option<u32>,
 }
 
 /// Settings R3 T7 — the auto-archive retention default (7 days).
@@ -1024,6 +1034,7 @@ impl Default for DesktopConfig {
             session_auto_archive_days: default_session_auto_archive_days(),
             chat_ask_user_auto_continue: false,
             suggestions_enabled: default_true(),
+            manual_minutes_per_item: None,
         }
     }
 }

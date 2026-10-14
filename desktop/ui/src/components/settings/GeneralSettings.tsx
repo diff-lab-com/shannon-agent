@@ -206,7 +206,10 @@ export default function GeneralSettings() {
         >
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
+            {/* R3 wording: title aligns with the Permissions pane's 实体卡 — one
+                config, one name (「默认执行模式」); 审批模式 stays the concept
+                term in the description below. */}
+            <h3 className="font-headline-md text-headline-md">{t('settings.permissions.executionMode.title')}</h3>
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
             {intl.formatMessage({ id: 'settings.general.approvalMode.managedInPermissions' }, {

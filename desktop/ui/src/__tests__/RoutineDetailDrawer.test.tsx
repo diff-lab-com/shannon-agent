@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import type { ScheduledRoutine } from '@/types'
 
@@ -126,5 +126,123 @@ describe('RoutineDetailDrawer', () => {
     expect(screen.getByText('Off-peak 22:00–06:00')).toBeInTheDocument()
     // No queued run in the (empty) history → no queued status line.
     expect(screen.queryByText(/Queued \(off-peak/)).not.toBeInTheDocument()
+  })
+})
+
+// ── 补3 (design-parity R2 §7.1): the 「查看日志」 error anchor — the drawer
+// opens from Triage's failed card, scrolls to its last_error block and
+// flashes a one-shot ring (~2s). jsdom seam: scrollIntoView (stubbed in the
+// global setup) is asserted as CALLS, the flash as class/attribute. ────────
+describe('RoutineDetailDrawer — focusLastError anchor (补3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  function stubRafSync() {
+    // Run requestAnimationFrame callbacks synchronously so the anchor effect
+    // is deterministic under fake timers (vitest's default toFake list does
+    // not include rAF).
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0)
+      return 0
+    })
+  }
+
+  function spyScrollIntoView() {
+    const proto = Element.prototype as unknown as Record<string, unknown>
+    const prev = proto.scrollIntoView
+    const spy = vi.fn()
+    proto.scrollIntoView = spy
+    return { spy, restore: () => { proto.scrollIntoView = prev } }
+  }
+
+  it('scrolls the last_error block into view and rings it for ~2s', () => {
+    stubRafSync()
+    vi.useFakeTimers()
+    const { spy, restore } = spyScrollIntoView()
+    try {
+      render(
+        <RoutineDetailDrawer
+          routine={makeRoutine({ last_error: 'Boom' })}
+          routines={[]}
+          onClose={() => {}}
+          focusLastError
+        />,
+      )
+      const block = screen.getByTestId('routine-last-error')
+      // The one-shot ring + the scrolled-to target are both on the block.
+      expect(block).toHaveAttribute('data-error-flash', 'true')
+      expect(block.className).toContain('ring-2')
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(spy.mock.instances[0]).toBe(block)
+      // One-shot: the ring fades after ~2s, the block stays.
+      act(() => { vi.advanceTimersByTime(2000) })
+      expect(block).not.toHaveAttribute('data-error-flash')
+      expect(block.className).not.toContain('ring-2')
+      expect(screen.getByTestId('routine-last-error')).toHaveTextContent('Boom')
+    } finally {
+      restore()
+    }
+  })
+
+  it('does not ring or scroll without the focusLastError flag', () => {
+    stubRafSync()
+    vi.useFakeTimers()
+    const { spy, restore } = spyScrollIntoView()
+    try {
+      render(
+        <RoutineDetailDrawer
+          routine={makeRoutine({ last_error: 'Boom' })}
+          routines={[]}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('routine-last-error')).not.toHaveAttribute('data-error-flash')
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
+
+  it('does not ring when the routine has no last_error to anchor', () => {
+    stubRafSync()
+    vi.useFakeTimers()
+    const { spy, restore } = spyScrollIntoView()
+    try {
+      render(
+        <RoutineDetailDrawer
+          routine={makeRoutine()}
+          routines={[]}
+          onClose={() => {}}
+          focusLastError
+        />,
+      )
+      expect(screen.queryByTestId('routine-last-error')).not.toBeInTheDocument()
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
+
+  it('clears the ring as soon as the hand-over flag turns false (drawer closed)', () => {
+    stubRafSync()
+    vi.useFakeTimers()
+    const { restore } = spyScrollIntoView()
+    try {
+      const props = {
+        routine: makeRoutine({ last_error: 'Boom' }),
+        routines: [],
+        onClose: () => {},
+      }
+      const { rerender } = render(<RoutineDetailDrawer {...props} focusLastError />)
+      expect(screen.getByTestId('routine-last-error')).toHaveAttribute('data-error-flash', 'true')
+      // Esc / close flips the caller's flag — the ring must drop immediately,
+      // not linger until the 2s timer.
+      rerender(<RoutineDetailDrawer {...props} focusLastError={false} />)
+      expect(screen.getByTestId('routine-last-error')).not.toHaveAttribute('data-error-flash')
+    } finally {
+      restore()
+    }
   })
 })

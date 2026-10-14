@@ -30,9 +30,11 @@ describe('GeneralSettings', () => {
     expect(screen.getByText(/Refine your AI workflow and interface preferences/)).toBeInTheDocument()
   })
 
-  it('renders approval mode section', () => {
+  it('renders the approval link card aligned with the Permissions pane title', () => {
     render(wrap(<GeneralSettings />))
-    expect(screen.getByText('Approval Mode')).toBeInTheDocument()
+    // R3 wording audit: the link card title mirrors PermissionsPane's
+    // 默认执行模式 entity card — one config, one name.
+    expect(screen.getByText('Default execution mode')).toBeInTheDocument()
   })
 
   // design-parity R2 (Wave B′): the 默认执行模式 entity card (four-stop

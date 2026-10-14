@@ -886,6 +886,17 @@ pub struct FileIndexEntry {
     /// active session keeps the previous value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// R2 B2 (design 11 提取状态徽章): how many text segments the attachment
+    /// extraction pipeline last produced for this file, written back by the
+    /// `send_message` pipeline when a parseable attachment produced an
+    /// `AttachmentExtractionReport` for a path already on the shelf (see
+    /// `record_file_index_extraction_inner`). Absent = never extracted (or
+    /// the path was never sent since the badge shipped) — the Files card
+    /// must render no badge, the same honest-absence discipline as
+    /// `session_id`. Re-registration does not touch it (no extraction
+    /// happened); the next send's extraction overwrites it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_segments: Option<u32>,
 }
 
 /// Resolve the index file path: `~/.shannon/desktop/file-index.json` — same
@@ -1016,6 +1027,10 @@ pub(crate) fn register_file_index_entry_inner(
             favorite: false,
             source: source.to_string(),
             session_id,
+            // A fresh registration carries no extraction evidence; the badge
+            // only appears once the send pipeline actually parsed the file
+            // (R2 B2 write-back below).
+            extracted_segments: None,
         }),
     }
     save_file_index_inner(index_path, &entries)
@@ -1045,6 +1060,82 @@ pub(crate) fn set_file_index_favorite_inner(
         .ok_or_else(|| format!("path is not registered in the file index: {entry_path}"))?;
     entry.favorite = favorite;
     save_file_index_inner(index_path, &entries)
+}
+
+// ── R2 B2: extraction-status write-back (design 11 提取状态徽章) ────────────
+//
+// The send pipeline's extraction reports are the shelf's extraction
+// evidence: a file that was parsed for the model gets its
+// `extracted_segments` badge on the Files page. These helpers keep the
+// write-back a pure index mutation — the send pipeline hands over the
+// reports and never learns how the shelf is stored.
+
+/// The badge count one extraction report contributes, or `None` when the
+/// report must not stamp the shelf at all. A failed parse (`extracted ==
+/// false`) extracted nothing — the honest state is absence, never a stale
+/// count. Sectioned office documents count their sections (the same number
+/// the composer chip renders as「已提取 N 段」, i.e. `sections_total`); a
+/// non-sectioned extraction (PDF — one text block per document) counts 1,
+/// which is literally how many text segments the pipeline produced.
+pub(crate) fn extracted_segments_from_report(
+    report: &crate::commands::AttachmentExtractionReport,
+) -> Option<u32> {
+    if !report.extracted {
+        return None;
+    }
+    Some(
+        u32::try_from(report.sections_total)
+            .unwrap_or(u32::MAX)
+            .max(1),
+    )
+}
+
+/// Write `segments` back onto the shelf entry for `path`. Read-only
+/// honesty: a path that is NOT registered is skipped — extraction is a side
+/// effect of sending, not a registration, so no entry is ever invented
+/// here. Matching mirrors [`set_file_index_favorite_inner`]
+/// (canonicalize-for-matching, degrading to the raw string — which for
+/// send-pipeline attachments is already canonical via `collect_attachments`
+/// — when the re-stat fails). Returns `true` when an entry was found and
+/// updated, `false` on an honest miss.
+pub(crate) fn record_file_index_extraction_inner(
+    index_path: &Path,
+    path: &str,
+    segments: u32,
+) -> Result<bool, String> {
+    let entry_path = std::fs::canonicalize(path)
+        .map(|c| c.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    let mut entries = load_file_index_inner(index_path);
+    let Some(entry) = entries.iter_mut().find(|e| e.path == entry_path) else {
+        return Ok(false);
+    };
+    entry.extracted_segments = Some(segments);
+    save_file_index_inner(index_path, &entries)?;
+    Ok(true)
+}
+
+/// Send-pipeline hook (R2 B2): after `send_message` stamps its extraction
+/// reports onto the message's attachments, it hands the same reports here so
+/// every file already on the shelf carries its latest extracted-segments
+/// badge. Best-effort by contract — an unregistered path is silently
+/// skipped (see [`record_file_index_extraction_inner`]) and a storage
+/// failure degrades to a warn, never a send failure.
+pub(crate) fn record_file_index_extractions(
+    reports: &std::collections::HashMap<String, crate::commands::AttachmentExtractionReport>,
+) {
+    let index_path = file_index_path();
+    for report in reports.values() {
+        let Some(segments) = extracted_segments_from_report(report) else {
+            continue;
+        };
+        if let Err(e) = record_file_index_extraction_inner(&index_path, &report.path, segments) {
+            tracing::warn!(
+                "file-index extraction write-back failed for {}: {e}",
+                report.path
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2856,6 +2947,129 @@ mod tests {
         .expect("re-register from other session");
         let entries = load_file_index_inner(&index);
         assert_eq!(entries[0].session_id.as_deref(), Some(other.as_str()));
+    }
+
+    // ---- R2 B2: extraction-status write-back (提取状态徽章) ----
+    //
+    // The send pipeline hands its extraction reports to
+    // `record_file_index_extractions`, which upserts the segment count onto
+    // the shelf entry with the SAME canonical path. Honesty rules pinned
+    // here: unregistered paths are skipped (no entry invented), the latest
+    // extraction overwrites the previous count, and a failed parse leaves
+    // the shelf untouched.
+
+    #[test]
+    fn file_index_extraction_writeback_updates_registered_and_skips_unknown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index = dir.path().join("file-index.json");
+        let f = dir.path().join("deck.pptx");
+        std::fs::write(&f, "deck").expect("write");
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "attachment", None)
+            .expect("register");
+        let canonical = std::fs::canonicalize(&f)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        // Miss: an unregistered path is skipped — no entry is created and
+        // the shelf is untouched.
+        let stranger = dir.path().join("stranger.pdf");
+        std::fs::write(&stranger, "stranger").expect("write stranger");
+        let updated = record_file_index_extraction_inner(&index, &stranger.to_string_lossy(), 4)
+            .expect("write-back call itself succeeds");
+        assert!(!updated, "unregistered path must be skipped");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries.len(), 1, "no entry invented for the stranger");
+        assert!(entries[0].extracted_segments.is_none());
+
+        // Hit: the registered path gets the count.
+        let updated = record_file_index_extraction_inner(&index, &f.to_string_lossy(), 7)
+            .expect("write-back call succeeds");
+        assert!(updated, "registered path must be updated");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries[0].extracted_segments, Some(7));
+
+        // Overwrite: a later extraction replaces the previous value, and
+        // only that value — registration metadata stays as registered.
+        let updated = record_file_index_extraction_inner(&index, &f.to_string_lossy(), 3)
+            .expect("second write-back succeeds");
+        assert!(updated);
+        let entries = load_file_index_inner(&index);
+        assert_eq!(
+            entries[0].extracted_segments,
+            Some(3),
+            "latest extraction wins"
+        );
+        assert_eq!(entries[0].path, canonical);
+        assert_eq!(entries[0].source, "attachment");
+        assert_eq!(entries[0].size_bytes, Some("deck".len() as u64));
+        assert!(!entries[0].favorite);
+
+        // Re-registration (no extraction involved) must not erase the badge
+        // — only a real extraction write may move it.
+        register_file_index_entry_inner(&index, &f.to_string_lossy(), "re-export", None)
+            .expect("re-register");
+        let entries = load_file_index_inner(&index);
+        assert_eq!(entries[0].source, "re-export");
+        assert_eq!(
+            entries[0].extracted_segments,
+            Some(3),
+            "re-registration must not erase the badge"
+        );
+    }
+
+    #[test]
+    fn extraction_report_segment_count_maps_by_kind_and_failure() {
+        let report = |extracted: bool, total: usize| crate::commands::AttachmentExtractionReport {
+            path: "/tmp/x".into(),
+            kind: "docx".into(),
+            extracted,
+            sections_total: total,
+            sections_inlined: 0,
+            truncated: false,
+            cache_path: None,
+        };
+        // Sectioned office extraction: the section total is the badge count
+        // (the same number the composer chip renders as「已提取 N 段」).
+        assert_eq!(extracted_segments_from_report(&report(true, 12)), Some(12));
+        // Non-sectioned extraction (pdf reports 0 sections): one text block.
+        assert_eq!(extracted_segments_from_report(&report(true, 0)), Some(1));
+        // Failed parse: nothing was extracted — honest absence, never a
+        // count, so the badge never lights for a placeholder-only parse.
+        assert_eq!(extracted_segments_from_report(&report(false, 12)), None);
+        assert_eq!(extracted_segments_from_report(&report(false, 0)), None);
+    }
+
+    #[test]
+    fn file_index_extracted_segments_wire_shape_is_absent_when_none() {
+        // Historical row shape (no extracted_segments key) deserializes to
+        // None — pre-badge shelves stay loadable.
+        let historical: FileIndexEntry = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/old.md", "name": "old.md", "size_bytes": 12,
+            "registered_at": "2026-01-01T00:00:00+00:00",
+            "favorite": false, "source": "attachment"
+        }))
+        .expect("historical row must deserialize");
+        assert_eq!(historical.extracted_segments, None);
+        assert_eq!(historical.session_id, None);
+
+        // None serializes with the key OMITTED — the wire contract the
+        // Files badge reads: absence = no badge, never a fake zero.
+        let json = serde_json::to_value(&historical).unwrap();
+        assert!(
+            json.get("extracted_segments").is_none(),
+            "None must omit the key"
+        );
+
+        // Some serializes as a plain number and round-trips.
+        let stamped = FileIndexEntry {
+            extracted_segments: Some(12),
+            ..historical.clone()
+        };
+        let json = serde_json::to_value(&stamped).unwrap();
+        assert_eq!(json["extracted_segments"], serde_json::json!(12));
+        let back: FileIndexEntry = serde_json::from_value(json).unwrap();
+        assert_eq!(back.extracted_segments, Some(12));
     }
 
     #[test]
