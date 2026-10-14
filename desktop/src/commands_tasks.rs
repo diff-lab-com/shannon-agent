@@ -52,6 +52,21 @@ pub struct TaskInfo {
     /// never saw. Additive + skipped when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Blocked reason, verbatim from the task JSON's optional
+    /// `blockedReason`/`blocked_reason` field when the writer supplied one.
+    /// Never synthesized — absent stays absent (the UI renders 「—」); the
+    /// 「等待 N 个前置任务」 form derives on the client from the existing
+    /// `blocked_by` list. R2 Wave C′ (design 09:229).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    /// Epoch-ms the task last entered a blocked state, derived ONLY from
+    /// data that already exists: an explicit `blockedSince`/`blocked_since`
+    /// (or `updatedAt`/`updated_at`) field in the task JSON wins, else the
+    /// task file's mtime — the last write lower-bounds how long the current
+    /// state has held. Populated only for statuses the shared board taxonomy
+    /// parks in the blocked column; absent stays absent. R2 Wave C′.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_since_ms: Option<i64>,
 }
 
 /// Payload for `update_task`. All fields optional except `id`.
@@ -300,6 +315,15 @@ fn collect_tasks_recursive(
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            // blocked_since fallback (R2 Wave C′): the file's last write,
+            // epoch-ms — a lower bound on how long the current (blocked)
+            // state has held when the JSON itself carries no timestamp.
+            let file_mtime_ms = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX) as i64);
             // Derive team name from parent dir relative to root.
             // e.g. `.claude/tasks/<session-uuid>/3.json` → team = "<session-uuid>".
             // Top-level files (`.claude/tasks/3.json`) → team = None.
@@ -315,7 +339,7 @@ fn collect_tasks_recursive(
                         .unwrap_or(true)
                 })
                 .map(String::from);
-            if let Some(parsed) = parse_task_value(&task, team) {
+            if let Some(parsed) = parse_task_value(&task, team, file_mtime_ms) {
                 out.push(parsed);
             }
         }
@@ -327,7 +351,15 @@ fn collect_tasks_recursive(
 /// when the value lacks an `id` field. Field names follow the Shannon task
 /// schema: `id`, `subject`, `status`, `owner`, `description`, `priority`,
 /// `dueDate`, `activeForm`, `blocks`, `blockedBy`, `executionMode`.
-fn parse_task_value(task: &serde_json::Value, team: Option<String>) -> Option<TaskInfo> {
+///
+/// `file_mtime_ms` is the task file's last-write time (epoch-ms), the
+/// fallback for the [`TaskInfo::blocked_since_ms`] derivation when the JSON
+/// carries no timestamp of its own.
+fn parse_task_value(
+    task: &serde_json::Value,
+    team: Option<String>,
+    file_mtime_ms: Option<i64>,
+) -> Option<TaskInfo> {
     let id = task.get("id").and_then(|v| v.as_str())?.to_string();
     let title = task
         .get("subject")
@@ -378,6 +410,26 @@ fn parse_task_value(task: &serde_json::Value, team: Option<String>) -> Option<Ta
         .chain(collect_string_array(task, "blocked_by"))
         .collect();
     let blocks = collect_string_array(task, "blocks");
+    // R2 Wave C′ (design 09:229): blocked-card 「原因 · 已等待 N 分钟」.
+    // Reason is a verbatim passthrough — a `blockedReason` the writer chose
+    // to store; nothing is synthesized here. Wait time prefers an explicit
+    // timestamp field, then the file mtime; and only attaches to statuses
+    // the shared board taxonomy (ui `task-status.ts`) parks in the blocked
+    // column, so `blocked_since_ms` on a done task is never invented.
+    let blocked_reason = task
+        .get("blockedReason")
+        .and_then(|v| v.as_str())
+        .or_else(|| task.get("blocked_reason").and_then(|v| v.as_str()))
+        .map(String::from)
+        .filter(|r| !r.is_empty());
+    let blocked_since_ms = if BLOCKED_FAMILY_STATUSES.contains(&status.as_str()) {
+        ["blockedSince", "blocked_since", "updatedAt", "updated_at"]
+            .iter()
+            .find_map(|k| task.get(*k).and_then(parse_epoch_ms))
+            .or(file_mtime_ms)
+    } else {
+        None
+    };
     Some(TaskInfo {
         id,
         title,
@@ -393,7 +445,31 @@ fn parse_task_value(task: &serde_json::Value, team: Option<String>) -> Option<Ta
         team,
         // Never persisted on disk — joined at list time from the ledger.
         cost_usd: None,
+        blocked_reason,
+        blocked_since_ms,
     })
+}
+
+/// Raw statuses the shared board taxonomy renders in the blocked column —
+/// the subset with an unambiguous "has been waiting" reading. (`pending` is
+/// deliberately excluded: `classifyStatus` routes it to the queued column
+/// first, and a freshly queued task has not been waiting on anything.)
+const BLOCKED_FAMILY_STATUSES: [&str; 4] = ["blocked", "waiting", "review", "pending_review"];
+
+/// Parse a JSON value as epoch-ms. Numbers: `> 1e12` are already
+/// milliseconds, smaller values are unix seconds (the schema's `dueDate`
+/// convention). Strings: RFC 3339 — what the engine's `AgentTask::updated_at`
+/// (chrono) serializes to. Anything else: `None`.
+fn parse_epoch_ms(v: &serde_json::Value) -> Option<i64> {
+    if let Some(n) = v.as_i64() {
+        Some(if n > 1_000_000_000_000 { n } else { n.saturating_mul(1000) })
+    } else if let Some(s) = v.as_str() {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp_millis())
+    } else {
+        None
+    }
 }
 
 /// Read a JSON object field as a `Vec<String>`. Accepts arrays of strings
@@ -500,8 +576,14 @@ fn update_task_in(
     std::fs::rename(&tmp, &target_path).map_err(|e| format!("Rename failed: {e}"))?;
 
     // team is derived from path during list_tasks; not recoverable here
-    // since we operate on the doc only. Pass None.
-    parse_task_value(&doc, None).ok_or_else(|| "Updated task is missing id".into())
+    // since we operate on the doc only. Pass None. The just-written file's
+    // mtime feeds the blocked_since fallback (it IS the last write).
+    let file_mtime_ms = std::fs::metadata(&target_path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX) as i64);
+    parse_task_value(&doc, None, file_mtime_ms).ok_or_else(|| "Updated task is missing id".into())
 }
 
 /// Find the JSON file for a given task id by walking the tasks root.
@@ -739,6 +821,8 @@ mod tests {
             execution_mode: None,
             team: Some(session.to_string()),
             cost_usd: None,
+            blocked_reason: None,
+            blocked_since_ms: None,
         }];
         attach_session_costs(&mut tasks, |sid| store.session_ledger_cost(sid));
         assert_eq!(tasks[0].cost_usd, Some(0.0));
@@ -761,6 +845,8 @@ mod tests {
             execution_mode: None,
             team,
             cost_usd: cost,
+            blocked_reason: None,
+            blocked_since_ms: None,
         }
     }
 
@@ -851,5 +937,108 @@ mod tests {
         assert!(progress.tasks.is_empty());
         assert_eq!(progress.budget_used_usd, None);
         assert_eq!(progress.name, "Test mission");
+    }
+
+    // === R2 Wave C′: blocked-card 原因/等待时间 projection (design 09:229) ===
+
+    #[test]
+    fn blocked_reason_is_verbatim_passthrough_or_absent() {
+        let with = serde_json::json!({
+            "id": "1", "subject": "NAS 备份恢复", "status": "blocked",
+            "blockedReason": "磁盘空间不足"
+        });
+        let info = parse_task_value(&with, None, None).unwrap();
+        assert_eq!(info.blocked_reason.as_deref(), Some("磁盘空间不足"));
+
+        // snake_case alias is honored too.
+        let snake = serde_json::json!({
+            "id": "2", "subject": "x", "status": "blocked",
+            "blocked_reason": "quota exceeded"
+        });
+        assert_eq!(
+            parse_task_value(&snake, None, None).unwrap().blocked_reason.as_deref(),
+            Some("quota exceeded")
+        );
+
+        // Without a writer-supplied reason: absent, never synthesized. The
+        // 「等待 N 个前置任务」 form derives on the client from blocked_by.
+        let bare = serde_json::json!({ "id": "3", "subject": "x", "status": "blocked" });
+        let info = parse_task_value(&bare, None, None).unwrap();
+        assert_eq!(info.blocked_reason, None);
+        assert_eq!(info.blocked_since_ms, None);
+    }
+
+    #[test]
+    fn blocked_since_prefers_explicit_field_then_file_mtime() {
+        // An explicit RFC 3339 updatedAt (engine AgentTask serialization)
+        // wins over the file mtime fallback.
+        let explicit = serde_json::json!({
+            "id": "1", "subject": "x", "status": "blocked",
+            "updatedAt": "2026-10-14T08:00:00Z"
+        });
+        let mtime = 1_760_000_000_000_i64; // arbitrary "now-ish" ms
+        let info = parse_task_value(&explicit, None, Some(mtime)).unwrap();
+        assert_eq!(
+            info.blocked_since_ms,
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+
+        // No timestamp in the JSON → the file mtime is the lower bound.
+        let bare = serde_json::json!({ "id": "2", "subject": "x", "status": "waiting" });
+        let info = parse_task_value(&bare, None, Some(mtime)).unwrap();
+        assert_eq!(info.blocked_since_ms, Some(mtime));
+
+        // blockedSince wins over updatedAt when both exist.
+        let both = serde_json::json!({
+            "id": "3", "subject": "x", "status": "blocked",
+            "blockedSince": 1_700_000_000_000_i64,
+            "updatedAt": 1_760_000_000_000_i64
+        });
+        assert_eq!(
+            parse_task_value(&both, None, Some(mtime)).unwrap().blocked_since_ms,
+            Some(1_700_000_000_000)
+        );
+    }
+
+    #[test]
+    fn blocked_since_only_attaches_to_blocked_family_statuses() {
+        let mtime = 1_760_000_000_000_i64;
+        for status in ["blocked", "waiting", "review", "pending_review"] {
+            let v = serde_json::json!({ "id": "1", "subject": "x", "status": status });
+            assert_eq!(
+                parse_task_value(&v, None, Some(mtime)).unwrap().blocked_since_ms,
+                Some(mtime),
+                "{status} is a blocked-family status"
+            );
+        }
+        // Non-blocked statuses never carry the field — no invented waits.
+        for status in ["pending", "in_progress", "completed", "failed"] {
+            let v = serde_json::json!({ "id": "2", "subject": "x", "status": status });
+            assert_eq!(
+                parse_task_value(&v, None, Some(mtime)).unwrap().blocked_since_ms,
+                None,
+                "{status} must not gain a blocked_since"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_epoch_ms_handles_seconds_millis_and_rfc3339() {
+        assert_eq!(parse_epoch_ms(&serde_json::json!(1_760_000_000_000_i64)), Some(1_760_000_000_000));
+        assert_eq!(parse_epoch_ms(&serde_json::json!(1_760_000_000_i64)), Some(1_760_000_000_000));
+        assert_eq!(
+            parse_epoch_ms(&serde_json::json!("2026-10-14T08:00:00Z")),
+            Some(
+                chrono::DateTime::parse_from_rfc3339("2026-10-14T08:00:00Z")
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
+        assert_eq!(parse_epoch_ms(&serde_json::json!("not-a-time")), None);
+        assert_eq!(parse_epoch_ms(&serde_json::json!(null)), None);
     }
 }

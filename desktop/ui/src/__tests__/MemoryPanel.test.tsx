@@ -318,10 +318,32 @@ describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
       /3 memories/,
     )
     expect(banner.textContent).not.toMatch(/coming soon/)
+    // R2 Wave C′ (design 08:148-151): the pre-read's entries render as
+    // `#title` chips next to the count — exactly the three mocked entries.
+    const chips = screen.getAllByTestId('memory-injection-preview-chip')
+    expect(chips).toHaveLength(3)
+    expect(chips[0]).toHaveTextContent('#Prefers concise responses')
+    expect(chips[2]).toHaveTextContent('#Rust first for new services')
     // The banner view has no project scope → the backend default is asked for.
     await waitFor(() => {
       expect(api.memoryInjectionPreview).toHaveBeenCalledWith(null)
     })
+  })
+
+  it('caps the entry chips at 3 with a +N overflow badge', async () => {
+    vi.mocked(api.getSessionMemoryBypass).mockResolvedValue(false)
+    vi.mocked(api.memoryInjectionPreview).mockResolvedValue({
+      count: 5,
+      entries: Array.from({ length: 5 }, (_, i) => ({
+        id: `mem-0${i + 1}`,
+        title: `Memory ${i + 1}`,
+      })),
+    })
+    render(<MemoryPanel />)
+
+    await screen.findByTestId('memory-injection-preview-count')
+    expect(screen.getAllByTestId('memory-injection-preview-chip')).toHaveLength(3)
+    expect(screen.getByTestId('memory-injection-preview-chip-overflow')).toHaveTextContent('+2')
   })
 
   it('degrades to the amber placeholder when the preview command fails', async () => {
@@ -330,12 +352,14 @@ describe('MemoryPanel — memory injection banner (audit §08 P1)', () => {
     render(<MemoryPanel />)
 
     const banner = await screen.findByTestId('memory-injection-banner')
-    // C9 诚实降级: unavailable pre-read → "coming soon" placeholder, never
-    // an invented count.
+    // C9 诚实降级: unavailable pre-read → the honest "Preview count
+    // unavailable" amber placeholder, never an invented count. (Wording
+    // updated by the R2 批复 — the old "coming soon" promise form is gone.)
     expect(screen.getByTestId('memory-injection-preview-pending')).toHaveTextContent(
-      /coming soon/,
+      /Preview count unavailable/,
     )
-    expect(banner.textContent).toMatch(/coming soon/)
+    expect(banner.textContent).toMatch(/Preview count unavailable/)
+    expect(banner.textContent).not.toMatch(/coming soon/)
     expect(banner.textContent).not.toMatch(/\d+ memories?/)
     expect(screen.queryByTestId('memory-injection-preview-count')).not.toBeInTheDocument()
   })

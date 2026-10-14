@@ -14,14 +14,19 @@
 //
 // Layout parity (audit §11 P1): the rows render as a responsive file GRID
 // (`repeat(auto-fill, minmax(160px, 1fr))` cells) instead of a single
-// narrow list. The 320px preview panel is NOT built — it needs the
-// session_id contract (audit C7) to source "来源会话" links, so it waits.
+// narrow list.
 //
+// R2 Wave C′ (design 11 来源回跳): rows whose index entry carries a
+// `session_id` (stamped backend-side at registration; historical rows have
+// none) grow a 「来源会话」 jump — the MemoryCard provenance pattern:
+// switchSession(sessionId) then navigate('/chat'). Absent stays absent.
+
 // The page owns no state of the files themselves — it is a VIEW over
 // references, consistent with the trust theme: nothing here sends anything.
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
@@ -30,6 +35,7 @@ import { formatRelativeTime } from '@/components/SidebarSessions'
 import { toastError } from '@/lib/errorToast'
 import { formatFileSize } from '@/components/chat/FileCard'
 import * as api from '@/lib/tauri-api'
+import { SessionContext } from '@/context/SessionContext'
 import { cn } from '@/lib/utils'
 import type { FileIndexEntry } from '@/types'
 
@@ -52,6 +58,8 @@ function fileTypeIcon(name: string): string {
 export default function FilesPage() {
   const intl = useIntl()
   const t = useT()
+  const navigate = useNavigate()
+  const sessionCtx = useContext(SessionContext)
   const [entries, setEntries] = useState<FileIndexEntry[] | null>(null)
   const [missing, setMissing] = useState<Record<string, boolean>>({})
   const [filter, setFilter] = useState<FilesFilter>('all')
@@ -103,6 +111,23 @@ export default function FilesPage() {
   const reveal = (entry: FileIndexEntry) => {
     api.revealInFolder(entry.path).catch(err => toastError(t('link.open.failed'), err))
   }
+
+  // R2 Wave C′: provenance jump — same pattern as the Memory page's
+  // handleOpenMemorySource (switchSession, then /chat). Only entries with a
+  // backend-stamped session_id get the button; failures toast instead of
+  // navigating.
+  const jumpToSource = useCallback(
+    async (entry: FileIndexEntry) => {
+      if (!entry.session_id) return
+      try {
+        await sessionCtx?.switchSession(entry.session_id)
+        navigate('/chat')
+      } catch (err) {
+        toastError(t('office.files.title'), err)
+      }
+    },
+    [navigate, sessionCtx, t],
+  )
 
   // Per-lens counts stay live even while another lens is active (the
   // missing count trails its probes by design — it is a detection result,
@@ -236,9 +261,10 @@ export default function FilesPage() {
                       <span
                         data-testid="files-row-missing"
                         role="note"
-                        className="text-warning font-label-xs"
+                        className="inline-flex items-center gap-xs px-sm py-[2px] rounded-lg border border-dashed border-warning/50 text-warning font-label-xs"
                       >
-                        · {t('office.files.missing')}
+                        <span className="material-symbols-outlined icon-xs" aria-hidden="true">folder_off</span>
+                        {t('office.files.missing')}
                       </span>
                     )}
                   </span>
@@ -265,6 +291,25 @@ export default function FilesPage() {
                     >
                       <span className="material-symbols-outlined icon-sm">folder_open</span>
                     </Button>
+                    {/* R2 Wave C′ (design 11 来源会话): provenance jump, only
+                        when the backend stamped a session at registration —
+                        historical rows render nothing (honest absence). The
+                        jump label spells itself out on hover/AT; the icon
+                        keeps the cell compact. */}
+                    {entry.session_id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid="files-row-source-jump"
+                        aria-label={t('office.files.sourceJump')}
+                        title={t('office.files.sourceJump')}
+                        onClick={() => void jumpToSource(entry)}
+                        className="ml-auto gap-xs text-label-xs text-on-surface-variant hover:text-primary hover:bg-surface-container"
+                      >
+                        <span className="material-symbols-outlined icon-sm">chat</span>
+                        {t('office.files.sourceJump')}
+                      </Button>
+                    )}
                   </div>
                 </li>
               )
