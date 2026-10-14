@@ -889,6 +889,19 @@ export class MobileDispatchHub {
   }
 
   /**
+   * D-4 (#401): does this device own the task behind this session id? The
+   * journal is the hub-side task→device attribution (B0), so ownership is
+   * `journal.some(record: task_id === sessionId && device_id === deviceId)`.
+   * Feeds the engine bridge's gated-query ownership rule: a device may
+   * steer its OWN task threads (the reply lands in the task thread instead
+   * of being rerouted to the device session); every other id keeps the
+   * cross-device hijack guard.
+   */
+  ownsTaskSession(deviceId: string, sessionId: string): boolean {
+    return this.journal.some((t) => t.task_id === sessionId && t.device_id === deviceId);
+  }
+
+  /**
    * Handle one prompt from a paired device: journal a task, announce
    * `query.started` (session_id = the task id — the phone builds its thread
    * from the dispatch response's id, §K3), and run the turn in the device's

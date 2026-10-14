@@ -29,15 +29,15 @@ test.describe('Provider model profiles + phase tiers (R3-2/R3-3)', () => {
     await expect(newRow.getByTestId('profile-switch-e2e-profile')).toBeVisible()
   })
 
-  test('the chat page carries the plan/act tier pair (composer, ex-Header)', async ({ page }) => {
+  test('the chat page no longer carries the plan/act tier pair (02c 裁决 D1 — Settings is the only home)', async ({ page }) => {
     await page.goto('/chat')
-    const switcher = page.getByTestId('phase-tier-switcher')
-    // The composer (the switcher's home since the Aurora redesign 2026-10;
-    // testid unchanged) mounts with /chat regardless of welcome-vs-composer
-    // state; the control reads the demo config (both tiers inherit by
-    // default).
-    await expect(switcher).toBeVisible({ timeout: 15000 })
-    await expect(switcher).toHaveAttribute('aria-label', /Inherit.*Inherit/)
+    // The 02c 收敛裁决 removed the PhaseTierSwitcher from the composer: it
+    // wrote a GLOBAL config from a per-chat surface, went inert whenever a
+    // session model override was active, and led with the user-hostile
+    // "继承" default. Settings → 模型 (next test) is the tier pair's only
+    // home now.
+    await page.getByRole('textbox', { name: 'Message' }).waitFor({ timeout: 15000 })
+    await expect(page.getByTestId('phase-tier-switcher')).toHaveCount(0)
   })
 
   test('Settings → Models shows the plan/act tier dropdowns with resolved models', async ({ page }) => {

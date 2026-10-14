@@ -15,6 +15,7 @@ import {
 import SkillDetailDrawer from "./SkillDetailDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
+import { SourcePinBadge } from "./SourcePinBadge";
 import LoadingState from "@/components/ui/loading-state";
 import ErrorState from "@/components/ui/error-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
@@ -405,6 +406,7 @@ export default function Skills() {
                     <div className="flex items-center gap-xs">
                       <span className="font-bold text-label-md text-on-surface truncate">{skill.name}</span>
                       {isAgentAuthored && <AgentAuthoredBadge />}
+                      <SourcePinBadge sourceCommit={skill.source_commit} refFloating={skill.ref_floating} />
                     </div>
                     <div className="text-label-xs text-on-surface-variant font-mono truncate">
                       {skill.path}

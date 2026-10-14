@@ -1,9 +1,11 @@
-// P2-5 — session-level "temporary chat" (memory bypass) composer toggle.
+// P2-5 + 02c 裁决 D4 — session-level "temporary chat" (memory bypass).
 //
-// Covers the control contract: the flag is read per focused session (never
-// stale after a switch), the toggle flips optimistically with rollback on
-// failure, and the active state is spelled out (banner + aria-pressed), not
-// just color-coded.
+// The toggle folded into the composer's "+" menu (the standalone composer
+// button is gone): the item keeps the `memory-bypass-toggle` testid and its
+// LABEL carries the state (开/关). Still covered: the flag is read per
+// focused session (never stale after a switch), the toggle flips
+// optimistically with rollback on failure, and the active state is spelled
+// out (banner + menu label), not just color-coded.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -95,6 +97,18 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
 const mockedGet = vi.mocked(api.getSessionMemoryBypass)
 const mockedSet = vi.mocked(api.setSessionMemoryBypass)
 
+/** Open the composer "+" menu (the toggle's home since 02c D4). */
+async function openPlusMenu() {
+  fireEvent.click(screen.getByTestId('composer-plus-menu'))
+  return await screen.findByTestId('memory-bypass-toggle')
+}
+
+const itemLabel = async (expected: RegExp) => {
+  const item = await openPlusMenu()
+  expect(item).toHaveTextContent(expected)
+  return item
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   dragDrop.handler = null
@@ -102,40 +116,42 @@ beforeEach(() => {
   mockedSet.mockResolvedValue(undefined)
 })
 
-describe('ChatInput memory bypass toggle', () => {
+describe('ChatInput memory bypass (+ menu item, 02c D4)', () => {
   it('reads the flag per focused session on mount', async () => {
     renderChatInput()
     await waitFor(() => expect(mockedGet).toHaveBeenCalledWith('sess-1'))
-    // Default (false): toggle off, no banner.
-    await waitFor(() => expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'false'))
+    // Default (false): no banner; the menu item reads "off".
     expect(screen.queryByTestId('memory-bypass-banner')).not.toBeInTheDocument()
+    await itemLabel(/temporary chat · off/i)
   })
 
-  it('restores an active bypass (banner + pressed state) after a session switch', async () => {
+  it('restores an active bypass (banner + menu label) after a session switch', async () => {
     mockedGet.mockResolvedValue(true)
     renderChatInput()
     await waitFor(() => expect(screen.getByTestId('memory-bypass-banner')).toBeInTheDocument())
-    expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'true')
+    await itemLabel(/temporary chat · on/i)
   })
 
-  it('toggles on and writes through to the backend', async () => {
+  it('toggles on from the + menu and writes through to the backend', async () => {
     renderChatInput()
-    await waitFor(() => expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'false'))
-    fireEvent.click(screen.getByTestId('memory-bypass-toggle'))
+    const item = await itemLabel(/temporary chat · off/i)
+    fireEvent.click(item)
     await waitFor(() => expect(mockedSet).toHaveBeenCalledWith('sess-1', true))
-    // Optimistic UI: pressed + banner without waiting for the round-trip.
-    expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'true')
+    // Optimistic UI: banner without waiting for the round-trip.
     expect(screen.getByTestId('memory-bypass-banner')).toBeInTheDocument()
+    // Reopening the menu shows the flipped state in the label.
+    await itemLabel(/temporary chat · on/i)
   })
 
   it('rolls the toggle back when the backend write fails', async () => {
     mockedSet.mockRejectedValue(new Error('disk full'))
     renderChatInput()
-    await waitFor(() => expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'false'))
-    fireEvent.click(screen.getByTestId('memory-bypass-toggle'))
+    const item = await itemLabel(/temporary chat · off/i)
+    fireEvent.click(item)
     await waitFor(() => expect(mockedSet).toHaveBeenCalledWith('sess-1', true))
-    await waitFor(() => expect(screen.getByTestId('memory-bypass-toggle')).toHaveAttribute('aria-pressed', 'false'))
-    expect(screen.queryByTestId('memory-bypass-banner')).not.toBeInTheDocument()
+    // Optimistic banner appears, then rolls back with the failed write.
+    await waitFor(() => expect(screen.queryByTestId('memory-bypass-banner')).not.toBeInTheDocument())
+    await itemLabel(/temporary chat · off/i)
   })
 
   it('re-reads the flag when the focused session changes', async () => {
@@ -150,5 +166,16 @@ describe('ChatInput memory bypass toggle', () => {
     }} />)
     await waitFor(() => expect(mockedGet).toHaveBeenCalledWith('sess-2'))
     await waitFor(() => expect(screen.queryByTestId('memory-bypass-banner')).not.toBeInTheDocument())
+  })
+
+  it('the standalone composer button is gone — the + menu trigger wears the dot when active', async () => {
+    mockedGet.mockResolvedValue(true)
+    renderChatInput()
+    await waitFor(() => expect(screen.getByTestId('memory-bypass-banner')).toBeInTheDocument())
+    // No always-visible toggle button anymore (02c D4 folded it away).
+    expect(screen.queryByTestId('memory-bypass-toggle')).not.toBeInTheDocument()
+    // The + trigger carries the active dot.
+    const plus = screen.getByTestId('composer-plus-menu').parentElement!
+    expect(plus.querySelector('span.bg-secondary')).not.toBeNull()
   })
 })

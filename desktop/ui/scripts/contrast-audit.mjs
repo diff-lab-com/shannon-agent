@@ -21,7 +21,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // per-theme override blocks are the generated themes.css.
 const indexCss = readFileSync(join(root, 'src', 'index.css'), 'utf8')
 const css = readFileSync(join(root, 'src', 'theme', 'generated', 'themes.css'), 'utf8')
-
 // ── Parse theme blocks ──────────────────────────────────────────────────────
 function parseVars(body) {
   const vars = {}
@@ -44,7 +43,14 @@ for (const m of css.matchAll(/\[data-theme='([\w-]+)'\]\s*\{([^}]+)\}/g)) {
 // scan src with the same rule the generator uses so both gates agree.
 const chipPatterns = chipCompositesInUse(join(root, 'src'))
 
-const failures = auditThemes(themes, { chipPatterns })
+// Theme modes come from the generated registry (same source the generator
+// gate uses) so the light-only pairs audit identically on both sides.
+const registrySrc = readFileSync(join(root, 'src', 'theme', 'generated', 'registry.ts'), 'utf8')
+const modes = Object.fromEntries(
+  [...registrySrc.matchAll(/\{\s*id:\s*'([\w-]+)',\s*mode:\s*'(light|dark)',?\s*\}/g)].map(m => [m[1], m[2]]),
+)
+
+const failures = auditThemes(themes, { chipPatterns, modes })
 const byTheme = new Map()
 for (const f of failures) {
   const rows = byTheme.get(f.theme) ?? []

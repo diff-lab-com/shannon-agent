@@ -308,6 +308,29 @@ fn parse_monthly_budget_usd(value: &str) -> Result<Option<f64>, String> {
     })
 }
 
+/// 补2 (design-parity R2 §7.1): parse the `manual_minutes_per_item` wire
+/// value — the Triage 本周节省 stat's per-item manual-work stand-in.
+/// Empty/whitespace clears back to the standing default (`None` = the UI
+/// falls back to 5 minutes/条); a non-numeric value is REJECTED so a typo
+/// cannot silently change the estimate; anything outside `1..=120` is
+/// rejected too (never clamped) — 0 minutes would fake "automation saves
+/// nothing" and huge values would inflate the savings number into fiction.
+fn parse_manual_minutes_per_item(value: &str) -> Result<Option<u32>, String> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let minutes: u32 = raw
+        .parse()
+        .map_err(|e| format!("Invalid manual_minutes_per_item `{raw}`: {e}"))?;
+    if !(1..=120).contains(&minutes) {
+        return Err(format!(
+            "Invalid manual_minutes_per_item `{raw}`: expected 1-120 minutes per item"
+        ));
+    }
+    Ok(Some(minutes))
+}
+
 /// Configuration update payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -762,6 +785,42 @@ where
         events::ConfigUpdatedPayload {
             key: update.key.clone(),
             value: stored_json,
+        },
+    );
+
+    Ok(())
+}
+
+/// Body of the `manual_minutes_per_item` arm of [`configure`] (补2, R2
+/// 审查 §7.1), with the disk persist step injected — same testability
+/// shape as [`apply_boolean_toggle_arm`]: tests capture the snapshot
+/// instead of writing the real `~/.shannon/desktop/config.json`. Validates
+/// via [`parse_manual_minutes_per_item`] (empty clears to the UI default,
+/// junk / out-of-range rejected), applies to the in-memory config (what
+/// [`get_config`] reads back), persists, then emits `CONFIG_UPDATED` with
+/// the canonical decimal string (`""` when cleared).
+async fn apply_manual_minutes_arm<R, P>(
+    state: &AppState,
+    app_handle: &tauri::AppHandle<R>,
+    update: &ConfigUpdate,
+    persist: P,
+) -> Result<(), String>
+where
+    R: tauri::Runtime,
+    P: FnOnce(DesktopConfig) -> Result<(), String>,
+{
+    let minutes = parse_manual_minutes_per_item(&update.value)?;
+    {
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.manual_minutes_per_item = minutes;
+    }
+    persist(state.desktop_config.read().await.clone())?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "manual_minutes_per_item".into(),
+            value: minutes.map(|m| m.to_string()).unwrap_or_default(),
         },
     );
 
@@ -1443,6 +1502,17 @@ pub async fn configure(
             );
 
             Ok(())
+        }
+        // 补2 (design-parity R2 §7.1): the Triage 本周节省 stat's estimation
+        // dial. Empty clears back to the UI's standing default (5 minutes
+        // per item); junk / out-of-range values are rejected so the
+        // estimate can never silently drift — see
+        // [`apply_manual_minutes_arm`].
+        "manual_minutes_per_item" => {
+            apply_manual_minutes_arm(state.inner(), &app_handle, &update, |cfg| {
+                config::save_config(&cfg)
+            })
+            .await
         }
         "clear_cache" => {
             // P0-4: clear the active session's message buffer instead of
@@ -3423,6 +3493,112 @@ mod tests {
         // A non-numeric non-empty value errors — a typo must not silently
         // drop the user's budget.
         assert!(parse_monthly_budget_usd("lots").is_err());
+    }
+
+    #[test]
+    fn manual_minutes_per_item_wire_value_rejects_out_of_range_and_typos() {
+        // 补2: empty/whitespace is the UI's default-5 gear — stored as None
+        // so the Triage footnote falls back to the standing estimate.
+        assert_eq!(parse_manual_minutes_per_item("").unwrap(), None);
+        assert_eq!(parse_manual_minutes_per_item("   ").unwrap(), None);
+        // In-range values survive trimming; both range ends are legal.
+        assert_eq!(parse_manual_minutes_per_item("5").unwrap(), Some(5));
+        assert_eq!(parse_manual_minutes_per_item(" 12 ").unwrap(), Some(12));
+        assert_eq!(parse_manual_minutes_per_item("1").unwrap(), Some(1));
+        assert_eq!(parse_manual_minutes_per_item("120").unwrap(), Some(120));
+        // Out of range on either end is REFUSED, never clamped — an
+        // estimate the backend silently bent would be a fiction the
+        // footnote prints.
+        assert!(parse_manual_minutes_per_item("0").is_err());
+        assert!(parse_manual_minutes_per_item("121").is_err());
+        assert!(parse_manual_minutes_per_item("99999").is_err());
+        // Junk and negatives error too.
+        assert!(parse_manual_minutes_per_item("soon").is_err());
+        assert!(parse_manual_minutes_per_item("-3").is_err());
+    }
+
+    #[tokio::test]
+    async fn configure_manual_minutes_per_item_round_trips_into_get_config() {
+        // 补2 allowlist key: the exact arm body `configure` runs, with the
+        // disk persist captured instead of written.
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::new()), "AppState managed once");
+        let tauri_state = app.state::<AppState>();
+        // Deterministic start: the standing default (None → the UI's 5).
+        tauri_state
+            .desktop_config
+            .write()
+            .await
+            .manual_minutes_per_item = None;
+
+        let persisted: std::sync::Mutex<Vec<DesktopConfig>> = std::sync::Mutex::new(Vec::new());
+        for (wire, stored) in [
+            ("8", Some(8u32)),
+            ("", None),
+            ("1", Some(1)),
+            ("120", Some(120)),
+        ] {
+            apply_manual_minutes_arm(
+                tauri_state.inner(),
+                app.handle(),
+                &ConfigUpdate {
+                    key: "manual_minutes_per_item".to_string(),
+                    value: wire.to_string(),
+                },
+                |cfg| {
+                    persisted.lock().unwrap().push(cfg);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_or_else(|e| panic!("configure manual_minutes_per_item `{wire}`: {e}"));
+
+            // The command's read-back path: `get_config` shows the value the
+            // write just persisted.
+            let shown = get_config(app.state::<AppState>()).await.unwrap();
+            assert_eq!(
+                shown.manual_minutes_per_item, stored,
+                "wire `{wire}` must round-trip into get_config"
+            );
+            let snapshot = persisted.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                snapshot.manual_minutes_per_item, stored,
+                "persisted `{wire}`"
+            );
+        }
+
+        // Rejected values never touch the config (nor the persist step).
+        let before = tauri_state
+            .desktop_config
+            .read()
+            .await
+            .manual_minutes_per_item;
+        for bad in ["0", "121", "99999", "soon", "-3"] {
+            let err = apply_manual_minutes_arm(
+                tauri_state.inner(),
+                app.handle(),
+                &ConfigUpdate {
+                    key: "manual_minutes_per_item".to_string(),
+                    value: bad.to_string(),
+                },
+                |_| panic!("persist must not run for a rejected value"),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.contains("Invalid manual_minutes_per_item"),
+                "`{bad}` must be refused: {err}"
+            );
+            assert_eq!(
+                tauri_state
+                    .desktop_config
+                    .read()
+                    .await
+                    .manual_minutes_per_item,
+                before,
+                "config untouched after rejecting `{bad}`"
+            );
+        }
     }
 
     #[test]

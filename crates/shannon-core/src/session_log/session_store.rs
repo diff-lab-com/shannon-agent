@@ -1068,6 +1068,14 @@ impl ExclusiveLogLock {
             .open(path)?;
         use fs2::FileExt;
         file.try_lock_exclusive().map_err(|source| {
+            #[cfg(all(test, unix))]
+            {
+                eprintln!(
+                    "FLOCK-HELD-DIAG path={}\n{}",
+                    path.display(),
+                    super::debug_flock_holders(path)
+                );
+            }
             SessionStoreError::Log(super::SessionLogError::AlreadyLocked {
                 path: path.to_path_buf(),
                 source,
@@ -2605,6 +2613,17 @@ mod tests {
         let id = Uuid::new_v4();
         seed_three_turn_session(&store, &id);
 
+        // The re-open failure dump is unix-only (/proc); windows degrades to
+        // the plain unwrap.
+        #[cfg(unix)]
+        let live = SessionLogWriter::open_layout(store.container(), &id.to_string())
+            .unwrap_or_else(|e| {
+                panic!(
+                    "writer must re-open after the seed writer dropped: {e}\n{}",
+                    super::super::debug_flock_holders(&store.log_path(&id))
+                );
+            });
+        #[cfg(not(unix))]
         let live = SessionLogWriter::open_layout(store.container(), &id.to_string()).unwrap();
         let err = store.delete(&id).unwrap_err();
         assert!(

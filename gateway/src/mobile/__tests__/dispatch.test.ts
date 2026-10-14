@@ -231,6 +231,24 @@ describe("mobile dispatch — hub & handlers", () => {
     await vi.waitFor(() => expect(hub.listTasks("dev-1")[0]!.agent_id).toBeNull());
   });
 
+  it("ownsTaskSession mirrors the journal's task→device attribution (D-4 #401)", async () => {
+    const hub = new MobileDispatchHub({ logger });
+    hub.setSubmit(async () => {});
+    const handlers = createTaskHandlers({ hub });
+    const ctx = fakeCtx("dev-1");
+
+    const res: any = await handlers["shannon/task.dispatch"]!({ prompt: "own thread" }, ctx);
+    expect(res.kind).toBe("result");
+    const taskId = res.result.task.id as string;
+    await vi.waitFor(() => expect(hub.listTasks("dev-1")).toHaveLength(1));
+
+    // The owner device steers its own task thread; every other combination
+    // (foreign device, unknown session id) is rejected.
+    expect(hub.ownsTaskSession("dev-1", taskId)).toBe(true);
+    expect(hub.ownsTaskSession("dev-2", taskId)).toBe(false);
+    expect(hub.ownsTaskSession("dev-1", "not-a-task")).toBe(false);
+  });
+
   it("dispatch answers the §K task object synchronously and journals the task", async () => {
     const hub = new MobileDispatchHub({ logger });
     const seen: NormalizedInbound[] = [];

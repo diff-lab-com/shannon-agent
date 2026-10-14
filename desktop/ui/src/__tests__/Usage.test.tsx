@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
+import { save } from '@tauri-apps/plugin-dialog'
 import Usage from '@/pages/Usage'
 import { AppProvider } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
@@ -22,6 +23,16 @@ const fixture: UsageStats = {
   by_model: [{ label: 'claude-sonnet-4-6', ...bucket }],
   by_provider: [{ label: 'anthropic', ...bucket }],
   by_day: [{ label: '2024-01-02', ...bucket }],
+}
+
+// Same local-day labelling the backend uses for by_day buckets (and the
+// page's own localDayKey helper) — needed so the vs-yesterday hint can be
+// derived against real calendar keys.
+function dayKey(offsetDays: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - offsetDays)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 function renderUsage() {
@@ -137,6 +148,104 @@ describe('Usage page', () => {
     await waitFor(() => expect(screen.getByTestId('usage-stat-cache-hit-rate')).toBeInTheDocument())
     expect(screen.getByTestId('usage-stat-cache-hit-rate')).toHaveTextContent('4.8%')
     expect(screen.getByTestId('usage-stat-today-cost')).toHaveTextContent('$0.00')
+  })
+
+  // M5b (设计 06 KPI 第二行「较昨日 ±N%」): today vs yesterday, both from
+  // by_day local-day buckets. (0.50 − 0.25) / 0.25 → +100%. No yesterday
+  // bucket → the honest "—" (vs yesterday —), never a fabricated percent.
+  it('derives the vs-yesterday hint on the Today-spend card from by_day', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue({
+      ...fixture,
+      by_day: [
+        { label: dayKey(1), ...bucket, cost_usd: 0.25 },
+        { label: dayKey(0), ...bucket, cost_usd: 0.5 },
+      ],
+    })
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByTestId('usage-stat-today-cost')).toBeInTheDocument())
+    expect(screen.getByTestId('usage-stat-today-cost')).toHaveTextContent('vs yesterday +100%')
+  })
+
+  it('shows a dash for the vs-yesterday hint when yesterday has no bucket', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue({
+      ...fixture,
+      by_day: [{ label: dayKey(0), ...bucket, cost_usd: 0.5 }],
+    })
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByTestId('usage-stat-today-cost')).toBeInTheDocument())
+    expect(screen.getByTestId('usage-stat-today-cost')).toHaveTextContent('vs yesterday —')
+  })
+
+  // M4 (设计 06 KPI 四卡之四「上下文峰值」): the session-index maximum of
+  // SessionInfo.max_context_tokens, with the holding session's title as the
+  // hint. No session ever logged a window → honest "—".
+  it('renders the context-peak KPI card from the session index', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    vi.mocked(api.listSessions).mockResolvedValue([
+      {
+        id: 'sess-a', title: 'Fix billing webhook', created_at: 0, message_count: 2,
+        max_context_tokens: 200000,
+      },
+      {
+        id: 'sess-b', title: 'Small chat', created_at: 0, message_count: 1,
+        max_context_tokens: 96000,
+      },
+    ])
+    renderUsage()
+
+    const card = await screen.findByTestId('usage-stat-context-peak')
+    expect(card).toHaveTextContent('Context peak')
+    expect(card).toHaveTextContent('200K')
+    expect(card).toHaveTextContent('Fix billing webhook')
+    vi.mocked(api.listSessions).mockResolvedValue([]) // 还原,避免泄漏到其他用例
+  })
+
+  it('shows a dash on the context-peak card when no session recorded a window', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage() // setup default: listSessions → []
+
+    const card = await screen.findByTestId('usage-stat-context-peak')
+    expect(card).toHaveTextContent('—')
+    expect(card).toHaveTextContent('No session window recorded')
+  })
+
+  // M5a (设计 06:158 页头「导出 CSV」): one CSV with a `section` column —
+  // the active range's by_day buckets plus the per-session detail — written
+  // through the native save dialog (plugin-dialog save + save_text_file).
+  it('exports by_day and per-session detail as one CSV via the save dialog', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    vi.mocked(api.getUsageBySession).mockResolvedValue([
+      {
+        sessionId: 'sess-a', title: 'Fix billing webhook', inputTokens: 10, outputTokens: 5,
+        cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0.1, requests: 1,
+        lastUsedAtMs: 1_700_000_000_000,
+      },
+    ])
+    vi.mocked(save).mockResolvedValue('/tmp/shannon-usage.csv')
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }))
+    await waitFor(() => expect(api.saveTextFile).toHaveBeenCalledWith(
+      '/tmp/shannon-usage.csv',
+      expect.stringContaining('section,label,input_tokens'),
+    ))
+    const csv = vi.mocked(api.saveTextFile).mock.calls[0][1]
+    expect(csv).toContain(`by_day,2024-01-02,1000,500,100,50,0.25,3`)
+    expect(csv).toContain('by_session,Fix billing webhook,10,5,0,0,0.1,1')
+    vi.mocked(save).mockResolvedValue(null) // 还原 setup 默认(取消)
+  })
+
+  it('writes nothing when the save dialog is cancelled', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    renderUsage()
+
+    await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }))
+    await waitFor(() => expect(save).toHaveBeenCalled())
+    expect(api.saveTextFile).not.toHaveBeenCalled()
   })
 
   // 设计 06: the daily chart carries the Token/成本 metric toggle — the

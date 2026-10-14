@@ -1,8 +1,10 @@
 // SessionUsageDialog — composer 一键弹出的会话用量弹框(2026-09 三项 UX 修复 #3)。
 // 验证:
-//   - 有会话:六类 breakdown + 预算摘要行("已花费 / 上限") + 预算编辑入口(BudgetDialog 文案复用)。
+//   - 有会话:六类 breakdown + 峰值行(设计稿 02c S3)+ 预算摘要行
+//     ("花费 / 预算余",W7 口径)+ 预算编辑入口(BudgetDialog 文案复用)。
 //   - "查看完整用量"按钮:先关弹框再跳到 /usage。
 //   - 无会话:显示空态,跳转按钮禁用。
+//   - 诚实契约:SessionInfo.max_context_tokens 缺席时峰值行整行隐藏(W8)。
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -10,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import * as api from '@/lib/tauri-api'
-import type { ContextBreakdown } from '@/types'
+import type { ContextBreakdown, SessionInfo } from '@/types'
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<object>('@/lib/tauri-api')
@@ -24,8 +26,11 @@ vi.mock('@/lib/tauri-api', async () => {
 })
 // 全局 setup.ts 已 mock @tauri-apps/api/event(useSessionBudget 的 listen)。
 
-// 可变句柄:无会话用例在渲染前置 null。
-const sessionCtx = vi.hoisted(() => ({ currentSessionId: 'sess-1' as string | null }))
+// 可变句柄:无会话用例在渲染前置 null;峰值用例替换 sessions。
+const sessionCtx = vi.hoisted(() => ({
+  currentSessionId: 'sess-1' as string | null,
+  sessions: [] as { id: string; title: string; created_at: number; message_count: number; max_context_tokens?: number }[],
+}))
 // The real `SessionContext` export stays (ContextBreakdownCard consumes it
 // via useContext) — only the hook is overridden.
 vi.mock('@/context/SessionContext', async (importOriginal) => {
@@ -55,9 +60,19 @@ const breakdown: ContextBreakdown = {
   ],
 }
 
+const peakSession: SessionInfo = {
+  id: 'sess-1',
+  title: 'Fix billing webhook',
+  created_at: 0,
+  message_count: 1,
+  max_context_tokens: 96000,
+}
+
 describe('SessionUsageDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    sessionCtx.currentSessionId = 'sess-1'
+    sessionCtx.sessions = [peakSession]
     vi.mocked(api.getSessionContextBreakdown).mockResolvedValue(breakdown)
     vi.mocked(api.getSessionUsage).mockResolvedValue({
       input_tokens: 600, output_tokens: 400, cache_creation_tokens: 0,
@@ -66,13 +81,33 @@ describe('SessionUsageDialog', () => {
     vi.mocked(api.getSessionBudget).mockResolvedValue(5)
   })
 
-  it('renders the six-category breakdown and budget line', async () => {
+  it('renders the six-category breakdown and the budget-remaining line', async () => {
     render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
     await waitFor(() => expect(screen.getByText('System prompt')).toBeInTheDocument())
-    // 预算摘要行:已花费 / 上限
-    expect(screen.getByText(/\$0\.0123 \/ \$5\.00/)).toBeInTheDocument()
+    // W7 (设计稿 02c S3): 预算行口径 = 花费 / 预算余(上限 − 已花)
+    expect(screen.getByText(/\$0\.0123 \/ \$4\.9877/)).toBeInTheDocument()
+    expect(screen.getByText(/left in budget/)).toBeInTheDocument()
     // 设置预算入口(复用 BudgetDialog 文案)
     expect(screen.getByRole('button', { name: /set session budget/i })).toBeInTheDocument()
+  })
+
+  // W8 (设计稿 02c S3「窗口峰值 96k」): the row reads SessionInfo
+  // .max_context_tokens — the session-index peak; compact formatting like
+  // the rail chip (96000 → "96K" in en).
+  it('renders the session peak row from the session index', async () => {
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    const peak = await screen.findByTestId('session-usage-peak')
+    expect(peak).toHaveTextContent('Session peak')
+    expect(peak).toHaveTextContent('96K')
+  })
+
+  // 诚实契约:数字缺席即隐藏 — no max_context_tokens on the session → the
+  // whole row is gone, never a guessed window.
+  it('hides the peak row when the session has no recorded peak', async () => {
+    sessionCtx.sessions = [{ id: 'sess-1', title: 'Fix billing webhook', created_at: 0, message_count: 1 }]
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    await waitFor(() => expect(screen.getByText('System prompt')).toBeInTheDocument())
+    expect(screen.queryByTestId('session-usage-peak')).not.toBeInTheDocument()
   })
 
   it('links to the full usage page and closes first', async () => {

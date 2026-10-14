@@ -534,9 +534,10 @@ describe("createEngineHandlers (P1.1b)", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/api/approval/mode") && (init as RequestInit | undefined)?.method === "POST") {
-        return jsonResponse(200, { mode: "readonly" });
+        return jsonResponse(200, { mode: "readonly", source: "session" });
       }
-      return jsonResponse(200, { mode: "auto-edit" });
+      // #400 follow-up: the engine reports the EFFECTIVE mode + its source.
+      return jsonResponse(200, { mode: "ask", source: "settings" });
     });
     const handlers = createEngineHandlers({
       engineWsUrl: "ws://127.0.0.1:9",
@@ -550,10 +551,10 @@ describe("createEngineHandlers (P1.1b)", () => {
     const socket = await connect(port);
     const stateRes = await rpc(socket, "shannon/approval.state", {});
     expect(stateRes.error).toBeUndefined();
-    expect(stateRes.result).toEqual({ mode: "auto-edit" });
+    expect(stateRes.result).toEqual({ mode: "ask", source: "settings" });
 
     const setRes = await rpc(socket, "shannon/approval.set", { mode: "readonly" });
-    expect(setRes.result).toEqual({ mode: "readonly" });
+    expect(setRes.result).toEqual({ mode: "readonly", source: "session" });
     const post = fetchMock.mock.calls.find(
       ([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST",
     );
@@ -570,6 +571,32 @@ describe("createEngineHandlers (P1.1b)", () => {
     expect(
       fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/api/approval/mode") && (i as RequestInit).method === "POST"),
     ).toHaveLength(1);
+    socket.close();
+  });
+
+  it("approval.state degrades to source:null for an engine predating the source key (#400 follow-up)", async () => {
+    const jsonResponse = (status: number, body: unknown): Response =>
+      ({
+        status,
+        ok: status >= 200 && status < 300,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response;
+    // Old engine: no `source` key at all.
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse(200, { mode: "auto-edit" }));
+    const handlers = createEngineHandlers({
+      engineWsUrl: "ws://127.0.0.1:9",
+      engineHttpBaseUrl: "http://engine:33420",
+      version: "test",
+      logger,
+      engineClientFactory: fakeFactory({ current: null }, { script: [] }),
+      fetchImpl: fetchMock,
+    });
+    const { port } = await start(handlers);
+    const socket = await connect(port);
+    const stateRes = await rpc(socket, "shannon/approval.state", {});
+    expect(stateRes.error).toBeUndefined();
+    expect(stateRes.result).toEqual({ mode: "auto-edit", source: null });
     socket.close();
   });
 

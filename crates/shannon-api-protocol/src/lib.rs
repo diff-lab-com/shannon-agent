@@ -206,8 +206,19 @@ pub struct ApprovalRespondRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct ApprovalModeState {
     /// One of the seven approval tokens (`ask`, `plan`, `auto-edit`,
-    /// `full-auto`, `readonly`, `dontAsk`, `bypassPermissions`).
+    /// `full-auto`, `readonly`, `dontAsk`, `bypassPermissions`). As of the
+    /// #400 follow-up this is the EFFECTIVE mode a new query on the session
+    /// would run under — no longer the hardcoded "auto-edit" display
+    /// placeholder when nothing is stored.
     pub mode: String,
+    /// Where the effective mode comes from: `"session"` (a stored
+    /// per-session token — mobile tighten / desktop switcher), `"ambient"`
+    /// (the desktop host's configured default), `"settings"` (a settings
+    /// `permissions.defaultMode`), `"profile"` (a permission profile), or
+    /// `"default"` (the struct default). Null when served by an engine
+    /// predating this field.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// P3-3: body for `POST /api/approval/mode`. The mobile gateway may only

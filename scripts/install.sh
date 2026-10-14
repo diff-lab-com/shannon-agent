@@ -9,6 +9,15 @@
 #   SHANNON_COMPONENTS=cli,gateway
 #   SHANNON_COMPONENTS=desktop    # desktop bundle only
 #
+# Provenance (opt-in):
+#   SHANNON_VERIFY_ATTESTATION=1  # verify every download against the repo's
+#                                 # build-provenance attestations (SLSa-style,
+#                                 # recorded by the release workflow; needs the
+#                                 # GitHub CLI `gh` in PATH). Independent of
+#                                 # the checksum check: SHA256SUMS pins the
+#                                 # bytes, the attestation pins their origin.
+#                                 # Human view: the repo's /attestations page.
+#
 # This script detects your OS and architecture, downloads the latest Shannon
 # Agent binaries (CLI + gateway) and desktop bundle, verifies their SHA-256
 # checksums (per-asset sidecar or the release-wide SHA256SUMS), and installs
@@ -138,6 +147,19 @@ download_verify() {
       fi
     fi
   fi
+  # Opt-in build-provenance verification (release workflow records SLSa-style
+  # attestations for every distributable). Complements the checksum above:
+  # SHA256SUMS pins the bytes against the release, the attestation pins them
+  # against this repo's recorded builds — a compromised release bucket passes
+  # the hash check only if the manifest is compromised too, while attestation
+  # fails for any content the workflow never built.
+  if [ "${SHANNON_VERIFY_ATTESTATION:-0}" = "1" ]; then
+    command -v gh >/dev/null 2>&1 \
+      || err "SHANNON_VERIFY_ATTESTATION=1 requires the GitHub CLI (gh >= 2.44, has the 'attestation' command) in PATH"
+    info "Verifying build attestation..."
+    gh attestation verify "$dst" -R "$REPO_URL" >/dev/null \
+      || err "Attestation verification failed for $1 — this file does not match any build recorded by the repo. Do not install."
+  fi
   printf '%s' "$dst"
 }
 
@@ -187,9 +209,32 @@ fi
 
 # ── Desktop bundle ─────────────────────────────────────────────────────────
 
+# Warn when the system PipeWire looks too old for the desktop capture stack
+# (the bundles are built against Ubuntu 24.04-era 1.0.x SPA headers). Warn
+# only — never blocks: the app may install and run fine, capture is what
+# breaks, and a false warning beats blocking a curl|sh install.
+warn_old_pipewire() {
+  PW=""
+  if command -v dpkg-query >/dev/null 2>&1; then
+    PW="$(dpkg-query -W -f='${Version}' libpipewire-0.3-0 2>/dev/null || true)"
+  elif command -v rpm >/dev/null 2>&1; then
+    PW="$(rpm -q --qf '%{VERSION}' pipewire-libs 2>/dev/null || true)"
+  fi
+  [ -n "$PW" ] || return 0
+  # dpkg versions carry epoch/revision ("1.0.7-3~ubuntu22.04") — prefix match.
+  case "$PW" in
+    1.*|2.*) ;;
+    0.3.4[0-8]|0.3.4[0-8].*|0.3.4[0-8]-*)
+      warn "PipeWire $PW is known to be too old for the desktop capture stack (built against 1.0.x) — the app installs, but screen/preview capture may not work. Upgrade PipeWire or use Ubuntu 24.04+. CLI/gateway are unaffected." ;;
+    0.*)
+      warn "PipeWire $PW may be too old for the desktop capture stack (built against 1.0.x). If capture misbehaves, upgrade PipeWire. CLI/gateway are unaffected." ;;
+  esac
+}
+
 install_desktop() {
   case "$OS" in
     Linux)
+      warn_old_pipewire
       DEB="$(download_verify "$DESKTOP" 2>/dev/null || true)"
       RPM="$(download_verify "shannon-desktop-${VERSION}-1.x86_64.rpm" 2>/dev/null || true)"
       if [ -n "$DEB" ] && [ -f "$DEB" ]; then

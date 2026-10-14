@@ -175,10 +175,18 @@ export default function Tasks() {
   // IA T2 (互链闭环): Triage cards link here with { openRoutineId } in the
   // router state — open that routine's drawer, then drain the state so a
   // refresh doesn't re-open it.
+  // 补3 (R2 审查 §7.1): failed Triage cards additionally hand over
+  // `focusError` — the drawer must then anchor its last-error block (scroll
+  // + one-shot highlight). Snapshotted into local state alongside the
+  // routine id (the drain below wipes the router state) and cleared again
+  // when the drawer closes (Esc / close button / backdrop).
+  const [focusRoutineError, setFocusRoutineError] = useState(false)
   useEffect(() => {
-    const openRoutineId = (location.state as { openRoutineId?: string } | null)?.openRoutineId
+    const state = location.state as { openRoutineId?: string; focusError?: boolean } | null
+    const openRoutineId = state?.openRoutineId
     if (openRoutineId) {
       setSelectedRoutineId(openRoutineId)
+      setFocusRoutineError(state?.focusError === true)
       navigate(location.pathname, { replace: true })
     }
   }, [location.state, location.pathname, navigate])
@@ -617,7 +625,15 @@ export default function Tasks() {
       <RoutineDetailDrawer
         routine={selectedRoutine}
         routines={scheduledTasks}
-        onClose={() => setSelectedRoutineId(null)}
+        // 补3 (R2 审查 §7.1): one-shot error anchor from Triage's 「查看日志」
+        // — the drawer scrolls to its last_error block and flashes it.
+        focusLastError={focusRoutineError}
+        onClose={() => {
+          setSelectedRoutineId(null)
+          // Esc / 关闭 clears the hand-over state too — reopening the same
+          // routine from the calendar must NOT re-flash the old error.
+          setFocusRoutineError(false)
+        }}
         // B3 P1-25: the editors save via update_scheduled_task directly, so
         // without this wire the drawer, DAG, calendar and queued-chips all
         // kept showing the pre-edit values until a full page remount.

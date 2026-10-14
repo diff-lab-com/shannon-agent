@@ -89,6 +89,50 @@ describe('Tasks page', () => {
     expect(screen.queryByRole('dialog', { name: /Routine detail/i })).not.toBeInTheDocument()
   })
 
+  // 补3 (design-parity R2 §7.1): Triage's 「查看日志」 hands over
+  // { openRoutineId, focusError } — the drawer opens AND anchors its
+  // last_error block: scrollIntoView fires on the block and the one-shot
+  // ring (data-error-flash + ring class) is applied. Closing the drawer
+  // (Esc button path) unmounts the block with the flag cleared.
+  it('anchors the last_error block when the deep link carries focusError', async () => {
+    const proto = Element.prototype as unknown as Record<string, unknown>
+    const prev = proto.scrollIntoView
+    const scrollSpy = vi.fn()
+    proto.scrollIntoView = scrollSpy
+    vi.mocked(api.listScheduledTasks).mockResolvedValue([
+      {
+        id: 'r-42',
+        name: 'Digest routine',
+        prompt: 'Do the digest',
+        trigger_type: 'cron',
+        enabled: true,
+        last_error: 'disk full',
+      },
+    ] as any)
+    try {
+      render(
+        wrap(<Tasks />, {
+          pathname: '/tasks',
+          state: { openRoutineId: 'r-42', focusError: true },
+        }),
+      )
+      const block = await screen.findByTestId('routine-last-error')
+      expect(block).toHaveAttribute('data-error-flash', 'true')
+      expect(block.className).toContain('ring-2')
+      expect(block).toHaveTextContent('disk full')
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled())
+      const scrolled = scrollSpy.mock.calls.findIndex((_, i) => scrollSpy.mock.instances[i] === block)
+      expect(scrolled).toBeGreaterThanOrEqual(0)
+      // Esc / 关闭 clears the hand-over state — the drawer (and its block)
+      // goes away with the routine deselected.
+      fireEvent.click(screen.getByRole('button', { name: /Close drawer/i }))
+      await waitFor(() => expect(screen.queryByTestId('routine-last-error')).not.toBeInTheDocument())
+      expect(screen.queryByRole('dialog', { name: /Routine detail/i })).not.toBeInTheDocument()
+    } finally {
+      proto.scrollIntoView = prev
+    }
+  })
+
   // B4 裁决 (audit R1 §09 / R3-V-12): Simple mode has no sidebar entry for
   // the Mission Control — the tasks page carries the promised entry card.
   it('shows the Mission Control entry card in simple mode', async () => {

@@ -10,6 +10,7 @@ mod eval_cmd;
 mod loop_command;
 mod mcp_install;
 mod notifications;
+mod self_update;
 mod signals;
 mod trace;
 mod triggered_command;
@@ -1046,6 +1047,38 @@ enum Commands {
 
     /// Self-update: check GitHub for a newer release and print upgrade steps.
     Update,
+
+    /// Download, signature-verify and atomically replace this binary from
+    /// the signed release channel (latest.json). Explicit user command —
+    /// complements the desktop's notify-only promise, never automates it.
+    SelfUpdate {
+        /// Assume yes — skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+
+        /// Channel URL override (default: the GitHub latest-download surface;
+        /// SHANNON_UPDATE_URL also works).
+        #[arg(long)]
+        url: Option<String>,
+
+        /// MAINTENANCE (release pipeline): emit a signed latest.json from a
+        /// SHA256SUMS file instead of updating. Requires
+        /// SHANNON_LATEST_SIGNING_KEY in the environment.
+        #[arg(long, requires = "tag", requires = "sums")]
+        emit_channel: bool,
+
+        /// Release tag for --emit-channel (e.g. v0.14.2).
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// SHA256SUMS path for --emit-channel.
+        #[arg(long)]
+        sums: Option<std::path::PathBuf>,
+
+        /// URL base the emitted asset links point at.
+        #[arg(long)]
+        url_base: Option<String>,
+    },
 
     /// Run diagnostics: check toolchain, ports, and services.
     ///
@@ -2205,10 +2238,16 @@ fn run_noninteractive_query(
             permissions.register_tool_read_only(name, ro);
         }
 
-        // Non-interactive mode: use full-auto by default (allows all non-critical tools),
-        // or bypassPermissions with --yes flag (allows everything including critical).
-        // An explicit --permission-mode wins over both defaults (it was silently
-        // ignored on this path before — roadmap E7 QA finding).
+        // Non-interactive mode defaults, tightest-first:
+        //   explicit --permission-mode  >  --yes (bypassPermissions)
+        //   >  the user-configured mode (permission profile or settings
+        //      `permissions.defaultMode` — #400: headless runs honor it; this
+        //      path used to clobber it with full-auto unconditionally)
+        //   >  full-auto (allows all non-critical tools) when nothing is
+        //      configured.
+        // A configured conservative mode (e.g. `ask`) has no approval outlet
+        // on this headless path, so non-pre-approved tools fail closed
+        // (denied + audited) — pass --permission-mode to override.
         if let Some(mode) = permission_mode {
             let mode = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
                 .ok_or_else(|| anyhow::anyhow!("unknown --permission-mode '{mode}'"))?;
@@ -2223,6 +2262,13 @@ fn run_noninteractive_query(
                 "Warning: --yes enables bypassPermissions (all checks skipped). Refused as root / with SHANNON_DISABLE_BYPASS=1."
             );
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::BypassPermissions);
+        } else if permissions.approval_mode_from_config() {
+            let configured = permissions.approval_mode();
+            eprintln!(
+                "Notice: headless run honoring the configured approval mode '{configured}' \
+                 (permission profile / settings defaultMode). Without an interactive approver, \
+                 non-pre-approved tools are denied — pass --permission-mode to override."
+            );
         } else {
             permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         }
@@ -2788,6 +2834,13 @@ fn run_headless_query(
             permissions.register_tool_read_only(name, ro);
         }
 
+        // Mode resolution, tightest-first (#400): explicit --permission-mode
+        // > --yes (bypassPermissions) > the user-configured mode (permission
+        // profile / settings defaultMode — this path used to clobber it with
+        // full-auto unconditionally) > full-auto when nothing is configured.
+        // A configured conservative mode (e.g. `ask`) has no approval outlet
+        // on this headless path, so non-pre-approved tools fail closed
+        // (denied + audited) — pass --permission-mode to override.
         let resolved_mode = match permission_mode {
             Some(mode) => {
                 let parsed = shannon_engine::permissions::ApprovalMode::from_str_ci(mode)
@@ -2804,6 +2857,15 @@ fn run_headless_query(
             None if yes => {
                 shannon_engine::permissions::ensure_bypass_allowed().map_err(|e| anyhow::anyhow!(e))?;
                 shannon_engine::permissions::ApprovalMode::BypassPermissions
+            }
+            None if permissions.approval_mode_from_config() => {
+                let configured = permissions.approval_mode();
+                eprintln!(
+                    "Notice: headless run honoring the configured approval mode '{configured}' \
+                     (permission profile / settings defaultMode). Without an interactive approver, \
+                     non-pre-approved tools are denied — pass --permission-mode to override."
+                );
+                configured
             }
             None => shannon_engine::permissions::ApprovalMode::FullAuto,
         };
@@ -5691,7 +5753,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     // inspect a downgraded directory. `SHANNON_ALLOW_DOWNGRADE=1` overrides.
     let gate_exempt = matches!(
         cli.command,
-        Some(Commands::Doctor { .. }) | Some(Commands::Update)
+        Some(Commands::Doctor { .. }) | Some(Commands::Update) | Some(Commands::SelfUpdate { .. })
     );
     if !gate_exempt {
         shannon_core::data_meta::check_and_record().map_err(anyhow::Error::msg)?;
@@ -5987,6 +6049,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Desktop { .. })
         | Some(Commands::Gateway { .. })
         | Some(Commands::Update)
+        | Some(Commands::SelfUpdate { .. })
         | Some(Commands::Doctor { .. })
         | Some(Commands::ListProviders { .. })
         | Some(Commands::Providers { .. })
@@ -6338,6 +6401,39 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         }
         Some(Commands::Update) => {
             run_update_command()?;
+        }
+        Some(Commands::SelfUpdate {
+            yes,
+            url,
+            emit_channel,
+            tag,
+            sums,
+            url_base,
+        }) => {
+            if emit_channel {
+                let key = std::env::var("SHANNON_LATEST_SIGNING_KEY").map_err(|_| {
+                    anyhow::anyhow!(
+                        "SHANNON_LATEST_SIGNING_KEY is not set — the signing key lives in the repo's Actions secrets"
+                    )
+                })?;
+                let sums_text =
+                    std::fs::read_to_string(sums.as_deref().expect("clap requires --sums"))?;
+                let doc = self_update::emit_channel(
+                    tag.as_deref().expect("clap requires --tag"),
+                    url_base.as_deref().unwrap_or(
+                        "https://github.com/diff-lab-com/shannon-agent/releases/download",
+                    ),
+                    &sums_text,
+                    &key,
+                )?;
+                println!("{doc}");
+            } else {
+                // An explicit --url wins over SHANNON_UPDATE_URL.
+                let channel_url = url
+                    .clone()
+                    .or_else(|| std::env::var("SHANNON_UPDATE_URL").ok());
+                self_update::run(channel_url.as_deref(), yes)?;
+            }
         }
         Some(Commands::Doctor { json, deep }) => {
             run_doctor_command(json, deep)?;

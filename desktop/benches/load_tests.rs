@@ -51,6 +51,8 @@ fn synthetic_tasks(n: usize) -> Vec<TaskInfo> {
             execution_mode: None,
             team: None,
             cost_usd: None,
+            blocked_reason: None,
+            blocked_since_ms: None,
         })
         .collect()
 }

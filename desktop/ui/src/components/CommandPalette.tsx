@@ -66,11 +66,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },
       { id: 'p-today', label: t('palette.page.today'), icon: 'today', category: t('palette.category.pages'), action: () => navigate('/tasks') },
-      { id: 'p-tasks', label: t('nav.scheduled'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks'),
-        // IA 2026-09 (T1 术语一轨): the page now displays as「自动化」, but
-        // users who still think of it as「任务」must keep landing on it —
-        // the old term survives in the search layer only, never in the copy.
-        synonyms: ['已排程', 'scheduled', '定时任务', '任务', 'tasks'] },
+      { id: 'p-tasks', label: t('nav.tasks'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks'),
+        // R3 术语终检 (§一 wording audit): sidebar/header/H1 all say「任务」—
+        // the palette was the last surface still showing「自动化」(IA 2026-09
+        // T1 半截迁移). The retired term survives in the search layer only.
+        synonyms: ['自动化', '已排程', 'scheduled', '定时任务', 'tasks'] },
+      { id: 'p-usage', label: t('header.title.usage'), icon: 'monitoring', category: t('palette.category.pages'), action: () => navigate('/usage'),
+        synonyms: ['成本', 'cost', 'budget', '预算', 'usage'] },
       { id: 'p-inbox', label: t('nav.triage'), icon: 'inbox', category: t('palette.category.pages'), action: () => navigate('/triage'),
         synonyms: ['triage', '分流队列', '分诊'] },
       { id: 'p-ext', label: t('palette.page.extensionsHub'), icon: 'grid_view', category: t('palette.category.pages'), action: () => navigate('/extensions'),

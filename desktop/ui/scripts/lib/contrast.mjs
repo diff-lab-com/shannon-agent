@@ -100,6 +100,21 @@ export const PAIRS = [
   ['outline', 'background', 3.0, 'borders / iconography vs background'],
 ]
 
+// Light-mode-only pairs (存2 light-sweep 2026-10-14, ADVERSARIAL-REVIEW F-19).
+// The `['outline', …]` entry above only ever matched the bare shadcn
+// `--outline` token, which NO registry theme defines — the check was
+// dormant since the normalization fix, so every theme's real border token
+// (`--color-outline`, 613 `border-outline` call sites) went ungated. On
+// light themes a sub-3:1 outline reads as vanishing borders/inputs
+// (solarized-light shipped at 2.48:1); dark themes are deliberately exempt
+// — their hairline outlines are decorative layering over near-black fills
+// (2.3–4.0:1 across the six dark themes is the authored look), and gating
+// them would force a dark-appearance change this task must not make.
+// Applied only to themes whose registry mode is `light` (see auditThemes).
+export const LIGHT_ONLY_PAIRS = [
+  ['color-outline', 'color-background', 3.0, 'light-mode borders / iconography vs background (WCAG 1.4.11 non-text)'],
+]
+
 // Chart data colors (`--chart-series-*`) are deliberately OUTSIDE this
 // contract and must stay there (2026-10-03 destructive-alignment 裁定):
 // they are categorical data marks, not UI indicators — WCAG 1.4.1 (use of
@@ -229,10 +244,14 @@ export function chipCompositesInUse(srcDir) {
  * chipCompositesInUse) restricts the composite checks to the chip patterns
  * the components actually render; pass undefined to enforce every entry.
  *
+ * `modes` (a map of theme-name → 'light'|'dark', from the registry) opts
+ * each theme into the LIGHT_ONLY_PAIRS contract; themes absent from the
+ * map get only the shared PAIRS.
+ *
  * Returns [{ theme, fg, bg, min, label, ratio, fgValue, bgValue }] — empty
  * means every present pair passes.
  */
-export function auditThemes(themes, { chipPatterns } = {}) {
+export function auditThemes(themes, { chipPatterns, modes } = {}) {
   const failures = []
   for (const [theme, rawVars] of Object.entries(themes)) {
     const vars = {}
@@ -241,6 +260,7 @@ export function auditThemes(themes, { chipPatterns } = {}) {
       const ref = /^var\(--([\w-]+)\)$/.exec(value)
       if (ref && vars[ref[1]]) vars[name] = vars[ref[1]]
     }
+    const pairs = modes?.[theme] === 'light' ? [...PAIRS, ...LIGHT_ONLY_PAIRS] : PAIRS
     const check = (fg, bgValue, min, label, bgTokenName) => {
       if (!vars[fg] || !bgValue) return
       const ratio = contrast(vars[fg], bgValue)
@@ -251,7 +271,7 @@ export function auditThemes(themes, { chipPatterns } = {}) {
         })
       }
     }
-    for (const [fg, bg, min, label] of PAIRS) {
+    for (const [fg, bg, min, label] of pairs) {
       check(fg, vars[bg], min, label, bg)
     }
     for (const [fg, alpha, over, min, label] of CHIP_COMPOSITES) {

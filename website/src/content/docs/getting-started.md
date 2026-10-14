@@ -28,6 +28,8 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/download/install.sh | sh
 ```
 
+> **Desktop app on Linux needs a recent PipeWire.** The desktop bundles are built against Ubuntu 24.04-era libraries — stock Ubuntu 22.04's `libpipewire-0.3` (0.3.48) is too old. Ubuntu 24.04+ works out of the box (or upgrade PipeWire on 22.04). The `shannon` CLI and gateway are static builds with no such requirement.
+
 ### Windows
 
 Download the latest binary:

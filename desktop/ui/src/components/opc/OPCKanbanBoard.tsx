@@ -31,6 +31,7 @@ import {
   canonicalStatusFor,
   STATUS_FAMILY,
   normalizePriority,
+  blockedWaitMinutes,
   type TaskStatusFamily,
 } from '@/lib/task-status'
 
@@ -260,6 +261,18 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
         ) : null}
       </div>
       <h4 className="font-label-md text-body-md font-bold mb-sm leading-tight ml-xs">{task.title}</h4>
+      {/* R2 Wave C′ (design 09:229): 「原因:X · 已等待 N 分钟」. Reason is the
+          backend's verbatim `blocked_reason`, else derived from the EXISTING
+          `blocked_by` list; wait time derives from `blocked_since_ms` (task
+          JSON timestamp or file mtime). Anything absent renders 「—」 — the
+          OPCAgentSwarm blocked-load precedent — never an invented value. */}
+      <p
+        data-testid="opc-blocked-meta"
+        className="font-label-sm text-label-2xs text-on-surface-variant mb-sm ml-xs"
+      >
+        {intl.formatMessage({ id: 'opc.kanban.blockedReasonLabel' })}
+        :{blockedReasonText(task, intl)} · {blockedWaitText(task, intl)}
+      </p>
       <div className="flex justify-between items-center ml-xs gap-sm">
         {task.assignee ? (
           <span className="font-label-sm text-label-xs text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.assignedTo' }, { name: task.assignee })}</span>
@@ -280,6 +293,30 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
       </div>
     </div>
   )
+}
+
+/** Blocked-card reason text (R2 Wave C′): the backend's verbatim
+ *  `blocked_reason` when the writer supplied one, else derived from the
+ *  EXISTING `blocked_by` list (「等待 N 个前置任务」), else null — the
+ *  meta line renders 「—」. Never invented. */
+function blockedReasonText(task: TaskItem, intl: ReturnType<typeof useIntl>): string {
+  if (task.blocked_reason) return task.blocked_reason
+  const blockers = task.blocked_by?.length ?? 0
+  if (blockers > 0) {
+    return intl.formatMessage({ id: 'opc.kanban.blockedOnTasks' }, { count: blockers })
+  }
+  return '—'
+}
+
+/** Blocked-card wait text (R2 Wave C′): minutes under an hour, then hours.
+ *  null (no usable timestamp) → 「—」. */
+function blockedWaitText(task: TaskItem, intl: ReturnType<typeof useIntl>): string {
+  const minutes = blockedWaitMinutes(task.blocked_since_ms)
+  if (minutes == null) return '—'
+  if (minutes < 60) {
+    return intl.formatMessage({ id: 'opc.kanban.blockedWaitMinutes' }, { count: minutes })
+  }
+  return intl.formatMessage({ id: 'opc.kanban.blockedWaitHours' }, { count: Math.floor(minutes / 60) })
 }
 
 function ActiveCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType<typeof useIntl>; openTask: (id: string) => void }) {

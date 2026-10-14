@@ -11,9 +11,9 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { IntlProvider } from 'react-intl'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { toast } from 'sonner'
-import Triage from '@/pages/Triage'
+import Triage, { weekSavedOf } from '@/pages/Triage'
 import * as api from '@/lib/tauri-api'
-import type { InboxItem, InboxListFilter } from '@/types'
+import type { InboxItem, InboxListFilter, ScheduledRoutine } from '@/types'
 
 // Test locale messages (minimal set for test assertions)
 const testMessages: Record<string, string> = {
@@ -102,6 +102,22 @@ const testMessages: Record<string, string> = {
   'tasks.status.failed.label': 'Failed',
   'inbox.needsAction': 'Needs action',
   'inbox.runStatus.succeeded': 'Succeeded',
+  // M7 (design-parity R2): merged pause badge + 查看日志 direct entry.
+  'tasks.routineControls.autoPausedLabel': 'Auto-paused',
+  'tasks.routineControls.autoPausedReasonSeparator': ' · ',
+  'tasks.routineControls.autoPausedReason.budget': 'Monthly budget reached',
+  'tasks.routineControls.autoPausedReason.consecutive_failures': 'Consecutive failures',
+  'inbox.viewLogs.label': 'View logs',
+  'inbox.viewLogs.aria': 'Open the error log of the routine that produced this item',
+  // G6 (design-parity R2): 本周节省 stat + mandatory estimation footnote
+  // (补2: the footnote's N is parameterized — it prints the CONFIGURED value).
+  'inbox.stats.saved': '≈{minutes} min saved · {count} items',
+  'inbox.stats.saved.footnote': 'Estimated at ~{minutes} min of manual work per item',
+  'inbox.stats.saved.edit.aria': 'Edit minutes of manual work per item',
+  'inbox.stats.saved.edit.title': 'Click to edit the estimate',
+  'inbox.stats.saved.edit.invalid': 'Enter a whole number of minutes between {min} and {max}',
+  'inbox.stats.saved.edit.saved': 'Estimate updated to {minutes} min per item',
+  'inbox.stats.saved.edit.failed': "Couldn't save the estimate — reverted",
 }
 
 // Hook spies — useInboxItems returns
@@ -130,6 +146,14 @@ vi.mock('@/lib/tauri-api', async () => {
     ...actual,
     updateInboxItemStatus: vi.fn().mockResolvedValue(undefined),
     respondPermission: vi.fn().mockResolvedValue(undefined),
+    // M7: the merged pause badge joins the producing routine's pause_reason
+    // through list_scheduled_tasks (empty list = nothing auto-paused).
+    listScheduledTasks: vi.fn().mockResolvedValue([] as ScheduledRoutine[]),
+    // 补2: the 本周节省 footnote's per-item minutes come from get_config;
+    // default fixture = unset (the UI falls back to the standing 5).
+    getConfig: vi.fn().mockResolvedValue({ manual_minutes_per_item: null }),
+    // 补2: the footnote's inline edit persists via configure.
+    configure: vi.fn().mockResolvedValue(undefined),
   }
 })
 
@@ -225,6 +249,15 @@ beforeEach(() => {
   vi.mocked(api.updateInboxItemStatus).mockClear()
   vi.mocked(api.respondPermission).mockReset()
   vi.mocked(api.respondPermission).mockResolvedValue(undefined)
+  // M7: default fixture set = nothing auto-paused; merge tests override.
+  vi.mocked(api.listScheduledTasks).mockReset()
+  vi.mocked(api.listScheduledTasks).mockResolvedValue([])
+  // 补2: default = the config dial unset (UI falls back to the standing 5);
+  // the parameterization tests override with an explicit value.
+  vi.mocked(api.getConfig).mockReset()
+  vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: null })
+  vi.mocked(api.configure).mockReset()
+  vi.mocked(api.configure).mockResolvedValue(undefined)
   vi.mocked(toast.success).mockClear()
   vi.mocked(toast.error).mockClear()
   setItems([])
@@ -1052,5 +1085,189 @@ describe('Triage — 来源链 #N (design 05)', () => {
   it('hides the run number on non-run sources (honesty rule)', () => {
     renderPageWithItem({ id: 2, source: 'session_approval', runId: null })
     expect(screen.queryByTestId('inbox-run-number')).not.toBeInTheDocument()
+  })
+})
+
+// ── M7 (design-parity R2 §3.2): the failure card's merged
+// 「失败 · 已自动暂停」 badge and the 「查看日志」 direct entry. ─────────────
+describe('M7 — merged pause badge and View logs direct entry', () => {
+  it('merges 「Failed · Auto-paused · <reason>」 when the producing routine is system-paused', async () => {
+    vi.mocked(api.listScheduledTasks).mockResolvedValue([
+      { id: 'sched-001', enabled: false, pause_reason: 'consecutive_failures' },
+    ] as unknown as ScheduledRoutine[])
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'NAS disk full' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    // Same wording family as TaskCard's auto-paused badge (TaskCard.tsx:75-88).
+    expect(chip).toHaveTextContent('Failed')
+    expect(chip).toHaveTextContent('Auto-paused')
+    expect(chip).toHaveTextContent('Consecutive failures')
+    expect(chip).not.toHaveTextContent('Needs action')
+    // The tooltip carries the reason phrase, matching TaskCard's badge.
+    expect(chip).toHaveAttribute('title', 'Consecutive failures')
+  })
+
+  it('keeps the plain 「Failed · Needs action」 badge when the routine is not paused', async () => {
+    vi.mocked(api.listScheduledTasks).mockResolvedValue([
+      { id: 'sched-001', enabled: true, pause_reason: null },
+    ] as unknown as ScheduledRoutine[])
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Needs action')
+    expect(chip).not.toHaveTextContent('Auto-paused')
+  })
+
+  it('keeps the plain badge when the routine list fails to load (no pause claim without evidence)', async () => {
+    vi.mocked(api.listScheduledTasks).mockRejectedValue(new Error('ipc down'))
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const chip = await screen.findByTestId('inbox-run-status')
+    expect(chip).toHaveTextContent('Needs action')
+    expect(chip).not.toHaveTextContent('Auto-paused')
+  })
+
+  it('reads 「View logs」 on a failed card and lands on the routine drawer deep link with focusError', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: 'boom' })])
+    renderPage()
+    const btn = screen.getByRole('button', { name: 'Open the error log of the routine that produced this item' })
+    expect(btn).toHaveTextContent('View logs')
+    fireEvent.click(btn)
+    const probe = screen.getByTestId('location')
+    expect(probe).toHaveTextContent('/tasks')
+    // 补3: the failed card hands over the error-anchor flag alongside the
+    // routine id — Tasks scrolls/highlights the drawer's last-error block.
+    expect(JSON.parse(probe.getAttribute('data-state')!)).toEqual({ openRoutineId: 'sched-001', focusError: true })
+    // The generic source wording is REPLACED on failed cards (design 05's
+    // ops row draws 继续会话 + 查看日志, not a third source button).
+    expect(screen.queryByRole('button', { name: 'Open the automation that produced this item' })).not.toBeInTheDocument()
+  })
+
+  it('keeps 「View source automation」 on healthy (non-failed) cards', () => {
+    setItems([makeItem({ id: 1, source: 'routine', sourceId: 'sched-001', error: null })])
+    renderPage()
+    expect(screen.getByRole('button', { name: 'Open the automation that produced this item' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open the error log of the routine that produced this item' })).not.toBeInTheDocument()
+  })
+})
+
+// ── G6 (design-parity R2 §4, 05-inbox.html:157-161): 本周节省 stat. ─────────
+describe('G6 — weekly-saved stat (5 min/item stand-in)', () => {
+  it('derives minutes from items processed this week and always shows the footnote', () => {
+    const now = Date.now()
+    setItems([
+      makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 }),
+      makeItem({ id: 2, status: 'archived', updatedAtMs: now - 86_400_000 }),
+      // Pending = not processed; last-week = outside 本周.
+      makeItem({ id: 3, status: 'pending', updatedAtMs: now - 1_000 }),
+      makeItem({ id: 4, status: 'read', updatedAtMs: now - 8 * 86_400_000 }),
+    ])
+    renderPage()
+    const stat = screen.getByTestId('inbox-stat-saved')
+    expect(stat).toHaveTextContent('≈10 min saved')
+    expect(stat).toHaveTextContent('2 items')
+    // Honesty discipline: the estimation footnote is always attached.
+    expect(stat).toHaveTextContent('Estimated at ~5 min of manual work per item')
+  })
+
+  it('renders an honest ≈0 min · 0 items when nothing was processed this week', () => {
+    setItems([makeItem({ id: 1, status: 'pending' })])
+    renderPage()
+    const stat = screen.getByTestId('inbox-stat-saved')
+    expect(stat).toHaveTextContent('≈0 min saved')
+    expect(stat).toHaveTextContent('0 items')
+  })
+})
+
+// ── 补2 (R2 审查 §7.1): the per-item manual-work minutes are a CONFIG dial
+// (`manual_minutes_per_item`, 1-120, standing default 5) — the footnote
+// prints the value in force and the number itself is the inline edit
+// affordance (click → input → configure; failure toasts and reverts). ──────
+describe('补2 — manual_minutes_per_item parameterized footnote', () => {
+  it('weekSavedOf multiplies by the configured per-item minutes', () => {
+    const now = Date.now()
+    const items = [
+      makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 }),
+      makeItem({ id: 2, status: 'archived', updatedAtMs: now - 7_200_000 }),
+    ]
+    expect(weekSavedOf(items, new Date(), 12).minutes).toBe(24)
+    // Callers without an explicit dial keep the standing default of 5.
+    expect(weekSavedOf(items).minutes).toBe(10)
+  })
+
+  it('prints the CONFIGURED value in the footnote and the savings math', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 12 })
+    const now = Date.now()
+    setItems([
+      makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 }),
+      makeItem({ id: 2, status: 'read', updatedAtMs: now - 7_200_000 }),
+    ])
+    renderPage()
+    const stat = await screen.findByTestId('inbox-stat-saved')
+    await waitFor(() => expect(stat).toHaveTextContent('≈24 min saved'))
+    await waitFor(() => expect(stat).toHaveTextContent('Estimated at ~12 min of manual work per item'))
+  })
+
+  it('keeps the standing 5 when the config read fails (best-effort dial)', async () => {
+    vi.mocked(api.getConfig).mockRejectedValue(new Error('ipc down'))
+    const now = Date.now()
+    setItems([makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 })])
+    renderPage()
+    const stat = await screen.findByTestId('inbox-stat-saved')
+    await waitFor(() => expect(stat).toHaveTextContent('≈5 min saved'))
+    expect(stat).toHaveTextContent('Estimated at ~5 min of manual work per item')
+  })
+
+  it('edits inline: clicking the number commits a new value through configure', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 5 })
+    const now = Date.now()
+    setItems([makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 })])
+    renderPage()
+    // The number itself is the edit affordance (点击数字).
+    fireEvent.click(await screen.findByTestId('manual-minutes-edit'))
+    const input = screen.getByTestId('manual-minutes-input')
+    fireEvent.change(input, { target: { value: '15' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(api.configure).toHaveBeenCalledWith({ key: 'manual_minutes_per_item', value: '15' }),
+    )
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Estimate updated to 15 min per item'))
+    // The display and the savings math follow the ACCEPTED value.
+    const stat = screen.getByTestId('inbox-stat-saved')
+    await waitFor(() => expect(stat).toHaveTextContent('≈15 min saved'))
+    expect(stat).toHaveTextContent('Estimated at ~15 min of manual work per item')
+    expect(screen.queryByTestId('manual-minutes-input')).not.toBeInTheDocument()
+  })
+
+  it('refuses out-of-range drafts client-side without calling configure', async () => {
+    setItems([])
+    renderPage()
+    fireEvent.click(await screen.findByTestId('manual-minutes-edit'))
+    const input = screen.getByTestId('manual-minutes-input')
+    fireEvent.change(input, { target: { value: '500' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Enter a whole number of minutes between 1 and 120'),
+    )
+    expect(api.configure).not.toHaveBeenCalled()
+    // Back to the display — never stuck in the editor.
+    await waitFor(() => expect(screen.queryByTestId('manual-minutes-input')).not.toBeInTheDocument())
+    expect(screen.getByTestId('manual-minutes-edit')).toHaveTextContent('5')
+  })
+
+  it('reverts the display and toasts when configure rejects the write', async () => {
+    vi.mocked(api.configure).mockRejectedValue(new Error('disk full'))
+    setItems([])
+    renderPage()
+    fireEvent.click(await screen.findByTestId('manual-minutes-edit'))
+    const input = screen.getByTestId('manual-minutes-input')
+    fireEvent.change(input, { target: { value: '20' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't save the estimate — reverted"))
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(api.getConfig).toHaveBeenCalledTimes(1)
+    // 回退: the footnote still shows the previous (still-configured) value.
+    await waitFor(() => expect(screen.queryByTestId('manual-minutes-input')).not.toBeInTheDocument())
+    expect(screen.getByTestId('manual-minutes-edit')).toHaveTextContent('5')
   })
 })

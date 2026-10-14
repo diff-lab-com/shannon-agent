@@ -75,7 +75,19 @@ export default function Extensions() {
             marketplace is a destination, not a settings subpage. */}
         <h1 className="font-headline-lg text-headline-md font-bold text-on-surface leading-tight">{t('extensions.hub.title')}</h1>
         <div className="flex items-center justify-between gap-md flex-wrap min-w-0">
-          <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
+          {/* M1 (design-parity R2 §3.2, 07-connectors.html:141): the topbar
+              crumb 「目录内条目均经安全扫描」 — the security sentence rides
+              next to the capability subtitle as its own line-level crumb. */}
+          <div className="flex items-center gap-md min-w-0">
+            <p className="font-body-sm text-on-surface-variant truncate">{t('extensions.hub.subtitle')}</p>
+            <span
+              className="inline-flex items-center gap-xs shrink-0 font-label-sm text-on-surface-variant whitespace-nowrap"
+              title={t('extensions.hub.securityCrumb')}
+            >
+              <span className="material-symbols-outlined icon-sm text-success" aria-hidden="true">verified_user</span>
+              {t('extensions.hub.securityCrumb')}
+            </span>
+          </div>
           <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[360px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">
             <span className="material-symbols-outlined text-on-surface-variant mr-sm icon-md">search</span>
             <Input
@@ -171,6 +183,23 @@ export default function Extensions() {
           and without focus keyboard users can never reach the overflow. */}
       <div tabIndex={0} className="flex-1 overflow-y-auto">
          <Outlet context={{ search }} />
+         {/* M1 (design-parity R2 §3.2, 07-connectors.html:322-327): the
+             page-bottom security banner. Honest wording — the scan is the
+             install-time advisory pass the card-level badges already state
+             (never an overclaiming「签名校验」, which the batch-2 honesty
+             fix removed from the card foot), and the credential sentence
+             matches the Welcome footer's 「密钥永不出机」 narrative
+             (welcome.privacy.keysLocal). The design's 安全白皮书 button is
+             intentionally absent — there is no whitepaper to point at. */}
+         <div className="px-lg pb-lg">
+           <div
+             data-testid="extensions-security-banner"
+             className="mx-auto max-w-7xl flex items-center gap-sm px-md py-sm rounded-xl border border-outline-variant/30 bg-surface-container-low"
+           >
+             <span className="material-symbols-outlined icon-md text-success shrink-0" aria-hidden="true">verified_user</span>
+             <p className="font-label-sm text-on-surface-variant min-w-0">{t('extensions.hub.securityBanner')}</p>
+           </div>
+         </div>
       </div>
     </div>
   );

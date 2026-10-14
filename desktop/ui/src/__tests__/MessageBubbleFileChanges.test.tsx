@@ -10,7 +10,7 @@
 // over the get_file_diff payload (demo handler returns a fixed diff).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 
@@ -202,5 +202,108 @@ describe('FileChangesCard — committed tool_calls rendering', () => {
     expect(onViewDiffMulti).toHaveBeenCalledWith(['/proj/a.ts', '/proj/b.ts'])
     expect(onViewDiff).not.toHaveBeenCalled()
     expect(card).toBeInTheDocument()
+  })
+})
+
+// R2 审查 G8 (docs/reviews/2026-10-14-design-parity-audit-r2.md §4): a turn
+// with more than 2 changed files collapses the card to a one-line summary
+// (「N 个文件 · +x −y」, review/undo preserved) — the full path list opens on
+// toggle. ≤2 files keep the always-inline layout.
+describe('FileChangesCard — G8 collapse (>2 files)', () => {
+  const threeWrites = {
+    role: 'assistant' as const,
+    content: 'three files',
+    timestamp: 1,
+    tool_calls: [
+      { tool_use_id: 'tw-1', tool_name: 'write_file', tool_input: { path: '/proj/a.ts' }, status: 'completed', is_error: false, result: 'ok' },
+      { tool_use_id: 'tw-2', tool_name: 'write_file', tool_input: { path: '/proj/b.ts' }, status: 'completed', is_error: false, result: 'ok' },
+      { tool_use_id: 'tw-3', tool_name: 'write_file', tool_input: { path: '/proj/c.ts' }, status: 'completed', is_error: false, result: 'ok' },
+    ],
+  }
+
+  it('collapses to the count summary by default — no path list, actions preserved', async () => {
+    const onRewind = vi.fn().mockResolvedValue(undefined)
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <ArtifactProvider>
+            <MessageBubble
+              message={threeWrites}
+              messageIndex={1}
+              onViewDiff={() => {}}
+              onViewDiffMulti={() => {}}
+              rewindTurnIndex={0}
+              onRewind={onRewind}
+              regenerate={null}
+            />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    const card = await screen.findByTestId('file-changes-card')
+    expect(screen.queryByTestId('file-changes-card-paths')).toBeNull()
+    const toggle = screen.getByTestId('file-changes-card-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // Collapsed one-liner: count + aggregated +x −y (3 × (+3 −2) over the
+    // mock diff — stats land via the async summarizeDiffLineStats).
+    expect(toggle).toHaveTextContent('3 files')
+    await waitFor(() => expect(toggle).toHaveTextContent('+9'))
+    expect(toggle).toHaveTextContent('−6')
+    // The turn-level actions survive the collapse.
+    expect(screen.getByText('Review all')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Rewind conversation to this message' })).toBeInTheDocument()
+    // Card stays out of the way otherwise — no inline path dump.
+    expect(card).not.toHaveTextContent('/proj/a.ts')
+  })
+
+  it('expands the path list on toggle with disclosure aria state', async () => {
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <ArtifactProvider>
+            <MessageBubble message={threeWrites} messageIndex={1} onViewDiff={() => {}} regenerate={null} />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    const toggle = await screen.findByTestId('file-changes-card-toggle')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    const list = screen.getByTestId('file-changes-card-paths')
+    for (const p of ['/proj/a.ts', '/proj/b.ts', '/proj/c.ts']) {
+      expect(list).toHaveTextContent(p)
+    }
+    // Collapsing again hides the list.
+    fireEvent.click(toggle)
+    expect(screen.queryByTestId('file-changes-card-paths')).toBeNull()
+  })
+
+  it('keeps ≤2 files inline — no toggle, paths readable at a glance', async () => {
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <ArtifactProvider>
+            <MessageBubble
+              message={{
+                role: 'assistant',
+                content: 'two files',
+                timestamp: 1,
+                tool_calls: [
+                  { tool_use_id: 'tw-1', tool_name: 'write_file', tool_input: { path: '/proj/a.ts' }, status: 'completed', is_error: false, result: 'ok' },
+                  { tool_use_id: 'tw-2', tool_name: 'write_file', tool_input: { path: '/proj/b.ts' }, status: 'completed', is_error: false, result: 'ok' },
+                ],
+              }}
+              messageIndex={1}
+              onViewDiff={() => {}}
+              regenerate={null}
+            />
+          </ArtifactProvider>
+        </MemoryRouter>
+      </I18nProvider>,
+    )
+    await screen.findByTestId('file-changes-card')
+    expect(screen.queryByTestId('file-changes-card-toggle')).toBeNull()
+    expect(screen.queryByTestId('file-changes-card-paths')).toBeNull()
+    expect(screen.getByTestId('file-changes-card')).toHaveTextContent('/proj/a.ts, /proj/b.ts')
   })
 })

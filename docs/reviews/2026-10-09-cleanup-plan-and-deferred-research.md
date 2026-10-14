@@ -105,3 +105,37 @@ PR #342 宣称并已在 CHANGELOG 向用户宣告"unset 默认 redact",但实际
 - **缓期批 1 ✅**:PR #352 合并——R-0 secret_guard unset→redact 安装位收口、启动恢复/启动检查更新双开关(设置→通用→启动)、上下文峰值(QUERY_USAGE `context_total` + SessionIndex `max_context_tokens`,真实来源=resolved context window)、任务看板金额(`list_tasks.cost_usd` 台账 join)。CI 二轮全绿(首轮:config.rs fmt + E2E mock 模式下启动探针 console.error 触发 watchdog,均修)。
 - **本地部署 ✅**:dev @ 88235d821 构建(custom-protocol,前端 dist 已重建),DISPLAY=:1 运行中。
 - **待圈选**:批 2(使命实体 config 键版 + 注入/签名诚实徽章 + 全量导出)、批 3(执行模式收敛 + 开机自启)、R4 复审时机。
+
+## 执行记录(三)(2026-10-10,疑似真 bug 修复 + 收尾清洁 + 文档注记)
+
+- **发现即修复 ✅(PR #388)**:执行记录(二)「留待圈定」的 `feat/trust-kind-scope` 停放提交 `a6a8ea3ca`(protocol-asset feature)经查证**不是废弃 WIP 而是真 bug 修复**——tauri 2.x 把 asset 协议处理器整体门在该 Cargo 特性后(`src/protocol/mod.rs` 顶格 `#[cfg(feature = "protocol-asset")]`),未开启时 `tauri.conf.json` 的 assetProtocol 配置被无视,UI 4 处 `convertFileSrc()`(MessageBubble 图片附件 ×2 / AttachmentChip 缩略图 / PdfPreview)在一切构建版(**含 v0.14.0 发布包**)全部加载失败。证据链:编译期(tauri 2.12.2 源码 cfg 门 + `cargo tree -e features` 零路径 + 修复前二进制 strings 检索 asset-protocol 字面量 0 命中)+ 运行时(隔离 Xvfb:99 + 临时 HOME + XTEST 驱动真实 UI 贴图流程:修复前 chip 渲染 webkit 破图问号图标,修复后蓝红渐变测试图真实渲染,并排对比图 `/tmp/asset-attach/zoom-before-after.png`)。cherry-pick 重走正式合并,原分支已删。
+- **零风险清洁 ✅**:发版链遗留 `/tmp/backfill-v14` + `/tmp/r4-walk` 两 worktree 移除;6 个已并入分支 `git branch -d` 删除(chore/backfill-v14、docs/dangerous-gate-design、feat/dangerous-install-gate、fix/autostart-i18n-keys、fix/release-smoke-syntax、feat/tool-result-wire);另一会话活跃 worktree(b6-zero / wire-batch)未触碰。dev 对齐历经 ff(至 #386 合并点)→ #388 合并后拓扑分叉 → 内容 diff 验证(仅 #388 增量)后 reset 对齐,零丢失。
+- **文档注记 ✅(PR #389)**:Linux 桌面包 PipeWire 版本要求落三处——README 安装段、website getting-started Linux 段、install.sh 桌面安装提示行。措辞以已验证事实为界(22.04 原版 libpipewire 0.3.48 过旧;本机 22.04 + backport 1.0.7 可用;24.04+ 开箱即用),不虚构精确版本下限。
+- **R4 非阻塞备忘 ✅**:handlers.ts mission_progress 注释明写 MissionCard 并标注与 /opc 常驻 `opc-mission-progress` hero 是不同组件(搭 #388 顺风车)。
+- **门禁**:desktop nextest 1780/1780 + clippy/fmt 干净;tsc 0 错;mock 相关 vitest 91/91;CI 全绿(#388:19 pass + website build 按 path 过滤跳过;#389:20 pass)。
+- **本地部署 ✅**:dev @ 981f42146(#388 合并点,含 #389 前端无关),二进制已含修复,DISPLAY=:1 运行中(pid 1993406)。前端 dist 沿用 v0.14.0 构建产物——与本轮 UI 源码差异仅 handlers.ts 注释(mock 专用,零渲染影响),故未重建。
+- **遗留建议**:① **v0.14.1 patch 发版待圈选**——修复仅在 dev,v0.14.0 发布包用户仍遇破图;② install.sh 可升级为 pipewire 版本探测(本轮仅提示行,逻辑探测属行为变更未纳入);③ 扩展安全专项(签名/出站扫描/自动更新)仍在决策后动清单。
+
+## 执行记录(四)(2026-10-11,决策后动项四批:①探测+发版 ②attestation ③commit 钉住 ④出站扫描 audit)
+
+用户批准修正路线的全部四项,当日完成:
+
+- **① install.sh PipeWire 探测 + v0.14.1 发版 ✅(PR #392 + tag v0.14.1)**:dpkg/rpm 探测三档分警示(≥1.0 静默/0.3.40-0.3.48 known too old/其余 0.x 软警告),不阻断 curl|sh;分档模式经 7 种版本串模拟验证(含 dpkg 连字符后缀修洞)。v0.14.1 一次通过发布(24 资产,发版说明已写),install.sh 发布物含探测函数(实测下载确认)。随版内容:Dangerous 门(#384)+ protocol-asset 真修复(#388)。
+- **② 构建出处验证 ✅(PR #393)**:侦察发现 release.yml 的 `attest-build-provenance@v4.2.2` 早已存在(a9179ecd9,publish flip 前全量证明)——本批只补用户侧:`SHANNON_VERIFY_ATTESTATION=1` 时对每个下载物 `gh attestation verify`,与校验和互补(哈希钉字节/attestation 钉来源)。**实测**(gh 2.63.2):v0.14.0 真实 install.sh exit 0,篡改截断件 exit 1;本机 gh 2.4.0 无 attestation 子命令 → 错误信息带版本要求。
+- **③ repo 安装 commit 钉住 ✅(PR #394)**:`.shannon-source.json` sidecar(repo/ref/commit/ref_floating)随安装写入,目录扫描列表读回;update 前后比对、同 ref 内容移动打 info 痕迹;浮动 ref 安装时 tracing 警告 + UI `SourcePinBadge` 警告 chip + 短 SHA,i18n ×10。诚实边界:非 git 源无 pin/rev-parse 失败记 null/sidecar 损坏按无 pin 降级。update 的 UI toast 待 update 命令接入 Tauri 面。
+- **④ 出站注入扫描 audit v1 ✅(PR #395)**:`shannon_core::injection_guard`——pattern 表上收单源(桌面安装门改用同一表),web-fetch/web-search 两入口 observe-only 审计(日志+计数+一次性提示,输出字节不变);模式解析镜像 secret-guard(env 现存即裁决→config→缺省 audit);本地工具有意不扫(sudo/rm -rf 在编码会话是噪声),其余入口留待调参批。core 20/20 + desktop 安装门 18/18 + web 103/103。
+- **过程事故(自省)**:③ 执行中途,#392 合并后的 `git reset --hard origin/dev` 把工作区里未提交的 ③ 全部改动抹掉(仅 2 个 untracked 新文件幸存)——全部改动从上下文完整重放并重新过门禁。教训重录:**破坏性重置前必须先确认工作区干净**;此外 `pkill -f` 模式自匹配、后台轮询丢 cwd 两起小事故均即时发现无损。
+- **CI 备注**:CI clippy 带 `-D warnings`(含 `unwrap_used`)严于本地默认——④ 首推被 Clippy 拒,测试断言 `.unwrap()`→`.expect()` 后绿;此后本地严格参数(`-- -D warnings`)复核。
+- **本地部署 ✅**:dev @ 77ea21234(④ 合并点),二进制含 ③④,DISPLAY=:1 运行中(pid 3525463)。
+
+## 执行记录(五)(2026-10-12,更新通道 D1/D2 落地 + C 的 tripwires 固化)
+
+用户批准「D 拆四步:现在做 D1+D2,C 维持信号门控」:
+
+- **D2 · latest.json 签名通道 ✅(PR #397)**:publish job 新步骤——**用本发布二进制** `shannon self-update --emit-channel` 从 SHA256SUMS 构建并 Ed25519 签名(emit/verify 同一份代码,canonicalization 永不漂移);私钥入 `SHANNON_LATEST_SIGNING_KEY` Actions secret(2026-10-12 生成,备份于工作区 secrets-backup,轮换 = 新 pair + 新版本),公钥钉死 `self_update.rs`;签名盖 compact+键序 canonical JSON,一次覆盖全部产物哈希。latest.json 有意不进 SHA256SUMS/attestation(生成于两者之后),以自身签名为保护;签名失败即阻断发版(publish flip 之前)。
+- **D1 · `shannon self-update` ✅(同 PR)**:fetch→验签→版本门→确认→下载→sha256→tar→同目录 rename 原子换装(运行中会话保留旧 inode);显式用户命令,补充桌面「notify only」承诺而非自动化它。诚实边界:验签失败一律拒绝(无跳过路径)、系统包安装无写权限指向 install.sh、Windows v1 不支持指向 install.ps1、gate-exempt 同 update/doctor。
+- **验证**:单测 9/9 含 **python cryptography 独立实现交叉签名夹具**(canonicalization 契约跨实现钉死);E2E 实测本地通道真实私钥签发→换装成功(假 v99 二进制,运行输出 i-am-v99.0.0)→篡改通道拒绝且零副作用。
+- **CI 三轮修复(advisory 库当日变动,非本批引入)**:①cargo-deny 报 unsafe-libyaml unmaintained(RUSTSEC-2024-0449)→ 按 deny.toml 既有模式豁免(注明理由);②cargo audit 又报 quinn-proto 0.11.16 两个 high(0339/0341)→ 升 0.11.17;③audit 再报 0.11.17 上新挂的三个公告(0338/0340/0343,修复 ≥0.11.18)→ 升 0.11.18,并按 audit.toml 头部「两表同步」约定补 RUSTSEC-2024-0449。终态 20 pass 全绿。
+- **C · 真·托管+签名目录:tripwires 固化(满足任一即立项)**:①≥2 个第三方发布者主动要求经 Shannon 目录分发;②目录安装量达 ~1k/月量级;③生态出真实供应链事件/险情;④企业许可清单明确要求签名出处。届时第一步形状 =「Shannon 签目录清单 + 钉哈希,发布者继续自托管」,不做全量镜像。
+- **D3/D4 处置**:D3(桌面辅助更新,默认关 + 文案捆绑改写)等第一声用户需求;D4(静默自动更新)不做——系统包模型下需要 updater 服务,属产品负资产。
+- **本地部署**:本次仅动 shannon-cli + release.yml,桌面二进制无变化,:1 沿用 pid 3525463 部署。

@@ -19,6 +19,7 @@ const getTraceTimeline = vi.hoisted(() => vi.fn())
 const saveTextFileViaDialog = vi.hoisted(() => vi.fn())
 const listCheckpoints = vi.hoisted(() => vi.fn())
 const rewindSessionApi = vi.hoisted(() => vi.fn())
+const getSessionBudgetMock = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof TauriApi>('@/lib/tauri-api')
@@ -28,6 +29,7 @@ vi.mock('@/lib/tauri-api', async () => {
     saveTextFileViaDialog: (...args: unknown[]) => saveTextFileViaDialog(...args),
     listCheckpoints: (...args: unknown[]) => listCheckpoints(...args),
     rewindSession: (...args: unknown[]) => rewindSessionApi(...args),
+    getSessionBudget: (...args: unknown[]) => getSessionBudgetMock(...args),
   }
 })
 
@@ -110,12 +112,15 @@ beforeEach(() => {
   saveTextFileViaDialog.mockReset()
   listCheckpoints.mockReset()
   rewindSessionApi.mockReset()
+  getSessionBudgetMock.mockReset()
   mockRewindCurrent.mockReset()
   mockSwitchSession.mockReset()
   // Default: no checkpoints — rewind chips stay hidden (honest affordance).
   listCheckpoints.mockResolvedValue([])
   // Default: the backend dialog "wrote" the file and reports the path.
   saveTextFileViaDialog.mockResolvedValue('/tmp/export/timeline-sess-001.html')
+  // Default: no session spend cap — the budget chip stays hidden.
+  getSessionBudgetMock.mockResolvedValue(null)
 })
 
 describe('TurnTimeline', () => {
@@ -454,5 +459,86 @@ describe('TurnTimeline — KPI chips and input curve (§10 P2, C6)', () => {
     // Output + cost only.
     expect(svg.querySelectorAll('polyline').length).toBe(2)
     expect(screen.queryByText('Input')).not.toBeInTheDocument()
+  })
+})
+
+// ─── R2 audit I4: 读/写/网络 KPI breakdown chip ───
+
+describe('TurnTimeline — tool-mix KPI breakdown (R2 audit I4)', () => {
+  it('shows the read/write/net/risk breakdown derived from toolKind', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    renderAt()
+    // Fixture tools: Read + Grep → read 2, Bash → risk 1; no write/net.
+    // risk joins only when nonzero (matches design 10's three segments).
+    const list = await screen.findByRole('list', { name: 'Session summary' })
+    expect(list.textContent).toContain('Read 2 · Write 0 · Network 0 · High risk 1')
+  })
+
+  it('hides the breakdown chip when no tool was called', async () => {
+    getTraceTimeline.mockResolvedValue({
+      ...FIXTURE,
+      turns: FIXTURE.turns.map(tu => ({ ...tu, tools: [] })),
+    })
+    renderAt()
+    await screen.findByRole('list', { name: 'Session summary' })
+    expect(screen.queryByLabelText('0 read, 0 write, 0 network, 0 high risk tool calls'))
+      .not.toBeInTheDocument()
+  })
+})
+
+// ─── R2 audit (10:176): budget comparison chip on the cost KPI ───
+
+describe('TurnTimeline — budget comparison chip (R2 10:176)', () => {
+  it('shows 「预算 $X · 已用 Y%」 when the session carries a spend cap', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    // Last cumulative cost 0.0341 against a $1.00 cap → 3.4% (one decimal
+    // under 10, matching design 10's 8.7% form).
+    getSessionBudgetMock.mockResolvedValue(1)
+    renderAt()
+    const chip = await screen.findByTestId('timeline-budget-chip')
+    // COST_FORMAT follows the runtime default locale — node ICU renders
+    // USD as "US$1.00", browsers as "$1.00"; anchor on the digits + percent.
+    expect(chip.textContent).toMatch(/Budget .*1\.00 · 3\.4% used/)
+    // Under budget — no error tone.
+    expect(chip.className).not.toContain('text-error')
+  })
+
+  it('takes the error tone once the spend passes 100% of the cap', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    getSessionBudgetMock.mockResolvedValue(0.01)
+    renderAt()
+    const chip = await screen.findByTestId('timeline-budget-chip')
+    expect(chip).toHaveTextContent('341% used')
+    expect(chip.className).toContain('text-error')
+  })
+
+  it('shows the bare budget chip when no cost was measured', async () => {
+    getTraceTimeline.mockResolvedValue({
+      ...FIXTURE,
+      cumulative: FIXTURE.cumulative.map(p => ({ ...p, cost_total_usd: null })),
+    })
+    getSessionBudgetMock.mockResolvedValue(1)
+    renderAt()
+    const chip = await screen.findByTestId('timeline-budget-chip')
+    expect(chip.textContent).toMatch(/Budget .*1\.00/)
+    expect(chip.textContent).not.toMatch(/used/)
+  })
+
+  it('stays hidden when the session has no spend cap (absent stays absent)', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    getSessionBudgetMock.mockResolvedValue(null)
+    renderAt()
+    await screen.findByText('Turn 1')
+    expect(screen.queryByTestId('timeline-budget-chip')).not.toBeInTheDocument()
+  })
+
+  it('reads the cap for the route session id and survives a failed probe', async () => {
+    getTraceTimeline.mockResolvedValue(FIXTURE)
+    getSessionBudgetMock.mockRejectedValue(new Error('boom'))
+    renderAt('/timeline/sess-other')
+    await screen.findByText('Turn 1')
+    expect(getSessionBudgetMock).toHaveBeenCalledWith('sess-other')
+    // Failed probe → chip hidden, page still renders.
+    expect(screen.queryByTestId('timeline-budget-chip')).not.toBeInTheDocument()
   })
 })

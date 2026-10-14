@@ -196,6 +196,27 @@ impl AddonInstaller for MarketplacePluginInstaller {
             return Err(InstallError::Io(format!("promote staged clone: {e}")));
         }
 
+        // Source pin (扩展安全专项·步骤 B) — mirror of the agent-repo path.
+        let source_commit = super::installer::resolve_head_commit(&target_dir);
+        let ref_floating = super::installer::is_floating_ref(&self.ref_);
+        super::installer::write_source_pin(
+            &target_dir,
+            &super::installer::SourcePin {
+                repo: self.repo.clone(),
+                ref_: self.ref_.clone(),
+                commit: source_commit.clone(),
+                ref_floating,
+            },
+        );
+        if ref_floating {
+            tracing::warn!(
+                repo = %self.repo,
+                ref_ = %self.ref_,
+                commit = ?source_commit,
+                "installed from a floating ref — upstream can move this content without notice"
+            );
+        }
+
         progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
@@ -206,6 +227,8 @@ impl AddonInstaller for MarketplacePluginInstaller {
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
             enabled: true,
+            source_commit,
+            ref_floating,
         })
     }
 
@@ -225,6 +248,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
                 dir.display()
             )));
         }
+        let previous_commit = super::installer::read_source_pin(&dir).and_then(|p| p.commit);
         let output = tokio::process::Command::new("git")
             .arg("-C")
             .arg(&dir)
@@ -237,6 +261,27 @@ impl AddonInstaller for MarketplacePluginInstaller {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(InstallError::Io(format!("git pull failed: {stderr}")));
         }
+        // Refresh the pin; say it out loud when the content moved under the
+        // same ref (UI diffs the fields for its toast).
+        let source_commit = super::installer::resolve_head_commit(&dir);
+        let ref_floating = super::installer::is_floating_ref(&self.ref_);
+        super::installer::write_source_pin(
+            &dir,
+            &super::installer::SourcePin {
+                repo: self.repo.clone(),
+                ref_: self.ref_.clone(),
+                commit: source_commit.clone(),
+                ref_floating,
+            },
+        );
+        if previous_commit.is_some() && previous_commit != source_commit {
+            tracing::info!(
+                addon = %addon_id,
+                old = ?previous_commit,
+                new = ?source_commit,
+                "upstream content moved under the same ref during update"
+            );
+        }
         Ok(InstalledAddon {
             id: addon_id.to_string(),
             kind: AddonKind::Skill,
@@ -245,6 +290,8 @@ impl AddonInstaller for MarketplacePluginInstaller {
             installed_at: Some(Utc::now()),
             version: None,
             enabled: true,
+            source_commit,
+            ref_floating,
         })
     }
 
@@ -311,6 +358,8 @@ impl AddonInstaller for SkillMarkdownInstaller {
             installed_at: Some(Utc::now()),
             version: entry.version.clone(),
             enabled: true,
+            source_commit: None,
+            ref_floating: false,
         })
     }
 
@@ -344,6 +393,13 @@ pub struct InstalledSkill {
     pub name: String,
     pub path: String,
     pub installed_at: Option<String>,
+    /// Upstream commit the content was installed from (`.shannon-source.json`
+    /// sidecar, repo installs only). `None` = no pin on disk.
+    #[serde(default)]
+    pub source_commit: Option<String>,
+    /// True when the install ref is mutable — UI renders a floating-ref badge.
+    #[serde(default)]
+    pub ref_floating: bool,
 }
 
 /// Scan `~/.shannon/skills/` for installed skill plugins.
@@ -369,10 +425,13 @@ pub fn list_installed_skills() -> Vec<InstalledSkill> {
                             .map(|dt| dt.to_rfc3339())
                             .unwrap_or_default()
                     });
+                let pin = super::installer::read_source_pin(&path);
                 out.push(InstalledSkill {
                     name: entry.file_name().to_string_lossy().into_owned(),
                     path: path.display().to_string(),
                     installed_at,
+                    source_commit: pin.as_ref().and_then(|p| p.commit.clone()),
+                    ref_floating: pin.as_ref().is_some_and(|p| p.ref_floating),
                 });
             }
         }
@@ -627,6 +686,38 @@ mod tests {
             acknowledged_risk: risk,
             typed_name: typed.into(),
         }
+    }
+
+    #[tokio::test]
+    async fn marketplace_install_pins_source_commit_and_list_reports_it() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join(".shannon").join("skills");
+        let _g = set_test_skills_root(root.clone());
+        let url = local_repo_fixture(
+            &tmp.path().join("fixture-repo"),
+            &[("SKILL.md", "---\nname: pinned\n---\nbody")],
+        );
+        let installed = install_with(&marketplace_installer("pinned-skill", url, None))
+            .await
+            .expect("install");
+        // Requested ref "main" is mutable → floating, with the resolved SHA.
+        assert!(installed.ref_floating);
+        let commit = installed.source_commit.expect("commit recorded");
+        assert_eq!(commit.len(), 40);
+
+        // The directory-scanning listing reads the sidecar back verbatim.
+        let listed = list_installed_skills();
+        let entry = listed
+            .iter()
+            .find(|s| s.name == "pinned-skill")
+            .expect("listed");
+        assert_eq!(entry.source_commit.as_deref(), Some(commit.as_str()));
+        assert!(entry.ref_floating);
+        assert!(
+            root.join("pinned-skill")
+                .join(".shannon-source.json")
+                .exists()
+        );
     }
 
     #[tokio::test]

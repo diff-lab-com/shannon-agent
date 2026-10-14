@@ -157,13 +157,13 @@
 
       <div style="display:grid;grid-template-columns:1fr 300px;gap:12px;padding:0 24px 28px;align-items:start">
 
-        <!-- 记忆列表 -->
+        <!-- 记忆列表 —— 按 2026-10-14 裁决回改(D5):删除条目级「注入时机:…自动携带」行,
+             引擎无触发器数据,维持缺失是诚实态;注入语义见列表底部注记。 -->
         <div class="card">
           <div class="itemrow">
             <div class="ico vio"><svg class="ic"><use href="#i-user"/></svg></div>
             <div class="body">
               <div class="h"><span class="t">部署一律走 worktree,不动 dev 主工作区</span><span class="st vio">偏好</span></div>
-              <div class="p">注入时机:涉及部署、分支与发版操作时自动携带</div>
               <div class="src-chain" style="margin-top:5px">来源:会话「结算对账脚本重构」 · 5 天前 · 注入 12 次</div>
             </div>
             <span class="ops"><svg class="ic muted" style="width:14px;height:14px"><use href="#i-more"/></svg></span>
@@ -172,7 +172,6 @@
             <div class="ico" style="background:var(--info-dim);color:var(--info)"><svg class="ic"><use href="#i-check"/></svg></div>
             <div class="body">
               <div class="h"><span class="t">发版前必须跑 full cargo test 并附 metrics 快照</span><span class="st info">决策</span></div>
-              <div class="p">注入时机:进入发版或 CI 相关会话时自动携带</div>
               <div class="src-chain" style="margin-top:5px">来源:会话「v0.6.0 发版」 · 9-28 · 注入 5 次</div>
             </div>
             <span class="ops"><svg class="ic muted" style="width:14px;height:14px"><use href="#i-more"/></svg></span>
@@ -181,7 +180,6 @@
             <div class="ico"><svg class="ic"><use href="#i-db"/></svg></div>
             <div class="body">
               <div class="h"><span class="t">shannon-mono 的网关端口是 <span class="mono">33420</span></span><span class="st mute">项目事实</span></div>
-              <div class="p">注入时机:涉及网关、端口与本地服务配置时自动携带</div>
               <div class="src-chain" style="margin-top:5px">来源:会话「网关排障」 · 9-20 · 注入 8 次</div>
             </div>
             <span class="ops"><svg class="ic muted" style="width:14px;height:14px"><use href="#i-more"/></svg></span>
@@ -190,7 +188,6 @@
             <div class="ico vio"><svg class="ic"><use href="#i-user"/></svg></div>
             <div class="body">
               <div class="h"><span class="t">成本汇报保留两位小数,不带千分位</span><span class="st vio">偏好</span></div>
-              <div class="p">注入时机:涉及报表与成本汇总时自动携带</div>
               <div class="src-chain" style="margin-top:5px">来源:会话「结算对账脚本重构」 · 8-30 · 注入 3 次</div>
             </div>
             <span class="ops"><svg class="ic muted" style="width:14px;height:14px"><use href="#i-more"/></svg></span>
@@ -199,11 +196,11 @@
             <div class="ico ok"><svg class="ic" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
             <div class="body">
               <div class="h"><span class="t">测试失败优先怀疑 fixture 缓存,其次才是代码</span><span class="st ok">经验</span></div>
-              <div class="p">注入时机:调试与测试失败排查时自动携带</div>
               <div class="src-chain" style="margin-top:5px">来源:会话「修复 billing webhook 签名校验」 · 10-03 · 注入 4 次</div>
             </div>
             <span class="ops"><svg class="ic muted" style="width:14px;height:14px"><use href="#i-more"/></svg></span>
           </div>
+          <div class="muted" style="padding:10px 16px;border-top:1px solid var(--hair);font-size:11px">注入时机由引擎检索决定,不做人工触发器;「下一条消息将携带 N 条」以上方注入预览横幅为准。</div>
         </div>
 
         <!-- 右列 -->

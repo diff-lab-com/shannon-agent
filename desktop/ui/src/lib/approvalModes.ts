@@ -118,6 +118,18 @@ export function normalizeApprovalMode(value: string): ApprovalMode {
 }
 
 /**
+ * R2 audit G2/I1 — the composer's Shift+Tab cycle order: ask → auto-edit →
+ * plan → full-auto, wrapping. `plan` rides third (supervision descends the
+ * ladder), which is NOT the dropdown's display order (ask / auto-edit /
+ * full-auto / plan — the dropdown groups the three autonomy tiers first).
+ * The TUI's Shift+Tab cycles the three-ladder stops; the desktop's composer
+ * pill owns `plan` as a legal approval_mode (裁决 B1), so it joins the loop.
+ * Expert modes never enter the cycle: a Shift+Tab while one is active lands
+ * on `ask`, the managed base.
+ */
+export const APPROVAL_MODE_CYCLE: readonly ApprovalMode[] = ['ask', 'auto-edit', 'plan', 'full-auto']
+
+/**
  * The plan workflow tier (design §5). Aurora 2026-10 (裁决 B1): `plan` is a
  * LEGAL engine approval_mode (ApprovalMode::Plan — desktop parse_approval_mode
  * maps "plan" → Plan, unit-tested), so it takes its seat in the composer's

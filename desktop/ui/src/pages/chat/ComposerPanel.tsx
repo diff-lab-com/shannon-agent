@@ -81,19 +81,22 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             onOpenEditor={() => setEditorOpen(true)}
             sessionWorkingDir={sessionWorkingDir}
             usageTick={usage}
+            // 02c 裁决 D4: the typed usage payload feeds the context-% chip
+            // (icon + percent beside the model chip).
+            usage={usage}
             // R2-1: model-chip switches scope to THIS session; the chip's
             // "Set as default" stays the global write.
             sessionId={currentSessionId}
           />
         </div>
-        {/* Aurora redesign 2026-10 (02-chat.html 状态条): the strip under the
-            composer. Absorbs the old working-directory row (same button,
-            aria label and breadcrumb) and adds the session spend / budget /
-            context segments — each hides when its data source is absent
-            (honesty contract, see ChatStatusBar). */}
+        {/* Aurora redesign 2026-10 (02-chat.html 状态条), slimmed by the 02c
+            裁决 D5: the strip now carries ONLY the working directory + git
+            branch — the context / cache / spend / budget numbers moved into
+            the composer's usage dialog (the % chip beside the model chip).
+            Same WD-picker entry point as before (same button, aria label,
+            breadcrumb, disabled-without-session behavior). */}
         <ChatStatusBar
           workingDir={sessionWorkingDir}
-          usage={usage}
           sessionId={currentSessionId}
           onChangeWorkingDir={() => void changeSessionWorkingDir(currentSessionId, t)}
         />

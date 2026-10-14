@@ -246,6 +246,8 @@ Shannon is local-first: state lives in `~/.shannon/`, and nothing leaves your ma
 
 ### 1. Install
 
+Already installed? `shannon self-update` downloads, signature-verifies and atomically replaces the CLI from the signed release channel (Linux/macOS).
+
 Download the latest release for your platform:
 
 ```bash
@@ -260,6 +262,8 @@ curl -fsSL https://github.com/diff-lab-com/shannon-agent/releases/latest/downloa
 # pin the tag and pick the CLI binary explicitly.
 cargo install --git https://github.com/diff-lab-com/shannon-agent.git --tag v0.12.0 --locked --bin shannon
 ```
+
+> **Desktop on Linux needs a recent PipeWire.** The desktop bundles (`.deb`/`.rpm`) are built against Ubuntu 24.04-era libraries — stock Ubuntu 22.04's `libpipewire-0.3` (0.3.48) is too old, so the capture stack may not work. Ubuntu 24.04+ (or a PipeWire upgrade on 22.04) is recommended. The `shannon` CLI and gateway are static musl builds — no such requirement.
 
 <details>
 <summary>Other platforms</summary>

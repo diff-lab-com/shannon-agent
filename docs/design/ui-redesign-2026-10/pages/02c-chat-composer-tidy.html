@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02c · 对话 · Composer 收敛提案 — Shannon v2(示意稿,供评审)</title>
+<link rel="stylesheet" href="../assets/shannon-ui.css">
+<style>
+  /* —— 本页为纵向评审页:覆盖全局 overflow,页宽加宽 —— */
+  body { overflow-y: auto; overflow-x: hidden; }
+  .rev { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; padding: 34px 28px 90px; }
+
+  .rev-head { display: flex; align-items: flex-start; gap: 18px; margin-bottom: 26px; }
+  .rev-head h1 { font-size: 22px; font-weight: 750; letter-spacing: .2px; }
+  .rev-head .sub { font-size: 12.5px; color: var(--t3); margin-top: 5px; max-width: 860px; line-height: 1.7; }
+  .rev-head .sub b { color: var(--t2); font-weight: 600; }
+  .verdicts { margin-left: auto; flex: none; display: flex; flex-direction: column; gap: 6px; }
+
+  .rev-sec { margin-top: 34px; }
+  .rev-sec > .st-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .rev-sec > .st-title .no { font-family: var(--mono); font-size: 12px; color: var(--vio-2); font-weight: 700; }
+  .rev-sec > .st-title h2 { font-size: 16.5px; font-weight: 700; }
+  .rev-sec > .st-sub { font-size: 12px; color: var(--t3); margin-bottom: 14px; }
+
+  /* 现状实现本身 flex-wrap:控件过多即换行 — 复刻该行为 */
+  .compose-row { flex-wrap: wrap; row-gap: 6px; }
+  .statusbar .seg2 { white-space: nowrap; min-width: 0; }
+
+  /* 现状/提案 对照行:composer(792 真实宽度) + 右侧注记列 */
+  .compare { display: grid; grid-template-columns: 792px minmax(300px, 1fr); gap: 22px; align-items: start; }
+  .compare + .compare { margin-top: 18px; }
+  .cmp-tag { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 8px; font-size: 12px; font-weight: 650; }
+  .cmp-tag .tagchip { font-size: 10.5px; padding: 1px 9px; border-radius: 99px; font-weight: 700; }
+  .cmp-tag .now .tagchip { background: var(--bad-dim); color: var(--bad); }
+  .cmp-tag .prop .tagchip { background: var(--ok-dim); color: var(--ok); }
+  .cmp-tag .cnt { color: var(--t3); font-weight: 500; font-size: 11.5px; }
+
+  /* 问题点/提案点 编号圆标:贴在控件右上角 */
+  .pt { position: relative; display: inline-flex; }
+  .pt::after {
+    content: attr(data-n); position: absolute; top: -8px; right: -8px; z-index: 5;
+    min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
+    display: inline-grid; place-items: center;
+    font-family: var(--mono); font-size: 9.5px; font-weight: 700; color: #2a040c;
+    background: var(--bad); box-shadow: 0 0 0 2px var(--ink);
+  }
+  .pt.good::after { background: var(--ok); color: #04241a; }
+
+  /* 注记卡 */
+  .notes { display: flex; flex-direction: column; gap: 8px; }
+  .note { display: flex; gap: 9px; align-items: flex-start; background: var(--ink-2); border: 1px solid var(--hair); border-radius: 10px; padding: 9px 12px; }
+  .note .n { flex: none; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 99px; display: inline-grid; place-items: center;
+    font-family: var(--mono); font-size: 10px; font-weight: 700; margin-top: 1px; }
+  .note.bad { border-color: rgba(251,113,133,.22); } .note.bad .n { background: var(--bad-dim); color: var(--bad); }
+  .note.good { border-color: rgba(61,220,151,.22); } .note.good .n { background: var(--ok-dim); color: var(--ok); }
+  .note .tx b { display: block; font-size: 12.5px; font-weight: 650; color: var(--t1); }
+  .note .tx span { display: block; font-size: 11.5px; color: var(--t3); line-height: 1.55; margin-top: 1px; }
+  .note .tx .ref { display: inline-block; margin-top: 3px; font-size: 10px; color: var(--t3); border: 1px dashed var(--hair-2); border-radius: 5px; padding: 0 6px; }
+
+  /* 推理力度 gauge chip(提案核心新控件) */
+  .chip .gauge { display: inline-flex; align-items: center; gap: 2.5px; }
+  .chip .gauge i { width: 5.5px; height: 5.5px; border-radius: 99px; background: rgba(255,255,255,.16); }
+  .chip .gauge i.on { background: var(--vio-2); }
+  .chip.acc .gauge i.on { background: var(--vio-2); }
+  .chip .gauge-dim i.on { background: rgba(232,234,244,.75); }
+
+  /* 状态四联演示盒(2×2) */
+  .states { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .statebox { background: var(--ink-2); border: 1px solid var(--hair); border-radius: 14px; padding: 14px 14px 12px; position: relative; overflow: hidden; }
+  .statebox .sb-h { font-size: 12px; font-weight: 650; color: var(--t2); margin-bottom: 3px; display: flex; align-items: center; gap: 7px; }
+  .statebox .sb-h .kbd { font-size: 9px; }
+  .statebox .sb-d { font-size: 11px; color: var(--t3); margin-bottom: 10px; line-height: 1.5; }
+  .sb-stage { position: relative; height: 300px; }
+  .sb-stage .composer { position: absolute; left: 0; right: 0; bottom: 0; max-width: none; border-radius: 14px; }
+  .sb-stage .ta textarea { rows: 1; }
+
+  /* composer 内弹层(菜单/力度弹层/tooltip) */
+  .cpop { position: absolute; z-index: 8; background: var(--glass-2); backdrop-filter: var(--blur-2); -webkit-backdrop-filter: var(--blur-2);
+    border: 1px solid var(--hair-2); border-radius: 12px; box-shadow: var(--sh-2); overflow: hidden; }
+  .cpop .ci { display: flex; align-items: center; gap: 9px; padding: 4.5px 12px; font-size: 12px; color: var(--t2); }
+  .cpop .ci .ic { width: 13px; height: 13px; color: var(--t3); }
+  .cpop .ci.sel { background: var(--vio-dim); color: var(--t1); } .cpop .ci.sel .ic { color: var(--vio-2); }
+  .cpop .ci .tail { margin-left: auto; }
+  .cpop .cdiv { height: 1px; background: var(--hair); margin: 3px 0; }
+  .cpop .csec { font-size: 9.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--t3); font-weight: 700; padding: 7px 12px 1px; }
+  .cpop .cnote { font-size: 10.5px; color: var(--t3); padding: 6px 12px 9px; border-top: 1px solid var(--hair); line-height: 1.5; }
+  .cpop .switch { display: inline-block; }
+
+  .tip { position: absolute; z-index: 8; background: rgba(10,11,16,.92); border: 1px solid var(--hair-2); border-radius: 8px;
+    padding: 5px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--t2); white-space: nowrap; box-shadow: var(--sh-2); }
+  .tip b { color: var(--t1); font-weight: 600; }
+
+  /* 小号 composer(状态盒/响应式用) */
+  .composer.mini .ta { padding: 10px 14px 4px; }
+  .composer.mini .ta textarea { font-size: 12.5px; }
+  .composer.mini .compose-row { padding: 4px 8px 8px; gap: 6px; }
+  .composer.mini .chip, .composer.mini .seg > button { font-size: 11px; }
+  .composer.mini .send { width: 28px; height: 28px; border-radius: 9px; }
+  .composer.mini .iconbtn { width: 26px; height: 26px; }
+  .composer.mini .iconbtn .ic { width: 14px; height: 14px; }
+
+  /* 图标分段(已裁决弃用 — D3 保留全文案,样式留作对照记录) */
+  .seg.iconfirst > button { padding: 4px 8px; }
+  .seg.iconfirst > button .ic { width: 13px; height: 13px; }
+  .seg.iconfirst > button:not(.on) .lbl { display: none; }
+  .seg.iconfirst > button.on { padding: 4px 10px; }
+
+  /* 大 composer 行距微调:D3 保留全文案后整行仍需单行放下 */
+  .compare .compose-row { gap: 5px; }
+  .compare .seg > button { padding: 3px 7px; }
+  .compare .chip { padding: 0 7px; }
+
+  /* 移除去向卡 */
+  .where { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .where .card { padding: 14px 16px; }
+  .where h3 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .where h3 .ic { width: 14px; height: 14px; color: var(--bad); }
+  .where h3.ok3 .ic { color: var(--ok); }
+  .where p { font-size: 11.5px; color: var(--t3); margin-top: 5px; line-height: 1.6; }
+  .strike { position: relative; opacity: .5; }
+  .strike::after { content: ""; position: absolute; left: -4px; right: -4px; top: 50%; height: 2px; background: var(--bad); transform: rotate(-6deg); border-radius: 2px; }
+  .setrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.045); font-size: 12px; color: var(--t2); }
+  .setrow:last-child { border-bottom: 0; }
+  .setrow .lbl2 { flex: none; width: 64px; }
+  .setrow .why { margin-left: auto; font-size: 10.5px; color: var(--t3); font-family: var(--mono); }
+
+  /* 竞品表 + 变更清单 */
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .tbl-note { font-size: 10.5px; color: var(--t3); margin-top: 6px; line-height: 1.5; }
+  .chg .table td:first-child { font-family: var(--mono); font-size: 11px; color: var(--t2); white-space: nowrap; }
+  .chg .table td b.ok { color: var(--ok); font-weight: 650; } .chg .table td b.mv { color: var(--aur); font-weight: 650; }
+  .chg .table td b.rm { color: var(--bad); font-weight: 650; } .chg .table td b.md { color: var(--warn); font-weight: 650; }
+
+  .rev-foot { margin-top: 30px; border: 1px dashed var(--hair-2); border-radius: 12px; padding: 12px 16px; font-size: 11.5px; color: var(--t3); line-height: 1.7; }
+  .rev-foot b { color: var(--t2); }
+</style>
+</head>
+<body>
+<div class="ambient"></div>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M3 13h3l2-7 4 13 3-10 1.6 4H21" stroke-linecap="round" stroke-linejoin="round" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="i-chev-d" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 2l10 5-10 5L2 7l10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-edit" viewBox="0 0 24 24"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M9.5 3.5a2.8 2.8 0 0 0-2.8 2.8 2.8 2.8 0 0 0-1.9 4.7 2.8 2.8 0 0 0 1.4 4.7 2.8 2.8 0 0 0 3.3 2.7c1 0 2.1-.5 2.1-1.9V5.4c0-1.4-1.1-1.9-2.1-1.9z"/><path d="M14.5 3.5a2.8 2.8 0 0 1 2.8 2.8 2.8 2.8 0 0 1 1.9 4.7 2.8 2.8 0 0 1-1.4 4.7 2.8 2.8 0 0 1-3.3 2.7c-1 0-2.1-.5-2.1-1.9V5.4c0-1.4 1.1-1.9 2.1-1.9z"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M20.5 14.5a8.5 8.5 0 1 0-17 0"/><path d="M12 14.5l3.6-3.6"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="5.5" r="2.5"/><path d="M8 18.5h6.5a4 4 0 0 0 0-8h-5a4 4 0 0 1 0-8h2"/></symbol>
+  <symbol id="i-ppt" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/></symbol>
+</svg>
+
+<div class="rev">
+  <!-- ═══ 页头 ═══ -->
+  <div class="rev-head">
+    <div>
+      <h1>02c · 对话 Composer 收敛提案</h1>
+      <div class="sub">
+        针对三个用户痛点:<b>① "规划 继承 · 执行 继承"档位组件费解且与模型 chip 冗余</b> ·
+        <b>② 思考强度(推理力度)藏在模型下拉第二层,badge 只读不可点</b> ·
+        <b>③ 输入框下沿 7 组控件 + 状态条 6 段,拥挤混乱</b>。
+        竞品基准:Cursor/Claude Code/ChatGPT 的 composer 常驻控件 3-4 个;上下文用量一律做成小 gauge 或 tooltip;
+        没有任何竞品把分阶段模型档位常驻输入框(Cline 将其收在设置里,且为 opt-in)。
+        <b>2026-10-14 裁决:D1/D2 通过;D3 二次修正 — 权限改为下拉选择、平时只常显激活档;D4 修正 — 用量入口保留在模型旁(% 图标),上下文/金额等数字收进弹框,状态条不再显示数字。</b>
+        <b>2026-10-14 R2:词汇按权限命名 v2 回改(设计稿回改批次 D7,见 docs/reviews/2026-10-14-design-parity-audit-r2.md §3.4/G1)——权限档主词全线对齐 询问 / 自动编辑 / 计划 / 全自动;effort S2 四档副语维持不变(实现已按此落地)。</b>
+        方案已确认,按 ⑥ 清单实施。
+      </div>
+    </div>
+    <div class="verdicts">
+      <span class="st ok">D1 通过:移除"规划/执行档位"入口</span>
+      <span class="st ok">D2 通过:推理力度 gauge chip</span>
+      <span class="st vio">D3 二次修正:权限下拉化,常显当前档</span>
+      <span class="st warn">D4 修正:用量入口留模型旁,数字入弹框</span>
+      <span class="st ok">D5 更新:状态条仅留 目录 + 分支</span>
+      <span class="st ok">2026-10-14 R2:词汇按权限命名 v2 回改</span>
+    </div>
+  </div>
+
+  <!-- ═══ ① 现状 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">①</span><h2>现状 — 输入框下沿(≥1200px)</h2></div>
+    <div class="st-sub">与 ChatInput.tsx 当前实现逐控件对齐;红色编号 = 问题点(右侧注记)。</div>
+    <div class="compare">
+      <div>
+        <div class="cmp-tag now"><span class="tagchip">现状</span><span class="cnt">7 组控件 · 状态条另 6 段</span></div>
+        <div class="composer">
+          <div class="ta"><textarea rows="2" placeholder="回复 Shannon,或输入 / 唤起技能、@ 引用文件…"></textarea></div>
+          <div class="compose-row">
+            <span class="pt" data-n="1"><button class="iconbtn"><svg class="ic"><use href="#i-plus"/></svg></button></span>
+            <span class="pt" data-n="2">
+              <!-- 2026-10-14 R2 词汇回改(D7):权限档全线对齐《权限命名设计 v2》(2026-10-04,实现 approvalModes.ts 单词汇表)——
+                   「逐项确认」→「询问」、「完全访问」→「全自动」;四档主词 = 询问 / 自动编辑 / 计划 / 全自动。 -->
+              <span class="seg">
+                <button><svg class="ic"><use href="#i-shield"/></svg>询问</button>
+                <button class="on"><svg class="ic"><use href="#i-edit"/></svg>自动编辑</button>
+                <button><svg class="ic"><use href="#i-route"/></svg>计划</button>
+                <button><svg class="ic"><use href="#i-bolt"/></svg>全自动</button>
+              </span>
+            </span>
+            <span class="pt" data-n="3"><button class="iconbtn"><svg class="ic"><use href="#i-chart"/></svg></button></span>
+            <span class="pt" data-n="4"><button class="iconbtn acc-dot"><svg class="ic"><use href="#i-brain"/></svg></button></span>
+            <span class="pt" data-n="5">
+              <button class="chip"><svg class="ic"><use href="#i-spark"/></svg><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+            </span>
+            <span class="pt" data-n="6"><span class="chip acc" style="height:24px;font-size:11px"><svg class="ic"><use href="#i-bolt"/></svg>思考 · 深</span></span>
+            <span class="pt" data-n="7">
+              <button class="chip"><svg class="ic"><use href="#i-layers"/></svg>规划&nbsp;<b style="color:var(--t1);font-weight:650">继承</b>&nbsp;·&nbsp;执行&nbsp;<b style="color:var(--t1);font-weight:650">继承</b><svg class="caret"><use href="#i-chev-d"/></svg></button>
+            </span>
+            <span class="spacer"></span>
+            <button class="iconbtn"><svg class="ic"><use href="#i-mic"/></svg></button>
+            <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+          </div>
+        </div>
+        <div style="font-size:10px;color:var(--t3);margin-top:6px;text-align:center">▲ 换行即现状真实行为:控件过多时该行 flex-wrap 折行(与 ChatInput.tsx 一致),行高被撑到两行。</div>
+        <!-- 现状状态条 -->
+        <div class="statusbar" style="border:1px solid var(--hair);border-radius:9px;margin-top:10px;font-size:10.5px">
+          <span class="seg2"><svg class="ic"><use href="#i-folder"/></svg>~/work/shannon/shannon-mono</span>
+          <span class="seg2"><svg class="ic"><use href="#i-branch"/></svg>fix/billing-webhook</span>
+          <span class="spacer"></span>
+          <span class="seg2"><svg class="ic"><use href="#i-db"/></svg>上下文 38% · 74k/200k</span>
+          <span class="seg2" style="color:var(--ok)">缓存命中 92%</span>
+          <span class="seg2">本会话 <b class="money" style="color:var(--t2)">$0.087</b></span>
+          <span class="seg2">预算余 $19.91</span>
+        </div>
+      </div>
+      <div class="notes">
+        <div class="note bad"><span class="n">1</span><div class="tx"><b>+ 菜单只有 4 项,却独占常驻位</b><span>附件/PPT/快修/编辑器;后续新增能力只会继续外溢到这一行。</span></div></div>
+        <div class="note bad"><span class="n">2</span><div class="tx"><b>权限四段全文分段 ≈ 320px</b><span>四个带文案的按钮挤占整行宽度,窄窗立刻换行;竞品是单 chip + 键盘循环(Claude Code Shift+Tab)。</span><span><b style="color:var(--t2)">裁决后处理:</b>常显激活档 chip,点击弹出四档下拉(见 A2)。</span><span class="ref">APPROVAL_SEGMENTS · ChatInput.tsx:85</span></div></div>
+        <div class="note bad"><span class="n">3</span><div class="tx"><b>会话用量按钮 = 第 3 个重复入口</b><span>状态条"上下文 38%"和右停靠 Context tab 已覆盖;VS Code 甚至收到"把用量指示藏掉"的请求。</span><span><b style="color:var(--t2)">裁决后处理:</b>保留此入口为唯一数字弹框入口,状态条数字段收编进弹框(见 A3)。</span><span class="ref">SessionUsageDialog 入口</span></div></div>
+        <div class="note bad"><span class="n">4</span><div class="tx"><b>临时会话开关 — 状态另有横幅重复</b><span>开启后输入框上方已出现 memory-bypass 横幅;开关常驻只为一个低频动作。</span></div></div>
+        <div class="note good"><span class="n">5</span><div class="tx"><b>模型 chip — 保留</b><span>会话级切换 + 会话 pin/设为默认,职责清晰,是本行唯一应有的模型控制面。</span></div></div>
+        <div class="note bad"><span class="n">6</span><div class="tx"><b>思考强度 badge 只读不可点</b><span>改一次力度要点开模型下拉两层;ChatGPT/Codex 桌面端都是"可查看可调整"的 composer compact gauge。</span><span class="ref">effort-badge · ChatInput.tsx:1802</span></div></div>
+        <div class="note bad"><span class="n">7</span><div class="tx"><b>"规划 继承 · 执行 继承" — 移除(见 ③)</b><span>"继承"是实现概念泄漏;写入全局配置却摆在会话 composer;会话 pin 模型时静默失效;Settings 已有完整配置面;无竞品先例。</span><span class="ref">PhaseTierSwitcher · ChatInput.tsx:1821</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ② 提案 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">②</span><h2>提案 — 同一位置收敛为 4 组控件</h2></div>
+    <div class="st-sub">绿色编号 = 变更点;模型 chip 与 发送/麦克风 原样保留。状态条见 ③-D6。</div>
+    <div class="compare">
+      <div>
+        <div class="cmp-tag prop"><span class="tagchip">提案</span><span class="cnt">5 组控件 · 常驻行宽 ≈ 现状一半 · 状态条 6→2 段</span></div>
+        <div class="composer">
+          <div class="ta"><textarea rows="2" placeholder="回复 Shannon,或输入 / 唤起技能、@ 引用文件…"></textarea></div>
+          <div class="compose-row">
+            <span class="pt good" data-n="A1"><button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button></span>
+            <span class="pt good" data-n="A2">
+              <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+            </span>
+            <span class="pt good" data-n="A3">
+              <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+            </span>
+            <button class="chip"><svg class="ic"><use href="#i-spark"/></svg><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+            <span class="pt good" data-n="A4">
+              <button class="chip"><svg class="ic"><use href="#i-gauge"/></svg>推理<span class="gauge"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span><span class="cv">深</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+            </span>
+            <span class="spacer"></span>
+            <button class="iconbtn"><svg class="ic"><use href="#i-mic"/></svg></button>
+            <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+          </div>
+        </div>
+        <!-- 提案状态条:仅目录 + 分支 -->
+        <div class="statusbar" style="border:1px solid var(--hair);border-radius:9px;margin-top:10px;font-size:10.5px">
+          <span class="seg2"><svg class="ic"><use href="#i-folder"/></svg>~/work/shannon/shannon-mono</span>
+          <span class="seg2"><svg class="ic"><use href="#i-branch"/></svg>fix/billing-webhook</span>
+        </div>
+        <div style="font-size:10px;color:var(--t3);margin-top:6px;text-align:center">▲ 状态条仅留目录与分支(缺席即隐藏);上下文 / 缓存 / 花费 / 预算数字全部收进 A3 弹框。</div>
+      </div>
+      <div class="notes">
+        <div class="note good"><span class="n">A1</span><div class="tx"><b>+ 菜单吸收临时会话</b><span>原 4 项 + 临时会话(带开/关状态、开启时角标提示);会话用量按裁决不进菜单,保留模型旁原位(A3)。</span><span class="ref">DropdownMenu plusItems 扩容</span></div></div>
+        <div class="note good"><span class="n">A2</span><div class="tx"><b>权限 = 当前档 chip + 下拉(裁决 D3)</b><span>平时只常显激活档(icon + 文案),点击弹出四档下拉(逐档说明 + 高危提示,沿用现有下拉结构);分段控件与 1200px 断点逻辑整体移除,各宽度同一形态。可选加分:Shift+Tab 循环切换(Claude Code 肌肉记忆)。</span><span class="ref">approval-mode-pill testid/IPC 不变;&lt;1200px Select 形态转正</span></div></div>
+        <div class="note good"><span class="n">A3</span><div class="tx"><b>上下文入口 = 模型旁 38% 图标 + 弹框(裁决 D4)</b><span>保留原入口位置,升级为百分比 chip;上下文窗口 / 缓存命中 / 花费 / 预算余量全部收进点击后的弹框(见 S3);状态条不再显示数字与金额,数字缺席即隐藏。</span><span class="ref">SessionUsageDialog 增缓存/预算区;chat.input.usage.* 保留</span></div></div>
+        <div class="note good"><span class="n">A4</span><div class="tx"><b>推理力度 = 可点 gauge chip(D2 通过)</b><span>四点 gauge(轻/标准/深/最高),点击直出四档弹层,一步调整;"标准"默认态低对比呈现,不抢视觉。模型下拉里的力度子层保留不动(两条路同一配置)。</span><span class="ref">effort-badge 升级为 button,新 testid=effort-gauge</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ③ 关键状态 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">③</span><h2>关键状态</h2></div>
+    <div class="st-sub">左上:+ 菜单(临时会话移入);右上:推理力度弹层;左下:会话用量弹框(状态条数字信息收编于此);右下:权限模式下拉(常显当前档)。</div>
+    <div class="states">
+
+      <div class="statebox">
+        <div class="sb-h">S1 · + 菜单(扩容后)<span class="kbd">点击</span></div>
+        <div class="sb-d">临时会话移入(带开/关状态、开启时角标提示);会话用量按裁决保留在模型旁,不进菜单。(窄窗形态示意)</div>
+        <div class="sb-stage">
+          <div class="cpop" style="left:10px;bottom:98px;width:240px">
+            <div class="ci"><svg class="ic"><use href="#i-clip"/></svg>添加文件…<span class="kbd tail">/</span></div>
+            <div class="ci"><svg class="ic"><use href="#i-ppt"/></svg>PPT 大纲…</div>
+            <div class="ci"><svg class="ic"><use href="#i-gear"/></svg>快速修复…</div>
+            <div class="ci"><svg class="ic"><use href="#i-edit"/></svg>编辑器…</div>
+            <div class="cdiv"></div>
+            <div class="ci"><svg class="ic"><use href="#i-brain"/></svg>临时会话<span class="tail"><span class="switch on" style="transform:scale(.82)"></span></span></div>
+          </div>
+          <div class="composer mini">
+            <div class="ta"><textarea rows="1" placeholder="回复 Shannon…"></textarea></div>
+            <div class="compose-row">
+              <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+              <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <span class="spacer"></span>
+              <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statebox">
+        <div class="sb-h">S2 · 推理力度弹层<span class="kbd">点击 gauge chip</span></div>
+        <div class="sb-d">四档直选;对未声明推理能力的模型显示说明行(不锁死)。(窄窗形态示意)</div>
+        <div class="sb-stage">
+          <div class="cpop" style="right:10px;bottom:98px;width:228px">
+            <div class="csec">推理力度</div>
+            <div class="ci"><svg class="ic"><use href="#i-bolt"/></svg>轻 · 最低延迟</div>
+            <div class="ci"><svg class="ic"><use href="#i-check"/></svg>标准(默认)</div>
+            <div class="ci sel"><svg class="ic"><use href="#i-check"/></svg>深 · 复杂推理</div>
+            <div class="ci"><svg class="ic"><use href="#i-bolt"/></svg>最高 · 极限推理</div>
+            <div class="cnote">力度随会话生效;"标准"时 gauge 低对比显示。</div>
+          </div>
+          <div class="composer mini">
+            <div class="ta"><textarea rows="1" placeholder="回复 Shannon…"></textarea></div>
+            <div class="compose-row">
+              <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+              <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <button class="chip acc"><svg class="ic"><use href="#i-gauge"/></svg><span class="cv">深</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <span class="spacer"></span>
+              <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statebox">
+        <div class="sb-h">S3 · 会话用量弹框(D4 裁决)<span class="kbd">点击模型旁 38% 图标</span></div>
+        <div class="sb-d">上下文 / 缓存 / 花费 / 预算数字全部收进弹框;状态条只留目录与分支,不再显示数字与金额。</div>
+        <div class="sb-stage" style="height:330px">
+          <div class="cpop" style="left:50%;transform:translateX(-50%);bottom:126px;width:252px">
+            <div class="csec">会话用量</div>
+            <div style="padding:7px 12px 3px">
+              <div class="row" style="justify-content:space-between;font-size:11px;color:var(--t2)"><span>上下文窗口</span><b class="mono" style="color:var(--t1);font-size:10.5px">38% · 74k/200k</b></div>
+              <div class="progress mt8" style="height:5px"><i style="width:38%"></i></div>
+            </div>
+            <div class="cdiv" style="margin-top:7px"></div>
+            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">缓存命中</span><b class="mono" style="color:var(--ok);font-size:11px">92%</b></div>
+            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">窗口峰值</span><b class="mono" style="font-size:11px">96k</b></div>
+            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">本会话花费 / 预算余</span><b class="mono" style="font-size:11px">$0.087 / $19.91</b></div>
+            <div class="cnote">数字缺席即隐藏(诚实契约);发送前预估行(草稿下方)不受影响。</div>
+          </div>
+          <div class="composer mini" style="bottom:44px">
+            <div class="ta"><textarea rows="1" placeholder="回复 Shannon…"></textarea></div>
+            <div class="compose-row">
+              <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+              <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+              <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <span class="spacer"></span>
+              <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+          <div class="statusbar" style="position:absolute;left:10px;right:10px;bottom:8px;border:1px solid var(--hair);border-radius:9px;font-size:10.5px">
+            <span class="seg2"><svg class="ic"><use href="#i-folder"/></svg>~/work/shannon/shannon-mono</span>
+            <span class="seg2"><svg class="ic"><use href="#i-branch"/></svg>fix/billing-webhook</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="statebox">
+        <div class="sb-h">S4 · 权限模式下拉(D3 二次修正)<span class="kbd">点击当前档 chip</span></div>
+        <div class="sb-d">平时只常显激活档(icon + 文案);下拉含四档说明与高危提示,当前档高亮;分段控件与 1200px 断点逻辑移除。</div>
+        <div class="sb-stage">
+          <div class="cpop" style="left:50%;transform:translateX(-50%);bottom:98px;width:264px">
+            <div class="csec">权限模式</div>
+            <!-- 2026-10-14 R2 词汇回改(D7):主词对齐权限命名 v2,副语同步实现 settings.general.approvalMode.* 描述 -->
+            <div class="ci"><svg class="ic"><use href="#i-shield"/></svg><span>询问<span style="color:var(--t3);font-size:10.5px"> · 只读自由执行,其余操作先询问</span></span></div>
+            <div class="ci sel"><svg class="ic"><use href="#i-check"/></svg><span>自动编辑<span style="color:var(--t3);font-size:10.5px"> · 自动批准文件编辑</span></span></div>
+            <div class="ci"><svg class="ic"><use href="#i-route"/></svg><span>计划<span style="color:var(--t3);font-size:10.5px"> · 共享上下文,批准计划</span></span></div>
+            <div class="ci"><svg class="ic"><use href="#i-bolt"/></svg><span>全自动<span style="color:var(--t3);font-size:10.5px"> · 批准除高危外的全部操作</span></span></div>
+            <div class="cnote">高危操作(如删除文件)不受档位影响,始终弹出确认——档位只调整自动批准基线。</div>
+          </div>
+          <div class="composer mini">
+            <div class="ta"><textarea rows="1" placeholder="回复 Shannon…"></textarea></div>
+            <div class="compose-row">
+              <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+              <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+              <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <button class="chip"><svg class="ic"><use href="#i-gauge"/></svg><span class="cv">深</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+              <span class="spacer"></span>
+              <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ④ "继承"组件的去向 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">④</span><h2>"规划/执行档位"(继承)组件的去向</h2></div>
+    <div class="st-sub">需求本身成立(Cline 用户的"规划用便宜模型、执行用强模型"工作流),但入口放错了层级。</div>
+    <div class="where">
+      <div class="card">
+        <h3><svg class="ic"><use href="#i-x"/></svg>composer:移除入口(D1)</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <span class="strike"><span class="chip"><svg class="ic"><use href="#i-layers"/></svg>规划 继承 · 执行 继承 <svg class="caret"><use href="#i-chev-d"/></svg></span></span>
+          <span class="st bad">移除</span>
+        </div>
+        <p>
+          <b style="color:var(--t2)">① 措辞</b> — "继承"是配置优先级链的实现概念(=不覆盖,向上取全局默认),对用户零信息量;<br>
+          <b style="color:var(--t2)">② 作用域反直觉</b> — 在会话 composer 点选,写入的却是全局 <span class="mono">plan_tier/act_tier</span>;<br>
+          <b style="color:var(--t2)">③ 静默失效</b> — 会话 pin 了模型后该控件无效(其自带提示承认了这点),与模型 chip 的优先级关系无任何视觉表达;<br>
+          <b style="color:var(--t2)">④ 无竞品先例</b> — Cline 把"Plan/Act 用不同模型"收在设置且 opt-in;Cursor/Claude Code 的 Plan 是权限模式,不做分阶段模型常驻。
+        </p>
+      </div>
+      <div class="card">
+        <h3 class="ok3"><svg class="ic"><use href="#i-check"/></svg>Settings → 模型:唯一入口(已存在)</h3>
+        <div class="setrow"><span class="lbl2">规划阶段</span><span class="chip">继承<svg class="caret"><use href="#i-chev-d"/></svg></span><span class="why">解析为 claude-sonnet-4-6</span></div>
+        <div class="setrow"><span class="lbl2">执行阶段</span><span class="chip">继承<svg class="caret"><use href="#i-chev-d"/></svg></span><span class="why">继承全局默认模型</span></div>
+        <p style="margin-top:9px">
+          设置页已有同名配置面(<span class="mono">settings.models.phaseTier.*</span>)+ 优先级说明与解析预览;composer 的档位需求(尤其"计划模式下用规划档")仍生效,只是不再展示。会话 pin 模型时"档位静默失效"的困惑随入口移除而消失。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ⑤ 响应式 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">⑤</span><h2>窄窗降级(&lt;1200px)</h2></div>
+    <div class="st-sub">权限下拉化后各宽度同一形态;&lt;1200px 仅 gauge chip 收缩为 icon+档位词,其余不变。</div>
+    <div class="composer mini" style="max-width:640px;margin:0 auto">
+      <div class="ta"><textarea rows="1" placeholder="回复 Shannon…"></textarea></div>
+      <div class="compose-row">
+        <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+        <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+        <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+        <button class="chip"><svg class="ic"><use href="#i-gauge"/></svg><span class="cv">深</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+        <span class="spacer"></span>
+        <button class="send"><svg class="ic"><use href="#i-send"/></svg></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ⑥ 竞品对照 & 变更清单 ═══ -->
+  <div class="rev-sec">
+    <div class="st-title"><span class="no">⑥</span><h2>竞品对照 & 组件级变更清单</h2></div>
+    <div class="twocol">
+      <div>
+        <table class="table">
+          <thead><tr><th>竞品</th><th>composer 常驻控件</th><th>分阶段模型档位</th></tr></thead>
+          <tbody>
+            <tr><td><b>Cursor</b></td><td>+ · 模式(Shift+Tab) · 模型 · @ · 发送</td><td>无(Plan=权限模式)</td></tr>
+            <tr><td><b>Claude Code</b></td><td>模式提示(Shift+Tab) · /模型 · 上下文余量%</td><td>无(plan=permission mode)</td></tr>
+            <tr><td><b>ChatGPT</b></td><td>+ 工具 · 模型/思考合一下拉(含 effort)</td><td>无</td></tr>
+            <tr><td><b>Codex desktop</b></td><td>+ · 模型 · <b>effort compact gauge(可点)</b></td><td>无</td></tr>
+            <tr><td><b>Cline</b></td><td>Plan/Act 切换 · 模型 · @ · 发送</td><td><b>设置内 opt-in</b>,不常驻</td></tr>
+            <tr><td><b>VS Code Copilot</b></td><td>模式 · 模型 · Add Context · 发送</td><td>无(用量指示有"隐藏"诉求)</td></tr>
+          </tbody>
+        </table>
+        <div class="tbl-note">共同模式:常驻 ≤4 控件;上下文用量 = 小 gauge/tooltip;权限单一控件;"继承"类配置概念不进 composer。</div>
+      </div>
+      <div class="chg">
+        <table class="table">
+          <thead><tr><th>组件</th><th>动作(按裁决)</th><th>契约影响</th></tr></thead>
+          <tbody>
+            <tr><td>PhaseTierSwitcher</td><td><b class="rm">移出</b> composer(设置页唯一入口)</td><td>删 ChatInput.tsx:1821 引用;e2e anchor 随迁设置页</td></tr>
+            <tr><td>+ 菜单(plusItems)</td><td><b class="mv">吸入</b> 临时会话</td><td>memory-bypass-toggle 的 aria/testid 迁至菜单项</td></tr>
+            <tr><td>APPROVAL_SEGMENTS</td><td><b class="md">下拉化</b> 移除分段与 1200px 断点,常显当前档 chip + 四档下拉(D3)</td><td>approval-mode-pill testid/IPC 不变;useMinWindowWidth / SEGMENTED_MODE_MIN_WIDTH_PX 删除</td></tr>
+            <tr><td>会话用量入口</td><td><b class="ok">保留原位</b>,升级为 38% chip;弹框收编 状态条上下文/缓存/花费/预算(D4)</td><td>chat.input.usage.* 保留;SessionUsageDialog 增缓存/预算区</td></tr>
+            <tr><td>ChatStatusBar</td><td><b class="md">瘦身</b> 仅留 目录/分支(缺席即隐藏)</td><td>chat-status-context/cache/cost/budget-left 段移除(数据改由弹框承载)</td></tr>
+            <tr><td>effort-badge</td><td><b class="md">升级</b> 为可点 gauge chip</td><td>保留 effort-option-* testid;新增 effort-gauge</td></tr>
+            <tr><td>模型 chip</td><td><b class="ok">不变</b></td><td>—</td></tr>
+          </tbody>
+        </table>
+        <div class="tbl-note">"标准"默认态:gauge 低对比(浅灰点),避免又一个高亮常驻;非默认态紫色高亮 + 档位词。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rev-foot">
+    <b>裁决结果(2026-10-14,含二次修正)</b>:D1 通过 — 移除"规划/执行档位"composer 入口,Settings 唯一入口 ·
+    D2 通过 — 推理力度升级为可点 gauge chip ·
+    <b>D3 二次修正</b> — 权限改为下拉选择:平时只常显激活档 chip,点击弹出四档下拉(说明 + 高危提示),分段控件移除 ·
+    <b>D4 修正</b> — 会话用量入口保留在模型旁(38% 图标),上下文/缓存/花费/预算数字收进点击后的弹框 ·
+    <b>D5 更新</b> — 状态条仅留工作目录与 git 分支,不再显示数字与金额。
+    <b>方案已确认,按 ⑥ 清单实施</b>;顺序:①移除档位入口 → ②权限下拉化 → ③effort gauge chip → ④+ 菜单吸入临时会话 + 弹框收编数字 → ⑤状态条瘦身。
+  </div>
+</div>
+<div class="mocktag">02c · 对话 composer 收敛 · 设计提案 v3(已裁决,进入实施)</div>
+</body>
+</html>

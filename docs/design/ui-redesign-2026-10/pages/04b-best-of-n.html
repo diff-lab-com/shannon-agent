@@ -10,8 +10,9 @@
   .bgrid { display:grid; grid-template-columns: 1fr 300px; gap:12px; padding:0 24px 24px; align-items:start; }
   .col { display:flex; flex-direction:column; gap:12px; min-width:0; }
 
-  /* 分支切换 chips(单选切换;字段:分支号 · 文件数 · 增删 · 成本) */
-  .bchips { display:flex; gap:8px; padding:0 24px; }
+  /* 分支选择 chips(多选并排评审;字段:分支号 · 文件数 · 增删 · 成本)
+     —— 2026-10-14 裁决 D4 回改:由单选切换改为多选(checkbox 语义),撤销「点击切换主区显示的变更」 */
+  .bchips { display:flex; gap:8px; padding:0 24px; flex-wrap:wrap; }
   .bchip {
     display:flex; flex-direction:column; gap:3px; text-align:left;
     padding:8px 12px; border-radius:10px; border:1px solid var(--hair);
@@ -19,12 +20,24 @@
   }
   .bchip:hover { background:rgba(255,255,255,.05); }
   .bchip .r1 { display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:650; color:var(--t2); }
-  .bchip .r1 .ic { width:13px; height:13px; }
   .bchip .r1 .bn { font-family:var(--mono); font-size:10.5px; color:var(--t3); font-weight:500; }
   .bchip .r2 { font-family:var(--mono); font-size:10.5px; color:var(--t3); white-space:nowrap; }
   .bchip.on { border-color:rgba(139,124,247,.45); background:var(--vio-dim); }
   .bchip.on .r1 { color:var(--t1); }
   .bchip .pick-ok { color:var(--ok); }
+  /* 多选勾选框(checkbox 语义,对齐实现 role="checkbox" aria-checked) */
+  .bchip .ck { width:13px; height:13px; border-radius:4px; border:1px solid var(--hair-2);
+    display:inline-grid; place-items:center; font-size:9.5px; font-weight:700; color:var(--vio-2); flex:none; }
+  .bchip.on .ck { border-color:rgba(139,124,247,.6); background:var(--vio-dim-2); }
+
+  /* 并排 diff 列:勾选的每个分支各占一列(实现 BatchDiffCompare BranchColumn:2-3 列并排,>3 列横向滚动) */
+  .diffcol { display:flex; gap:12px; align-items:stretch; }
+  .diffcol .diffcard { flex:1; min-width:0; }
+  .diffcol .diffcard .dh .fp { white-space:nowrap; }
+  .diffcol .diffcard .dh .ops { flex:none; }
+  /* 并排列宽减半:frow 单行化,长路径省略号截断(hover title 不做,静态稿示意) */
+  .diffcol .frow { white-space:nowrap; }
+  .diffcol .frow .fp { overflow:hidden; text-overflow:ellipsis; flex:1; min-width:0; }
 
   /* diffcard:文件变更列表(仅 +N−N 头部) */
   .frow { display:flex; align-items:center; gap:9px; padding:10px 12px; border-bottom:1px solid rgba(255,255,255,.045); }
@@ -188,80 +201,114 @@
         </div>
       </div>
 
-      <!-- 分支切换 chips(#0 推荐 ✓ / #1 / #2) -->
+      <!-- 分支选择 chips —— 按 2026-10-14 裁决回改(D4,README §5-4 + docs/reviews/2026-10-14-design-parity-audit-r2.md §3.4):
+           多选并排评审(checkbox 语义,默认全选已完成分支),撤销原稿「单选切换分支查看变更」。
+           chips 继续上浮 文件数 · 增删 · 成本 · 推荐/最小 diff 徽章;形态对齐实现 BatchDiffCompare.tsx。 -->
       <div class="bchips">
         <button class="bchip on">
-          <div class="r1"><svg class="ic pick-ok"><use href="#i-check"/></svg>#0<span class="bn">bo2f7a-0</span><span class="st vio" style="margin-left:auto">推荐</span></div>
+          <div class="r1"><span class="ck">✓</span>#0<span class="bn">bo2f7a-0</span><span class="st vio" style="margin-left:auto">推荐</span></div>
           <div class="r2">3 个文件 · +48 −12 · $0.52</div>
         </button>
         <button class="bchip">
-          <div class="r1">#1<span class="bn">bo2f7a-1</span></div>
+          <div class="r1"><span class="ck"></span>#1<span class="bn">bo2f7a-1</span></div>
           <div class="r2">8 个文件 · +96 −31 · $0.44</div>
         </button>
-        <button class="bchip">
-          <div class="r1">#2<span class="bn">bo2f7a-2</span></div>
+        <button class="bchip on">
+          <div class="r1"><span class="ck">✓</span>#2<span class="bn">bo2f7a-2</span></div>
           <div class="r2">5 个文件 · +61 −20 · $0.28</div>
         </button>
         <span class="spacer"></span>
-        <span class="muted" style="font-size:11px;align-self:center">切换分支查看各自的工作树变更</span>
+        <span class="muted" style="font-size:11px;align-self:center">多选并排评审 · 勾选分支同屏对照(>3 列横向滚动)</span>
       </div>
 
       <div class="bgrid" style="padding-top:12px">
-        <!-- 左列:所选分支的文件变更 + 操作行 -->
+        <!-- 左列:勾选分支的并排 diff 列 —— 2026-10-14 裁决 D4 回改:
+             每个勾选分支各占一列、列头带各自的「采纳此份」(实现 BranchColumn 形态),
+             撤销原稿「主区只显示单选分支 + 其他分支速览(点击切换)」的形态。 -->
         <div class="col">
 
-          <div class="diffcard">
-            <div class="dh">
-              <svg class="ic" style="width:14px;height:14px;color:var(--vio-2)"><use href="#i-branch"/></svg>
-              <span style="font-weight:650">分支 #0</span>
-              <span class="fp">bo2f7a-0</span>
-              <span class="st ok" style="margin-left:4px"><svg class="ic"><use href="#i-check"/></svg>已完成</span>
-              <div class="ops">
-                <span class="mono muted" style="font-size:10.5px">相对 main@7f3a9c2</span>
-                <span class="mono" style="font-size:11px"><b class="plus">+48</b> <b class="minus">−12</b></span>
+          <div class="diffcol">
+
+            <!-- 列 1:分支 #0(推荐) -->
+            <div class="diffcard">
+              <div class="dh">
+                <svg class="ic" style="width:14px;height:14px;color:var(--vio-2)"><use href="#i-branch"/></svg>
+                <span style="font-weight:650">分支 #0</span>
+                <span class="fp">bo2f7a-0</span>
+                <span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已完成</span>
+                <div class="ops">
+                  <span class="mono muted" style="font-size:10.5px">main@7f3a9c2</span>
+                  <span class="mono" style="font-size:11px"><b class="plus">+48</b> <b class="minus">−12</b></span>
+                </div>
               </div>
+
+              <div class="frow">
+                <svg class="ic"><use href="#i-file"/></svg>
+                <span class="fp">src/billing/webhook.ts</span>
+                <span class="st mute">已修改</span>
+                <span class="dsbar"><i class="a" style="width:80%"></i><i class="d" style="width:20%"></i></span>
+                <span class="pm"><b class="plus">+24</b><b class="minus">−6</b></span>
+                <svg class="ic chev"><use href="#i-chev-r"/></svg>
+              </div>
+              <div class="frow">
+                <svg class="ic"><use href="#i-file"/></svg>
+                <span class="fp">src/billing/retry.ts</span>
+                <span class="st mute">已修改</span>
+                <span class="dsbar"><i class="a" style="width:60%"></i><i class="d" style="width:40%"></i></span>
+                <span class="pm"><b class="plus">+6</b><b class="minus">−4</b></span>
+                <svg class="ic chev"><use href="#i-chev-r"/></svg>
+              </div>
+              <div class="frow">
+                <svg class="ic"><use href="#i-file"/></svg>
+                <span class="fp">tests/billing/webhook.spec.ts</span>
+                <span class="st vio">新增用例</span>
+                <span class="dsbar"><i class="a" style="width:90%"></i><i class="d" style="width:10%"></i></span>
+                <span class="pm"><b class="plus">+18</b><b class="minus">−2</b></span>
+                <svg class="ic chev"><use href="#i-chev-r"/></svg>
+              </div>
+
+              <div class="dfoot" style="display:flex;align-items:center;gap:8px">worktree .worktrees/bo2f7a-0 · 回归 14/14 通过<span class="spacer"></span><button class="btn sm pri">采纳此份</button></div>            </div>
+
+            <!-- 列 2:分支 #2(勾选进入对照) -->
+            <div class="diffcard">
+              <div class="dh">
+                <svg class="ic" style="width:14px;height:14px;color:var(--vio-2)"><use href="#i-branch"/></svg>
+                <span style="font-weight:650">分支 #2</span>
+                <span class="fp">bo2f7a-2</span>
+                <span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已完成</span>
+                <div class="ops">
+                  <span class="mono muted" style="font-size:10.5px">相对 main@7f3a9c2</span>
+                  <span class="mono" style="font-size:11px"><b class="plus">+61</b> <b class="minus">−20</b></span>
+                </div>
+              </div>
+
+              <div class="frow">
+                <svg class="ic"><use href="#i-file"/></svg>
+                <span class="fp">src/billing/webhook.ts</span>
+                <span class="st mute">已修改</span>
+                <span class="dsbar"><i class="a" style="width:70%"></i><i class="d" style="width:30%"></i></span>
+                <span class="pm"><b class="plus">+31</b><b class="minus">−9</b></span>
+                <svg class="ic chev"><use href="#i-chev-r"/></svg>
+              </div>
+              <div class="frow">
+                <svg class="ic"><use href="#i-file"/></svg>
+                <span class="fp">src/billing/signature.ts</span>
+                <span class="st vio">新增</span>
+                <span class="dsbar"><i class="a" style="width:85%"></i><i class="d" style="width:15%"></i></span>
+                <span class="pm"><b class="plus">+30</b><b class="minus">−11</b></span>
+                <svg class="ic chev"><use href="#i-chev-r"/></svg>
+              </div>
+
+              <div class="dfoot" style="display:flex;align-items:center;gap:8px">worktree .worktrees/bo2f7a-2 · 回归全部通过<span class="spacer"></span><button class="btn sm pri">采纳此份</button></div>
             </div>
 
-            <div class="frow">
-              <svg class="ic"><use href="#i-file"/></svg>
-              <span class="fp">src/billing/webhook.ts</span>
-              <span class="st mute">已修改</span>
-              <span class="dsbar"><i class="a" style="width:80%"></i><i class="d" style="width:20%"></i></span>
-              <span class="pm"><b class="plus">+24</b><b class="minus">−6</b></span>
-              <svg class="ic chev"><use href="#i-chev-r"/></svg>
-            </div>
-            <div class="frow">
-              <svg class="ic"><use href="#i-file"/></svg>
-              <span class="fp">src/billing/retry.ts</span>
-              <span class="st mute">已修改</span>
-              <span class="dsbar"><i class="a" style="width:60%"></i><i class="d" style="width:40%"></i></span>
-              <span class="pm"><b class="plus">+6</b><b class="minus">−4</b></span>
-              <svg class="ic chev"><use href="#i-chev-r"/></svg>
-            </div>
-            <div class="frow">
-              <svg class="ic"><use href="#i-file"/></svg>
-              <span class="fp">tests/billing/webhook.spec.ts</span>
-              <span class="st vio">新增用例</span>
-              <span class="dsbar"><i class="a" style="width:90%"></i><i class="d" style="width:10%"></i></span>
-              <span class="pm"><b class="plus">+18</b><b class="minus">−2</b></span>
-              <svg class="ic chev"><use href="#i-chev-r"/></svg>
-            </div>
-
-            <div class="dfoot">worktree .worktrees/bo2f7a-0 · 采纳时合并回当前分支,其余方案被清理</div>
           </div>
 
-          <!-- 底部操作行 -->
-          <div class="row">
-            <button class="btn pri"><svg class="ic"><use href="#i-check"/></svg>采纳 #0</button>
-            <button class="btn ghost"><svg class="ic"><use href="#i-x"/></svg>放弃本次</button>
-            <span class="muted" style="font-size:11px">采纳前会再次确认;未采纳分支的工作树与分支将被清理</span>
-          </div>
-
-          <!-- 其他分支速览(点击切换) -->
+          <!-- 未勾选分支(点击 chip 加入对照,不再画「点击切换」) -->
           <div class="card">
             <div class="row" style="padding:11px 16px;border-bottom:1px solid var(--hair)">
-              <b style="font-size:12.5px">其他分支</b>
-              <span class="muted" style="font-size:10.5px;margin-left:6px">点击切换主区显示的变更</span>
+              <b style="font-size:12.5px">未勾选分支</b>
+              <span class="muted" style="font-size:10.5px;margin-left:6px">点击上方 chip 加入并排对照</span>
             </div>
             <div class="itemrow">
               <div class="ico"><svg class="ic"><use href="#i-branch"/></svg></div>
@@ -269,16 +316,14 @@
                 <div class="h"><span class="t">分支 #1 · <span class="mono" style="font-size:11px">bo2f7a-1</span></span><span class="st bad"><svg class="ic"><use href="#i-x"/></svg>2 项测试失败</span></div>
                 <div class="src-chain" style="margin-top:4px">8 个文件 · <b class="plus">+96</b> <b class="minus">−31</b> · $0.44 · worktree .worktrees/bo2f7a-1</div>
               </div>
-              <div class="ops"><button class="btn ghost sm">查看变更</button></div>
+              <div class="ops"><button class="btn ghost sm">加入对照</button></div>
             </div>
-            <div class="itemrow">
-              <div class="ico"><svg class="ic"><use href="#i-branch"/></svg></div>
-              <div class="body">
-                <div class="h"><span class="t">分支 #2 · <span class="mono" style="font-size:11px">bo2f7a-2</span></span><span class="st ok"><svg class="ic"><use href="#i-check"/></svg>测试全部通过</span></div>
-                <div class="src-chain" style="margin-top:4px">5 个文件 · <b class="plus">+61</b> <b class="minus">−20</b> · $0.28 · worktree .worktrees/bo2f7a-2</div>
-              </div>
-              <div class="ops"><button class="btn ghost sm">查看变更</button></div>
-            </div>
+          </div>
+
+          <!-- 底部操作行(采纳改为列内动作;批次级只留放弃 + 语义说明) -->
+          <div class="row">
+            <button class="btn ghost"><svg class="ic"><use href="#i-x"/></svg>放弃该批次并清理分支</button>
+            <span class="muted" style="font-size:11px">采纳 = 合并回当前分支并清理其余方案(合并前再次确认);冲突时工作树原样保留供人工处理</span>
           </div>
 
         </div>

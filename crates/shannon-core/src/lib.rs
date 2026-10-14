@@ -62,6 +62,7 @@ pub mod github_triggers;
 /// Session-goal continuation decision (P0-2) — pure goal loop logic shared
 /// by the TUI and the desktop goal runner.
 pub mod goal_loop;
+pub mod injection_guard;
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;

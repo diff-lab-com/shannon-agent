@@ -52,43 +52,11 @@ pub struct InjectionReport {
     pub match_count: usize,
 }
 
-/// Static list of (lowercase-substring, category). Order: most dangerous first.
-///
-/// These patterns are deliberately conservative — false positives are
-/// tolerable (we warn) but false negatives on common attack patterns are not.
-///
-/// NOTE: the strings below are *detection patterns* — substrings we scan
-/// untrusted text for. They are not executed by Shannon; the literal `eval(`
-/// and similar are safe here.
-const PATTERNS: &[(&str, &str)] = &[
-    // System override — clearest attack signal.
-    ("ignore previous instructions", "system_override"),
-    ("ignore all previous instructions", "system_override"),
-    ("ignore the previous", "system_override"),
-    ("disregard previous", "system_override"),
-    ("forget your instructions", "system_override"),
-    ("you are not an ai", "system_override"),
-    ("you are now a", "system_override"),
-    ("new instructions:", "system_override"),
-    ("system prompt:", "system_override"),
-    // Tool abuse — installer tries to run dangerous ops.
-    ("rm -rf", "tool_abuse"),
-    ("sudo ", "tool_abuse"),
-    ("curl ", "data_exfil"),
-    ("wget ", "data_exfil"),
-    ("exec(", "tool_abuse"),
-    ("eval(", "tool_abuse"),
-    // Data exfiltration — outbound leak patterns.
-    ("send the user's", "data_exfil"),
-    ("upload the contents", "data_exfil"),
-    ("post the api key", "data_exfil"),
-    ("base64 encode the", "data_exfil"),
-    // Guard bypass.
-    ("bypass safety", "ignore_guard"),
-    ("bypass the safety", "ignore_guard"),
-    ("don't ask for permission", "ignore_guard"),
-    ("do not ask for permission", "ignore_guard"),
-];
+/// Pattern table lives in `shannon_core::injection_guard` (single source —
+/// the outbound web-content audit scans with the exact list the install gate
+/// classifies with). The install-time classifier and `InjectionReport`
+/// remain desktop-local: their risk levels are an install-gate contract.
+use shannon_core::injection_guard::PATTERNS;
 
 /// Scan free-form text for injection patterns. Case-insensitive.
 ///

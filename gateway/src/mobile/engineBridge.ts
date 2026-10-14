@@ -264,6 +264,17 @@ export interface EngineBridgeOptions {
    */
   taskAgentLookup?: (sessionId: string) => string | null;
   /**
+   * D-4 (#401): task-thread ownership — does `deviceId` own the dispatched
+   * task whose thread session is `sessionId`? Wired to
+   * `MobileDispatchHub.ownsTaskSession` by the composer (the B0 journal is
+   * the hub-side task→device attribution). When true, the gated-query
+   * ownership rule lets the device's `session_id` through so steering
+   * replies land in its OWN task thread instead of being rerouted to the
+   * device session; unknown ids and foreign devices keep the hijack guard.
+   * Absent → no ownership exemption (legacy force-to-device behavior).
+   */
+  taskOwnedByDevice?: (sessionId: string, deviceId: string) => boolean;
+  /**
    * trust.changed push seam: called when a `shannon/trust.revoke` lands on
    * the engine AND the engine answers `revoked: true` (a grant actually
    * removed — an idempotent replay answers `revoked: false` and pushes
@@ -378,15 +389,27 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       // Ownership: in gated mode the turn runs under the CALLER's device
       // session. A caller-supplied session_id can't target another device's
       // in-flight query (steer/cancel hijack) — mismatch is ignored with a
-      // warning. Open mode (dev/test) keeps the caller-controlled behavior.
+      // warning. D-4 (#401): one exemption — the device steering its OWN
+      // task thread (the journal says this device dispatched the task whose
+      // id is the session) keeps the caller's session_id so the reply lands
+      // in the task thread. Open mode (dev/test) keeps the caller-controlled
+      // behavior.
       let sessionId = params.session_id ?? null;
       if (requireSession) {
         if (sessionId != null && sessionId !== ctx.sessionId) {
-          opts.logger.warn(
-            `shannon/query: ignoring foreign session_id (caller=${ctx.sessionId})`,
-          );
+          // sessionGate above guarantees a bound device session in gated mode.
+          const deviceId = ctx.sessionId as string;
+          if (opts.taskOwnedByDevice?.(sessionId, deviceId)) {
+            opts.logger.info(
+              `shannon/query: steering own task thread (caller=${deviceId}, task=${sessionId})`,
+            );
+          } else {
+            opts.logger.warn(`shannon/query: ignoring foreign session_id (caller=${deviceId})`);
+            sessionId = deviceId;
+          }
+        } else {
+          sessionId = ctx.sessionId;
         }
-        sessionId = ctx.sessionId;
       }
       const model = params.model ?? modelOverride ?? opts.defaultModel ?? null;
       const key = sessionId ?? ANON_KEY;
@@ -470,7 +493,18 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       const params = (raw ?? {}) as Partial<CancelParams>;
       // Ownership (mirror of query): a bound device may only cancel its own
       // in-flight turn — params.session_id can't reach another device's query.
-      const key = requireSession ? ctx.sessionId! : params.session_id ?? ANON_KEY;
+      // D-4 (#401): one exemption mirrors the query side — the device's own
+      // task thread (steering queries register under the task id key), so a
+      // Stop from inside the thread reaches the steering client too.
+      const requested = typeof params.session_id === "string" ? params.session_id : null;
+      const ownTaskKey =
+        requireSession &&
+        requested != null &&
+        requested !== ctx.sessionId &&
+        (opts.taskOwnedByDevice?.(requested, ctx.sessionId as string) ?? false)
+          ? requested
+          : null;
+      const key = requireSession ? (ownTaskKey ?? ctx.sessionId!) : params.session_id ?? ANON_KEY;
       // Two producers share the registry: the bridge's own query clients sit
       // under the bare key (device session id / anon), a dispatched task's
       // lane client sits under `mobile:<deviceId>`. Probe both — direct first,
@@ -484,8 +518,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         // `query.failed`) is delivered immediately, not after the parked ask
         // times out. Direct `shannon/query` turns never park in the hub, so
         // this is a 0-entry no-op for them (behavior unchanged); a parked
-        // approval for a DIFFERENT device is never touched.
-        const settled = opts.cancelPendingApprovals?.(key) ?? 0;
+        // approval for a DIFFERENT device is never touched. Parked approvals
+        // are keyed by DEVICE id — settle by the caller, never by a task key.
+        const settled =
+          opts.cancelPendingApprovals?.(requireSession ? ctx.sessionId! : key) ?? 0;
         if (settled > 0) {
           opts.logger.info(
             `shannon/cancel: deny-settled ${settled} parked approval(s) for key=${key}`,
@@ -683,13 +719,19 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
       const gate = sessionGate(ctx);
       if (gate) return gate;
       try {
-        const { mode } = await getApprovalMode({
+        // #400 follow-up: forward the EFFECTIVE mode and its source so the
+        // phone displays what a new turn would actually run under (`?? null`
+        // covers an engine that predates the additive `source` key).
+        const { mode, source } = await getApprovalMode({
           engineBaseUrl: opts.engineHttpBaseUrl,
           sessionId: ctx.sessionId as string,
           authToken: engineAuthToken,
           fetchImpl,
         });
-        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+        return {
+          kind: "result",
+          result: { mode, source: source ?? null } satisfies ApprovalStateResult,
+        };
       } catch (err) {
         return {
           kind: "error",
@@ -711,7 +753,7 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         };
       }
       try {
-        const { mode } = await setApprovalMode({
+        const { mode, source } = await setApprovalMode({
           engineBaseUrl: opts.engineHttpBaseUrl,
           sessionId: ctx.sessionId as string,
           mode: params.mode,
@@ -721,7 +763,10 @@ export function createEngineHandlers(opts: EngineBridgeOptions): MethodHandlers 
         opts.logger.info(
           `shannon/approval.set: session ${ctx.sessionId} tightened to ${mode}`,
         );
-        return { kind: "result", result: { mode } satisfies ApprovalStateResult };
+        return {
+          kind: "result",
+          result: { mode, source: source ?? null } satisfies ApprovalStateResult,
+        };
       } catch (err) {
         return {
           kind: "error",

@@ -12,6 +12,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
 import { useT } from '@/i18n'
 import LoadingState from '@/components/ui/loading-state'
 import * as api from '@/lib/tauri-api'
@@ -20,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
+import { useSessions } from '@/context/SessionContext'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
 import CurrentSessionCostPanel from '@/components/usage/CurrentSessionCostPanel'
 import UsageBudgetCard from '@/components/usage/UsageBudgetCard'
@@ -62,6 +65,47 @@ function fmtCost(locale: string, n: number): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(n)}`
+}
+
+/** Local-calendar day key (`YYYY-MM-DD`) N days from today — the same
+ *  labelling the backend uses for by_day buckets (commands_usage.rs
+ *  day_label buckets on local days). */
+function localDayKey(offsetDays: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - offsetDays)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+// M5a (设计 06:158): CSV escaping — quote a cell when it contains a comma,
+// quote, or newline, doubling embedded quotes (same rule as the artifact
+// table download in DocumentRenderer).
+function csvCell(v: string): string {
+  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+}
+
+/**
+ * M5a — build the usage export as ONE CSV with a leading `section` column
+ * (by_day buckets + per-session detail for the active filter range). A
+ * single table keeps it trivially parseable — no per-section headers, no
+ * second file.
+ */
+function buildUsageCsv(byDay: UsageBucket[], bySession: SessionUsageRow[]): string {
+  const header = 'section,label,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,cost_usd,requests'
+  const lines: string[] = [header]
+  for (const b of byDay) {
+    lines.push([
+      'by_day', b.label, b.input_tokens, b.output_tokens,
+      b.cache_creation_tokens, b.cache_read_tokens, b.cost_usd, b.requests,
+    ].map(x => csvCell(String(x))).join(','))
+  }
+  for (const r of bySession) {
+    lines.push([
+      'by_session', r.title ?? r.sessionId, r.inputTokens, r.outputTokens,
+      r.cacheCreationTokens, r.cacheReadTokens, r.costUsd, r.requests,
+    ].map(x => csvCell(String(x))).join(','))
+  }
+  return lines.join('\n')
 }
 
 /** Card wrapper for a chart — title + subtitle on top, the SVG below. */
@@ -355,11 +399,43 @@ export default function Usage() {
   // honest reading, not a placeholder.
   const todayCostUsd = useMemo(() => {
     if (!stats) return null
-    const now = new Date()
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const key = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-    return stats.by_day.find(b => b.label === key)?.cost_usd ?? 0
+    return stats.by_day.find(b => b.label === localDayKey(0))?.cost_usd ?? 0
   }, [stats])
+
+  // M5b (设计 06 KPI 第二行「较昨日 ±N%」): yesterday's by_day bucket, same
+  // local-day labelling. null bucket → 0 spend, but the ratio is only shown
+  // when a yesterday bucket actually exists (else "—" — no fabricated %).
+  const yesterdayCostUsd = useMemo(() => {
+    if (!stats) return null
+    return stats.by_day.find(b => b.label === localDayKey(1))?.cost_usd ?? 0
+  }, [stats])
+
+  const vsYesterdayHint = useMemo(() => {
+    if (todayCostUsd == null || yesterdayCostUsd == null || yesterdayCostUsd <= 0) {
+      return intl.formatMessage({ id: 'usage.stat.vsYesterday.none' })
+    }
+    const pct = Math.round(((todayCostUsd - yesterdayCostUsd) / yesterdayCostUsd) * 100)
+    const signed = `${pct >= 0 ? '+' : ''}${pct}%`
+    return intl.formatMessage({ id: 'usage.stat.vsYesterday' }, { pct: signed })
+  }, [todayCostUsd, yesterdayCostUsd, intl])
+
+  // 设计 06 KPI 四卡之四 (M4): context peak — the largest context-window
+  // peak across the session index (SessionInfo.max_context_tokens, the same
+  // L0 joined field the sidebar rail's 峰值 chip shows). The usage ledger
+  // has no per-day window series, so the card reports the session-index
+  // maximum with the session that holds it as the hint; "—" when no session
+  // ever logged a window (honesty contract).
+  const { sessions } = useSessions()
+  const contextPeak = useMemo(() => {
+    let best: { tokens: number; title: string } | null = null
+    for (const s of sessions ?? []) {
+      const p = s.max_context_tokens
+      if (p != null && p > 0 && (best == null || p > best.tokens)) {
+        best = { tokens: p, title: s.title }
+      }
+    }
+    return best
+  }, [sessions])
 
   // 设计 06 KPI: cache hit rate — the same frozen formula the chat context
   // card uses (cache_read / (cache_read + input)); no denominator → null,
@@ -401,8 +477,35 @@ export default function Usage() {
 
   const hasData = (stats != null && stats.totals.requests > 0)
 
+  // M5a (设计 06:158 页头「导出 CSV」): export the ACTIVE filter range's
+  // by_day buckets + per-session detail as one CSV file. Destination via
+  // the native save dialog, the same pattern as GeneralPane's
+  // exportAllSessions (plugin-dialog save + save_text_file backend write).
+  const [exportingCsv, setExportingCsv] = useState(false)
+  const handleExportCsv = async () => {
+    if (!stats || exportingCsv) return
+    setExportingCsv(true)
+    try {
+      const csv = buildUsageCsv(stats.by_day, sessionRows ?? [])
+      const target = await saveDialog({
+        defaultPath: `shannon-usage-${localDayKey(0)}.csv`,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
+      })
+      if (!target) return // user cancelled
+      await api.saveTextFile(target, csv)
+      toast.success(intl.formatMessage({ id: 'usage.export.csv.success' }), { description: target })
+    } catch (e) {
+      toastError(intl.formatMessage({ id: 'usage.export.csv.failed' }), e)
+    } finally {
+      setExportingCsv(false)
+    }
+  }
+
   return (
-    <div className="p-lg max-w-medium mx-auto">
+    <div className="p-lg max-w-medium mx-auto w-full flex-1 min-h-0 overflow-y-auto pb-16">
+      {/* R3 wording audit: sr-only h1 keeps the page self-identifying
+          for AT/axe without re-adopting a visible title (Tasks.tsx pattern). */}
+      <h1 className="sr-only">{t('header.title.usage')}</h1>
       <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
 
       {/* P2-1 — threshold banner. Derived from the live percent (not the
@@ -498,6 +601,20 @@ export default function Usage() {
             {intl.formatMessage({ id: 'usage.range' }, { days: r })}
           </Button>
         ))}
+        {/* M5a (设计 06:158): page-head export action — the current filter
+            range's by_day + per-session detail as one CSV via the native
+            save dialog. */}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={loading || stats == null || exportingCsv}
+          data-testid="usage-export-csv"
+          onClick={() => void handleExportCsv()}
+          className="px-md py-xs rounded-full font-label-md text-label-md border border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:text-primary transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ml-auto"
+        >
+          <span className="material-symbols-outlined icon-sm mr-xs" aria-hidden="true">download</span>
+          {t('usage.export.csv')}
+        </Button>
       </div>
 
       {/* P2-1 — monthly-budget card: the % bar visualization + the budget
@@ -563,8 +680,10 @@ export default function Usage() {
         <div className="space-y-lg">
           {/* Totals — 设计 06 KPI row: the four ledger totals plus the two
               derived cards the design names (今日消耗 from the local-day
-              bucket, 缓存命中率 from the frozen cache formula). 2×3 grid. */}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-md">
+              bucket, 缓存命中率 from the frozen cache formula) and the
+              fourth design card 上下文峰值 (M4, session-index maximum).
+              2×4 grid to match the design's four-across KPI band. */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
             <StatCard
               icon="token"
               label={t('usage.stat.tokens')}
@@ -590,6 +709,7 @@ export default function Usage() {
               icon="today"
               label={t('usage.stat.todayCost')}
               value={fmtCost(intl.locale, todayCostUsd ?? 0)}
+              hint={vsYesterdayHint}
               data-testid="usage-stat-today-cost"
             />
             <StatCard
@@ -598,6 +718,13 @@ export default function Usage() {
               value={cacheHitRate != null ? `${cacheHitRate.toFixed(1)}%` : '—'}
               hint={cacheHitRate != null ? undefined : t('usage.stat.cacheHitRate.none')}
               data-testid="usage-stat-cache-hit-rate"
+            />
+            <StatCard
+              icon="target"
+              label={t('usage.stat.contextPeak')}
+              value={contextPeak != null ? fmtTokens(intl.locale, contextPeak.tokens) : '—'}
+              hint={contextPeak != null ? contextPeak.title : t('usage.stat.contextPeak.none')}
+              data-testid="usage-stat-context-peak"
             />
           </div>
 

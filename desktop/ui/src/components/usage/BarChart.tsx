@@ -64,9 +64,20 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
   const padX = 32
   const padTop = 24
   const padBottom = 56
+  // Y-axis tick labels render leftward from the axis (textAnchor="end").
+  // CJK formatters (「1.5万」) need more leading room than a fixed 32px
+  // gutter — the leading character clipped at the viewBox edge (R2 polish
+  // A, pre-existing). Size the left gutter from the widest formatted tick;
+  // rough per-char width: CJK ≈ 12 units at fontSize 11, ASCII ≈ 7.
+  const padLeft = Math.max(
+    padX,
+    ...[0, 0.25, 0.5, 0.75, 1].map(t =>
+      [...fmt(max * t)].reduce((w, ch) => w + (ch.charCodeAt(0) > 0x2e80 ? 12 : 7), 0) + 12,
+    ),
+  )
   const chartH = VB_H - padTop - padBottom
   const colCount = Math.max(data.length, 1)
-  const groupW = (VB_W - padX * 2) / colCount
+  const groupW = (VB_W - padLeft - padX) / colCount
   const colW = Math.min(36, groupW * 0.7)
 
   if (data.length === 0) {
@@ -87,7 +98,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         {[0, 0.25, 0.5, 0.75, 1].map(t => (
           <g key={t}>
             <line
-              x1={padX}
+              x1={padLeft}
               x2={VB_W - padX}
               y1={padTop + chartH * (1 - t)}
               y2={padTop + chartH * (1 - t)}
@@ -96,7 +107,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
               strokeDasharray={t === 0 ? undefined : '2 4'}
             />
             <text
-              x={padX - 6}
+              x={padLeft - 6}
               y={padTop + chartH * (1 - t) + 4}
               textAnchor="end"
               fontSize="11"
@@ -110,7 +121,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         ))}
 
         {data.map((point, idx) => {
-          const groupX = padX + groupW * idx + (groupW - colW) / 2
+          const groupX = padLeft + groupW * idx + (groupW - colW) / 2
           let y = padTop + chartH
           // Adaptive X-axis density: when there are too many columns to
           // fit legible labels, drop every other one — otherwise 30 / 90
@@ -126,6 +137,17 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
                   seg.color ??
                   FALLBACK_COLORS[sIdx % FALLBACK_COLORS.length] ??
                   FALLBACK_COLORS[0]
+                // SVG <rect> ignores background-color — the legend <div>s
+                // keep bg-*, bars need fill-*. The fill classes are spelled
+                // as literals (FILL_FALLBACKS) because Tailwind's scanner
+                // can't see classes produced by runtime string replace
+                // (light-sweep 存2: bars rendered black in every theme).
+                const fillClass =
+                  colorClass === 'bg-primary' ? 'fill-primary'
+                  : colorClass === 'bg-secondary' ? 'fill-secondary'
+                  : colorClass === 'bg-tertiary' ? 'fill-tertiary'
+                  : colorClass === 'bg-warning' ? 'fill-warning'
+                  : colorClass
                 return (
                   <rect
                     key={seg.key + sIdx}
@@ -133,7 +155,7 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
                     y={y}
                     width={colW}
                     height={Math.max(segH, 0)}
-                    className={cn(colorClass, 'opacity-90')}
+                    className={cn(fillClass, 'opacity-90')}
                     rx={2}
                     onMouseEnter={(e) => {
                       const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect()
@@ -231,6 +253,17 @@ export function DonutChart({
       <circle cx={cx} cy={cy} r={radius} fill="none" className="stroke-surface-container" strokeWidth={14} />
       {segments.map((s, i) => {
         const len = (s.value / safeTotal) * C
+        // Same Tailwind-scanner constraint as the bars above: stroke-*
+        // classes must be literals, not runtime bg-* replacements. Callers
+        // may pass their own stroke-/bg- class — bg-* maps by table.
+        const rawColor = s.colorClass ?? defaultColors[i % defaultColors.length]
+        const strokeClass =
+          rawColor === 'bg-primary' ? 'stroke-primary'
+          : rawColor === 'bg-secondary' ? 'stroke-secondary'
+          : rawColor === 'bg-tertiary' ? 'stroke-tertiary'
+          : rawColor === 'bg-warning' ? 'stroke-warning'
+          : rawColor === 'bg-error' ? 'stroke-error'
+          : rawColor
         const el = (
           <circle
             key={s.key}
@@ -238,7 +271,7 @@ export function DonutChart({
             cy={cy}
             r={radius}
             fill="none"
-            className={cn(s.colorClass ?? defaultColors[i % defaultColors.length])}
+            className={cn(strokeClass)}
             strokeWidth={14}
             strokeDasharray={`${len} ${C - len}`}
             strokeDashoffset={-offset}

@@ -699,6 +699,22 @@ jobs:
             | sed 's| \./| |' > SHA256SUMS
           cat SHA256SUMS
 
+      # Signed update channel (D2, 2026-10-12): built + signed by THIS
+      # release's own binary, so channel canonicalization can never drift
+      # from the verifier. The secret is the Ed25519 seed; the public half is
+      # pinned in shannon-cli/src/self_update.rs. latest.json protects itself
+      # by signature — it is deliberately NOT covered by SHA256SUMS/attestation
+      # (both of which ran before it exists).
+      - name: Build + sign latest.json update channel
+        env:
+          SHANNON_LATEST_SIGNING_KEY: ${{ secrets.SHANNON_LATEST_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          /tmp/smoke/shannon self-update --emit-channel             --tag "$TAG"             --sums release-assets/SHA256SUMS             --url-base "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"             > release-assets/latest.json
+          cat release-assets/latest.json
+
       - name: Attach installers + checksum, then publish
         shell: bash
         run: |
@@ -711,6 +727,7 @@ jobs:
           # covers — with --clobber for re-run idempotency.
           gh release upload "$TAG" \
             release-assets/install.sh release-assets/install.ps1 release-assets/SHA256SUMS \
+            release-assets/latest.json \
             --clobber --repo "$REPO"
           # Flip the existing draft -> published, IN PLACE. softprops
           # action-gh-release@v2 with draft:false instead CREATES a second

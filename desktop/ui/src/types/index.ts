@@ -770,6 +770,12 @@ export interface DesktopConfig {
    *  = unset — the sidebar shows the trailing 7-day cost and no threshold
    *  alerts fire. Written via `configure('monthly_budget_usd')`. */
   monthly_budget_usd?: number | null
+  /** 补2 (design-parity R2 §7.1): minutes-of-manual-work stand-in per
+   *  processed inbox item — the Triage 本周节省 footnote's editable dial.
+   *  null/undefined = the standing default (5). Written via
+   *  `configure('manual_minutes_per_item')`; the backend rejects values
+   *  outside 1-120. */
+  manual_minutes_per_item?: number | null
   /** S3-5 (P2-19): effort dial — canonical `low` | `standard` | `high` |
    *  `max`. null/undefined = the engine default (`standard`, which sends no
    *  thinking parameters). Written via `configure('effort_level')`; the
@@ -1059,6 +1065,16 @@ export interface FileIndexEntry {
   registered_at: string
   favorite: boolean
   source: string
+  /** R2 Wave C′ (design 11 来源回跳): uuid of the chat session that was
+   *  active at registration, stamped backend-side. Absent for historical
+   *  rows and session-less registrations — callers must render no jump. */
+  session_id?: string
+  /** R2 B2 (design 11 提取状态徽章): how many segments the attachment
+   *  extraction pipeline produced for this file, backfilled by the send
+   *  pipeline when an extraction report exists. Absent = never extracted
+   *  or not yet reconciled — callers must render no badge (honesty
+   *  contract, same discipline as `session_id`). */
+  extracted_segments?: number
 }
 
 // --- MCP Types ---
@@ -1211,6 +1227,15 @@ export interface TaskItem {
   execution_mode?: 'serial' | 'parallel' | null
   /** Team / session subdir name the task file lives in. */
   team?: string | null
+  /** R2 Wave C′ (design 09:229): blocked reason, verbatim from the task
+   *  JSON's optional `blockedReason` field. Absent — never invented — when
+   *  the writer supplied none; the card falls back to deriving
+   *  「等待 N 个前置任务」 from `blocked_by` or renders 「—」. */
+  blocked_reason?: string
+  /** R2 Wave C′: epoch-ms the task last entered a blocked state, derived
+   *  backend-side from an explicit timestamp field or the task file's mtime.
+   *  Absent when the task is not blocked-family or no data exists. */
+  blocked_since_ms?: number
   /** 看板金额: ledger-attributed spend (USD) of the producing agent session,
    *  joined at `list_tasks` time when `team` is a real session uuid the
    *  usage ledger has records for (possibly 0). Absent — never an estimate

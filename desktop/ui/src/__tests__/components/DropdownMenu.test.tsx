@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuSeparator, type DropdownMenuItem, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
 
 const items: DropdownMenuItem[] = [
   { id: 'edit', label: 'Edit', icon: 'edit' },
@@ -78,5 +78,30 @@ describe('DropdownMenu', () => {
     )
     fireEvent.mouseDown(screen.getByText('outside'))
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+// R2 audit W6 (02c 设计稿 S1) — the composer's + menu separates the editor
+// tools from the low-frequency 临时会话 toggle.
+describe('DropdownMenuSeparator', () => {
+  const itemsWithSep: DropdownMenuEntry[] = [
+    { id: 'edit', label: 'Edit' },
+    DropdownMenuSeparator('plus-editor-sep'),
+    { id: 'duplicate', label: 'Duplicate' },
+  ]
+
+  it('renders a non-interactive separator row that is not a menuitem', () => {
+    render(<DropdownMenu open={true} onClose={() => {}} items={itemsWithSep} />)
+    expect(screen.getByRole('separator')).toBeInTheDocument()
+    // No menuitem semantics and no roving index slot for the divider.
+    expect(screen.queryByRole('menuitem', { name: 'plus-editor-sep' })).toBeNull()
+    expect(document.querySelectorAll('[data-menu-item-index]')).toHaveLength(2)
+  })
+
+  it('arrow navigation skips the separator', () => {
+    render(<DropdownMenu open={true} onClose={() => {}} items={itemsWithSep} />)
+    fireEvent.mouseEnter(screen.getByText('Edit').closest('button')!)
+    fireEvent.keyDown(document.body, { key: 'ArrowDown' })
+    expect(screen.getByText('Duplicate').closest('button')).toHaveFocus()
   })
 })

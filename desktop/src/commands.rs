@@ -1777,6 +1777,14 @@ pub async fn send_message(
                 }
             }
         }
+        // R2 B2 (design 11 提取状态徽章) — the same reports are the shelf's
+        // extraction evidence: files already registered in file-index.json
+        // get their `extracted_segments` badge refreshed here (best-effort;
+        // an unregistered path is skipped, a storage failure only warns).
+        // This is THE write-back point: `extraction_by_path` is complete —
+        // both the PDF and the office parse arms have landed — and it is the
+        // only place a send turns parses into per-file reports.
+        crate::commands_files::record_file_index_extractions(&extraction_by_path);
     }
 
     // Tier-1 auto-title: capture emptiness before the push — this message is
