@@ -88,10 +88,11 @@ test.describe('scripted chat backend — draft-bridge (journey #18)', () => {
     await expect(chat.composer()).toHaveValue('Meeting notes snippet')
 
     // The plus menu is keyboard-first: it focuses the first item on open,
-    // so ArrowDown + Enter picks "Build a presentation" (pointer clicks are
-    // flaky here — the item's box never settles under Playwright's
-    // stability check while the composer re-renders). openPlusMenuAndPick
-    // waits out the focus-roving effect before keying.
+    // so ArrowDown + Enter picks "PPT outline…" (R2 audit W6 renamed the
+    // menu row; pointer clicks are flaky here — the item's box never
+    // settles under Playwright's stability check while the composer
+    // re-renders). openPlusMenuAndPick waits out the focus-roving effect
+    // before keying.
     await openPlusMenuAndPick(page, 1)
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible({ timeout: 5_000 })

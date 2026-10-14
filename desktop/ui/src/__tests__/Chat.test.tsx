@@ -141,7 +141,7 @@ describe('Chat page', () => {
   it('renders message input area', () => {
     resetCtx()
     renderChat()
-    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument()
   })
 
   // U1: the Chat page no longer renders its own session list — the app
@@ -158,7 +158,7 @@ describe('Chat page', () => {
   it('sends message on Enter key and clears input', async () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('Hello agent', undefined)
@@ -168,7 +168,7 @@ describe('Chat page', () => {
   it('does not send empty message on Enter', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
@@ -187,10 +187,10 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await screen.findByText('report.pdf')
 
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf'])
   })
@@ -224,7 +224,7 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await screen.findByText('report.pdf')
 
     const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
@@ -244,7 +244,7 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await screen.findByText('report.pdf')
 
     const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
@@ -272,7 +272,7 @@ describe('Chat page', () => {
   it('records an accepted send into the input history (A-22)', async () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'Hello agent' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(input).toHaveValue(''))
@@ -283,7 +283,7 @@ describe('Chat page', () => {
     resetCtx()
     ctx.sendMessage = vi.fn().mockResolvedValue(false)
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'refused payload' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // The draft comes back to the composer; history never learns about it.
@@ -321,9 +321,9 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await screen.findByText('report.pdf')
-    fireEvent.keyDown(screen.getByPlaceholderText(/Try: "Explain this repo"/), { key: 'Enter' })
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter' })
     await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('', ['/home/alice/Downloads/report.pdf']))
     expect(localStorage.getItem('shannon.inputHistory')).toBeNull()
   })
@@ -331,7 +331,7 @@ describe('Chat page', () => {
   it('a slash command send records no history entry (runs locally, A-22)', async () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: '/cost' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).not.toHaveBeenCalled()
@@ -454,7 +454,7 @@ describe('Chat page', () => {
     ctx.currentSessionId = 'sess-a'
     ctx.sessions = [{ id: 'sess-a', title: 'A' }]
     const view = renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: '/cost' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // /cost runs and pins its card (cost line from the mocked usage) above
@@ -546,14 +546,14 @@ describe('Chat page', () => {
     resetCtx()
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    expect(screen.getByRole('menuitem', { name: 'Attach file' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Add files…' })).toBeInTheDocument()
   })
 
   it('clicking attach menu item opens Tauri file dialog', async () => {
     resetCtx()
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await waitFor(() => {
       expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ multiple: true }))
     })
@@ -564,7 +564,7 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await waitFor(() => {
       expect(screen.getByText('report.pdf')).toBeInTheDocument()
     })
@@ -580,7 +580,7 @@ describe('Chat page', () => {
   it('prefills the composer and refocuses it on shannon:composer-prefill', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     act(() => {
       window.dispatchEvent(new CustomEvent('shannon:composer-prefill', {
         detail: { text: '```\nnpm ERR! missing script\n```' },
@@ -595,7 +595,7 @@ describe('Chat page', () => {
   it('ignores shannon:composer-prefill payloads without text', () => {
     resetCtx()
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'kept draft' } })
     act(() => {
       window.dispatchEvent(new CustomEvent('shannon:composer-prefill', { detail: {} }))
@@ -626,7 +626,7 @@ describe('Chat page', () => {
       </I18nProvider>,
     )
     // The prefill owns the composer — the persisted draft does not win.
-    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('帮我看看这个诊断')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('帮我看看这个诊断')
   })
 
   // The guard is one-sided: without a prefill, the mount restore still puts
@@ -647,7 +647,7 @@ describe('Chat page', () => {
         </MemoryRouter>
       </I18nProvider>,
     )
-    expect(screen.getByPlaceholderText(/Try: "Explain this repo"/)).toHaveValue('重启前的旧草稿')
+    expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('重启前的旧草稿')
   })
 
   // A-13 — the prefill guard used to be a once-per-mount boolean: the first
@@ -675,7 +675,7 @@ describe('Chat page', () => {
         </MemoryRouter>
       </I18nProvider>,
     )
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     expect(input).toHaveValue('第一次 prefill')
     fireEvent.click(screen.getByRole('button', { name: 'nav-second-prefill' }))
     expect(input).toHaveValue('第二次 prefill')
@@ -738,7 +738,7 @@ describe('Chat page', () => {
     ctx.rewindSession = vi.fn().mockResolvedValue(undefined)
     renderChat()
     // seed a draft, then start editing
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'my precious draft' } })
     fireEvent.click(screen.getByLabelText('Edit message'))
 
@@ -760,7 +760,7 @@ describe('Chat page', () => {
     ctx.messages = editHistory
     ctx.checkpoints = [{ turn_index: 0 }]
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'my precious draft' } })
     fireEvent.click(screen.getByLabelText('Edit message'))
     expect(input).toHaveValue('original question')
@@ -775,7 +775,7 @@ describe('Chat page', () => {
     ctx.messages = editHistory
     ctx.checkpoints = [{ turn_index: 0 }]
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.click(screen.getByLabelText('Edit message'))
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByTestId('edit-banner')).not.toBeInTheDocument()
@@ -804,7 +804,7 @@ describe('Chat page', () => {
       resetCtx()
       ctx.currentSessionId = 'sess-1'
       const view = renderChat()
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'sess-1 draft' } })
       act(() => { vi.advanceTimersByTime(300) })
       const saved = JSON.parse(localStorage.getItem('shannon.draft.sess-1')!)
@@ -838,7 +838,7 @@ describe('Chat page', () => {
       resetCtx()
       ctx.currentSessionId = 'sess-1'
       renderChat()
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'to be sent' } })
       act(() => { vi.advanceTimersByTime(300) })
       expect(localStorage.getItem('shannon.draft.sess-1')).not.toBeNull()
@@ -865,7 +865,7 @@ describe('Chat page', () => {
       ctx.currentSessionId = 'sess-1'
       ctx.sendMessage = vi.fn().mockResolvedValue(false)
       renderChat()
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'survive the rejection' } })
       fireEvent.keyDown(input, { key: 'Enter' })
       expect(ctx.sendMessage).toHaveBeenCalledWith('survive the rejection', undefined)
@@ -895,10 +895,10 @@ describe('Chat page', () => {
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
     renderChat()
     fireEvent.click(screen.getByLabelText('Attachments and tools'))
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
     await screen.findByText('report.pdf')
 
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'with files' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('with files', ['/home/alice/Downloads/report.pdf'])
@@ -1192,10 +1192,10 @@ describe('Chat page', () => {
       renderChat()
       vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
       fireEvent.click(screen.getByLabelText('Attachments and tools'))
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
       await screen.findByText('report.pdf')
 
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'blocked question' } })
       fireEvent.keyDown(input, { key: 'Enter' })
       expect(ctx.sendMessage).toHaveBeenCalledWith('blocked question', ['/home/alice/Downloads/report.pdf'])
@@ -1215,7 +1215,7 @@ describe('Chat page', () => {
       renderChat()
       await screen.findByText('Session budget exceeded')
 
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'fresh blocked question' } })
       fireEvent.keyDown(input, { key: 'Enter' })
       await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledWith('fresh blocked question', undefined))
@@ -1245,7 +1245,7 @@ describe('Chat page', () => {
       expect(screen.queryByRole('button', { name: CONTINUE_BLOCKED })).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: CONTINUE_LAST })).not.toBeInTheDocument()
 
-      const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+      const input = screen.getByRole('textbox', { name: 'Message' })
       fireEvent.change(input, { target: { value: 'first ever message' } })
       fireEvent.keyDown(input, { key: 'Enter' })
       await waitFor(() => expect(ctx.sendMessage).toHaveBeenCalledTimes(1))
@@ -1266,7 +1266,7 @@ describe('Chat page', () => {
       renderChat()
       vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
       fireEvent.click(screen.getByLabelText('Attachments and tools'))
-      fireEvent.click(screen.getByRole('menuitem', { name: 'Attach file' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Add files…' }))
       await screen.findByText('report.pdf')
 
       const input = screen.getByPlaceholderText(/Reply generating — press Enter to queue/)
@@ -1338,7 +1338,7 @@ describe('running-send behavior pref (Settings R3 T10)', () => {
     localStorage.setItem('shannon.chat.sendBehavior', 'steer')
     ctx.isQuerying = false
     renderChat()
-    const input = screen.getByPlaceholderText(/Try: "Explain this repo"/)
+    const input = screen.getByRole('textbox', { name: 'Message' })
     fireEvent.change(input, { target: { value: 'plain hello' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(ctx.sendMessage).toHaveBeenCalledWith('plain hello', undefined)

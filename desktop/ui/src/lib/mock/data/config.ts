@@ -15,7 +15,11 @@ export const MOCK_CONFIG: DesktopConfig = {
   model: 'claude-sonnet-4-6',
   working_dir: '/Users/demo/workspace/my-startup',
   theme: 'system',
-  approval_mode: 'standard',
+  // R2 audit I5 — seed a REAL ladder tier, not the engine-only alias
+  // 'standard': the composer pill echoes the in-ladder "自动编辑/Auto Edit"
+  // form in the demo instead of an untranslated raw value (the honest
+  // raw-echo stays covered by the scripted 'bypass_permissions' journey).
+  approval_mode: 'auto-edit',
   version: __APP_VERSION__,
   strategic_focus: 'Build a consumer AI agent desktop',
   performance_strategy: 'balanced',
