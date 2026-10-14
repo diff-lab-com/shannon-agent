@@ -6,6 +6,7 @@ All notable changes to Shannon Code are documented here. Entries are grouped by 
 
 Waves queued for the next release, newest first:
 
+- 审批档位可见性 · `GET /api/approval/mode` 诚实化（返回真实生效模式 + 来源 session/ambient/settings/profile/default，不再谎报 auto-edit）+ 桌面 `approval_mode` 配置终于管到自家引擎面（loopback WS/移动·IM 回合的 ambient 缺省，会话 pin 仍最高优先）（#400 后续，2026-10-14）
 - 跨仓 mobile 安全批 · headless 运行尊重 settings/审批档位的模式（#400，无审批出口时 fail-closed 拒绝并留痕）+ gated query 放行「属主设备 × 名下任务线程」steering/cancel（#401，纯 hub 判定，wire 不变）（2026-10-14）
 - 更新通道 · `shannon self-update`（签名验证原子自换）+ latest.json 签名通道（D1/D2）（2026-10-12）
 - 扩展安全 · 并行线 E：出站注入扫描 audit v1（web-fetch/web-search 入口，observe-only）（2026-10-11）

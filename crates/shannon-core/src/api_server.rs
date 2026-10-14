@@ -125,6 +125,9 @@ pub struct AppState {
     /// sessions never contend.
     pub session_locks:
         std::sync::Arc<dashmap::DashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<()>>>>,
+    /// Desktop-host ambient approval default (#400 follow-up). `None` =
+    /// settings/profile behavior unchanged (library / test constructions).
+    pub ambient_approval_mode: Option<shannon_engine::permissions::ApprovalMode>,
 }
 
 /// Upper bound on retained per-session lock entries (review §P2-3). Once the
@@ -191,6 +194,13 @@ pub struct ShannonApiServer {
     /// Wall-clock budget for the aggregate `POST /api/query` handler
     /// (review §P2-2).
     query_budget: std::time::Duration,
+    /// Desktop-host ambient approval default (#400 follow-up): the mode the
+    /// embedding host (e.g. the desktop app's `approval_mode` config) wants
+    /// for its NON-interactive faces (loopback WS = mobile/IM, REST query,
+    /// SSE). Applied AFTER settings/profile and BEFORE per-session overrides
+    /// — a session pin (mobile tighten, desktop switcher) always wins.
+    /// `None` (the default) keeps the settings/profile behavior unchanged.
+    ambient_approval_mode: Option<shannon_engine::permissions::ApprovalMode>,
 }
 
 impl ShannonApiServer {
@@ -223,6 +233,7 @@ impl ShannonApiServer {
             allow_nonloopback: false,
             extra_routes: Vec::new(),
             query_budget: Self::DEFAULT_QUERY_BUDGET,
+            ambient_approval_mode: None,
         }
     }
 
@@ -231,6 +242,18 @@ impl ShannonApiServer {
     /// rationale.
     pub fn query_budget(mut self, budget: std::time::Duration) -> Self {
         self.query_budget = budget;
+        self
+    }
+
+    /// Set the host's ambient approval default (#400 follow-up) — see the
+    /// field docs. The desktop passes its `approval_mode` config here so the
+    /// setting governs the faces it hosts (mobile/IM loopback turns) instead
+    /// of being invisible to them.
+    pub fn ambient_approval_mode(
+        mut self,
+        mode: shannon_engine::permissions::ApprovalMode,
+    ) -> Self {
+        self.ambient_approval_mode = Some(mode);
         self
     }
 
@@ -351,6 +374,7 @@ impl ShannonApiServer {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: self.query_budget,
             session_locks: Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: self.ambient_approval_mode,
         })
     }
 
@@ -586,6 +610,25 @@ fn server_permissions() -> shannon_engine::permissions::PermissionManager {
     pm
 }
 
+/// #400 follow-up: bind the approval-mode chain a served query runs under —
+/// per-session pin (mobile tighten / desktop switcher) FIRST, then the
+/// desktop host's ambient default, then whatever settings/profile loaded
+/// into `pm`. Returns Err(reason) when a session token is unknown/refused
+/// (the ambient default is host config, validated at embed time).
+fn apply_ambient_and_session(
+    pm: &mut shannon_engine::permissions::PermissionManager,
+    ambient: Option<shannon_engine::permissions::ApprovalMode>,
+    session_mode: Option<&str>,
+) -> Result<(), String> {
+    if let Some(token) = session_mode {
+        return apply_session_approval_mode(pm, token);
+    }
+    if let Some(mode) = ambient {
+        pm.set_approval_mode(mode);
+    }
+    Ok(())
+}
+
 /// K4/P2-3: apply a session's approval-mode token to a manager, enforcing the
 /// bypass guardrails. Returns Err(reason) when the mode is unknown/refused.
 fn apply_session_approval_mode(
@@ -763,12 +806,11 @@ async fn query_handler(
     // Same tools=[] fix as the WS path: serve the server's registry, not a
     // fresh empty one. K4/P2-3: the request may pin an approval mode.
     let mut permissions = server_permissions();
-    if let Some(token) = req.approval_mode.as_deref() {
-        apply_session_approval_mode(&mut permissions, token).map_err(|message| ApiError {
+    apply_ambient_and_session(&mut permissions, state.ambient_approval_mode, req.approval_mode.as_deref())
+        .map_err(|message| ApiError {
             status: StatusCode::BAD_REQUEST,
             message,
         })?;
-    }
     let state_mgr = StateManager::new();
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
@@ -951,8 +993,12 @@ async fn stream_query_sse(
     };
 
     // Create a fresh engine per request (stateless). Settings/profile
-    // bootstrap shared with the WS path.
-    let permissions = server_permissions();
+    // bootstrap shared with the WS path, plus the host's ambient default
+    // (#400 follow-up) when no session pin exists on this stateless face.
+    let mut permissions = server_permissions();
+    // No session pin is passed, so this cannot Err — `.ok()` only appeases
+    // the must_use on Result.
+    apply_ambient_and_session(&mut permissions, state.ambient_approval_mode, None).ok();
     let state_mgr = StateManager::new();
     let mut engine =
         QueryEngine::with_defaults_arc(client, state.tools.clone(), permissions, state_mgr);
@@ -1118,9 +1164,14 @@ async fn trust_revoke_handler(
     })
 }
 
-/// P3-3: `GET /api/approval/mode?session_id=<uuid>` — the approval token
-/// currently in effect for a WS-backed session (server default when the
-/// session has none stored).
+/// P3-3: `GET /api/approval/mode?session_id=<uuid>` — the approval mode
+/// currently IN EFFECT for the session, plus where it comes from. #400
+/// follow-up: this used to return the stored session token or a hardcoded
+/// "auto-edit" placeholder that no served session actually ran under; the
+/// response now reports the same precedence chain a new query would apply
+/// (session pin, then host ambient default, then settings defaultMode, then
+/// profile, then the struct default) so remote clients and acceptance runs
+/// see the truth.
 async fn approval_mode_get_handler(
     State(state): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -1139,13 +1190,37 @@ async fn approval_mode_get_handler(
             None => None,
         }
     };
-    // The stored token was validated on write; fall back to the engine
-    // default token when the session is unknown/has none.
-    let mode = match stored {
-        Some(m) => m,
-        None => "auto-edit".to_string(),
+    Ok(axum::Json(effective_approval_mode(&state, stored)))
+}
+
+/// The effective approval mode for a session with `stored` pin (or `None`),
+/// as `(wire token, source)` — the same resolution the WS/query engine
+/// builds apply (see [`apply_ambient_and_session`]). The base
+/// settings/profile chain is read fresh so a just-edited settings.json or
+/// profile env is reflected without a restart.
+fn effective_approval_mode(state: &AppState, stored: Option<String>) -> ApprovalModeState {
+    if let Some(m) = stored {
+        return ApprovalModeState {
+            mode: m,
+            source: Some("session".to_string()),
+        };
+    }
+    if let Some(ambient) = state.ambient_approval_mode {
+        return ApprovalModeState {
+            mode: ambient.to_string(),
+            source: Some("ambient".to_string()),
+        };
+    }
+    let pm = server_permissions();
+    let source = match pm.approval_mode_source() {
+        Some(shannon_engine::permissions::ApprovalModeSource::Settings) => "settings",
+        Some(shannon_engine::permissions::ApprovalModeSource::Profile) => "profile",
+        None => "default",
     };
-    Ok(axum::Json(ApprovalModeState { mode }))
+    ApprovalModeState {
+        mode: pm.approval_mode().to_string(),
+        source: Some(source.to_string()),
+    }
 }
 
 /// P3-3: `POST /api/approval/mode` — the mobile TIGHTEN route. Only
@@ -1178,6 +1253,7 @@ async fn approval_mode_post_handler(
     tracing::info!(session = %session_id, "mobile tighten: approval mode -> readonly");
     Ok(axum::Json(ApprovalModeState {
         mode: "readonly".to_string(),
+        source: Some("session".to_string()),
     }))
 }
 
@@ -1667,13 +1743,14 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // was structurally unreachable. Use the server's registry
                 // (populated by the desktop's loopback setup via with_tools).
                 let mut permissions = server_permissions();
-                {
+                let stored_mode = {
                     let s = session.lock().await;
-                    if let Some(token) = s.approval_mode.as_deref() {
-                        if let Err(e) = apply_session_approval_mode(&mut permissions, token) {
-                            tracing::warn!(session = %session_id, error = %e, "stored approval mode refused");
-                        }
-                    }
+                    s.approval_mode.clone()
+                };
+                if let Err(e) =
+                    apply_ambient_and_session(&mut permissions, state.ambient_approval_mode, stored_mode.as_deref())
+                {
+                    tracing::warn!(session = %session_id, error = %e, "stored approval mode refused");
                 }
                 let state_mgr = StateManager::new();
                 let mut engine = QueryEngine::with_defaults_arc(
@@ -1949,9 +2026,7 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                 // effective mode either way.
                 let current = {
                     let s = session.lock().await;
-                    s.approval_mode
-                        .clone()
-                        .unwrap_or_else(|| "auto-edit".to_string())
+                    s.approval_mode.clone()
                 };
                 let ack = match apply_session_approval_mode(
                     &mut shannon_engine::permissions::PermissionManager::new(),
@@ -1970,7 +2045,10 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(e) => WsServerMessage::ApprovalMode {
-                        mode: current,
+                        // Refused: the ack reports what the session ACTUALLY
+                        // still runs under (pin > ambient > settings/profile),
+                        // not a placeholder.
+                        mode: effective_approval_mode(&state, current).mode,
                         ok: false,
                         error: Some(e),
                     },
@@ -4231,6 +4309,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -4246,6 +4325,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -4260,6 +4340,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
 
         let session = Arc::new(Mutex::new(WsSession {
@@ -4359,10 +4440,13 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let sid = uuid::Uuid::new_v4().to_string();
 
-        // GET on an unknown session answers the engine default token.
+        // GET on an unknown session answers the ENGINE DEFAULT honestly —
+        // the struct default token (AutoEdit), NOT the old "auto-edit"
+        // placeholder lie, with the source labeled.
         let res = approval_mode_get_handler(
             State(state.clone()),
             axum::extract::Query(std::collections::HashMap::from([(
@@ -4373,6 +4457,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(res.0.mode, "auto-edit");
+        assert_eq!(res.0.source.as_deref(), Some("default"));
 
         // POST readonly UPSERTS the session entry and stores the tighten.
         let res = approval_mode_post_handler(
@@ -4391,7 +4476,7 @@ mod tests {
             assert_eq!(stored.approval_mode.as_deref(), Some("readonly"));
         }
 
-        // GET now reflects the stored tighten.
+        // GET now reflects the stored tighten, sourced to the session.
         let res = approval_mode_get_handler(
             State(state.clone()),
             axum::extract::Query(std::collections::HashMap::from([(
@@ -4402,6 +4487,98 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(res.0.mode, "readonly");
+        assert_eq!(res.0.source.as_deref(), Some("session"));
+    }
+
+    // #400 follow-up: the desktop host's ambient default surfaces in the
+    // transparency face whenever the session carries no pin of its own —
+    // the mode remote clients display is the mode a new query would run.
+    #[tokio::test]
+    async fn test_approval_mode_get_reports_ambient_default() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+            query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
+            session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: Some(shannon_engine::permissions::ApprovalMode::Ask),
+        };
+        let sid = uuid::Uuid::new_v4().to_string();
+
+        let res = approval_mode_get_handler(
+            State(state.clone()),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid.clone(),
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "ask");
+        assert_eq!(res.0.source.as_deref(), Some("ambient"));
+
+        // A session pin still outranks the ambient default.
+        approval_mode_post_handler(
+            State(state.clone()),
+            axum::Json(ApprovalModeRequest {
+                session_id: sid.clone(),
+                mode: "readonly".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        let res = approval_mode_get_handler(
+            State(state),
+            axum::extract::Query(std::collections::HashMap::from([(
+                "session_id".to_string(),
+                sid,
+            )])),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.mode, "readonly");
+        assert_eq!(res.0.source.as_deref(), Some("session"));
+    }
+
+    // #400 follow-up: the precedence chain a served query runs under —
+    // session pin first, then the host ambient default, then the
+    // settings/profile base.
+    #[test]
+    fn test_apply_ambient_and_session_precedence() {
+        // Ambient applies when no session pin exists.
+        let mut pm = shannon_engine::permissions::PermissionManager::new();
+        apply_ambient_and_session(
+            &mut pm,
+            Some(shannon_engine::permissions::ApprovalMode::FullAuto),
+            None,
+        )
+        .unwrap();
+        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::FullAuto);
+
+        // A session pin outranks the ambient default…
+        let mut pm = shannon_engine::permissions::PermissionManager::new();
+        apply_ambient_and_session(
+            &mut pm,
+            Some(shannon_engine::permissions::ApprovalMode::FullAuto),
+            Some("readonly"),
+        )
+        .unwrap();
+        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::Readonly);
+
+        // …and an UNKNOWN pin is refused (never silently widened to ambient).
+        let mut pm = shannon_engine::permissions::PermissionManager::new();
+        assert!(apply_ambient_and_session(
+            &mut pm,
+            Some(shannon_engine::permissions::ApprovalMode::FullAuto),
+            Some("not-a-mode"),
+        )
+        .is_err());
+
+        // Neither present → the settings/profile base stands.
+        let mut pm = shannon_engine::permissions::PermissionManager::new();
+        apply_ambient_and_session(&mut pm, None, None).unwrap();
+        assert_eq!(pm.approval_mode(), shannon_engine::permissions::ApprovalMode::AutoEdit);
     }
 
     #[tokio::test]
@@ -4413,6 +4590,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let err = approval_mode_post_handler(
             State(state),
@@ -4436,6 +4614,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let request_id = "test-approval-1".to_string();
         let (tx, rx) = oneshot::channel::<PermissionChoice>();
@@ -4477,6 +4656,7 @@ mod tests {
             approval_registry: Arc::new(Mutex::new(HashMap::new())),
             query_budget: ShannonApiServer::DEFAULT_QUERY_BUDGET,
             session_locks: std::sync::Arc::new(dashmap::DashMap::new()),
+            ambient_approval_mode: None,
         };
         let body = ApprovalRespondRequest {
             request_id: "does-not-exist".to_string(),
