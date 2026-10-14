@@ -502,7 +502,7 @@ export default function Usage() {
   }
 
   return (
-    <div className="p-lg max-w-medium mx-auto">
+    <div className="p-lg max-w-medium mx-auto w-full flex-1 min-h-0 overflow-y-auto pb-16">
       <p className="text-on-surface-variant font-body-md mb-lg">{t('usage.subtitle')}</p>
 
       {/* P2-1 — threshold banner. Derived from the live percent (not the
