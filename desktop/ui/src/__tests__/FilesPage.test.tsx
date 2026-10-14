@@ -2,9 +2,14 @@
 // hitting the wrapper, missing-file greying, favorites lens, empty state.
 // R2 Wave C′: renders inside MemoryRouter (the page now owns a 来源会话
 // jump via useNavigate) and covers the session-stamped jump button.
+// R2 Wave B1: the 320px preview panel — wide-mode selection renders the
+// card (fields, source jump, extraction badge, retracted actions), the
+// honest absences (no session_id → no jump, no extracted_segments → no
+// badge), the three ways to deselect (re-click, close, Esc), and the
+// <1280px fallback that keeps the inline cell actions.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import FilesPage from '@/pages/FilesPage'
 import { SessionContext } from '@/context/SessionContext'
@@ -31,6 +36,10 @@ const ENTRIES: FileIndexEntry[] = [
     source: 'generated',
     // R2 Wave C′: stamped at registration → the row grows a 来源会话 jump.
     session_id: '0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a',
+    // R2 B2 contract: extraction report exists for this one → the preview
+    // card may show the 已提取 N 段 badge. notes.md/gone.md carry no field
+    // and must show none (honesty contract).
+    extracted_segments: 12,
   },
   {
     path: '/Users/demo/Downloads/notes.md',
@@ -65,12 +74,32 @@ const renderFilesPage = (switchSession?: (id: string) => Promise<void>) =>
     ),
   )
 
+// R2 B1: the wide/narrow preview branch is JS-driven via matchMedia. The
+// global setup stubs matchMedia so only prefers-reduced-motion can match
+// (i.e. every test defaults to the narrow <1280px form). These helpers pin
+// the breakpoint explicitly and restore the narrow default afterwards.
+const installMatchMedia = (wide: boolean) => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: wide ? /min-width:\s*1280px/.test(query) : /prefers-reduced-motion:\s*reduce/i.test(query),
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  })
+}
+
 beforeEach(() => {
   vi.mocked(api.listFileIndex).mockReset().mockResolvedValue(ENTRIES.map(e => ({ ...e })))
   vi.mocked(api.pathExists).mockReset().mockImplementation((p: string) =>
     Promise.resolve(p !== '/Users/demo/Documents/gone.md'))
   vi.mocked(api.setFileIndexFavorite).mockReset().mockResolvedValue(undefined)
 })
+
+afterEach(() => installMatchMedia(false))
 
 describe('FilesPage', () => {
   it('renders the mock index newest-first with name, size and relative time', async () => {
@@ -191,5 +220,125 @@ describe('FilesPage', () => {
     expect(jumps).toHaveLength(1)
     // sessionCtx is null → the click resolves without throwing.
     fireEvent.click(jumps[0])
+  })
+})
+
+// ---- R2 Wave B1: the 320px preview panel --------------------------------
+
+describe('FilesPage — preview panel (R2 B1)', () => {
+  it('≥1280px: placeholder before selection; selecting a card renders name, size, kind, badge, jump and actions', async () => {
+    installMatchMedia(true)
+    const switchSession = vi.fn().mockResolvedValue(undefined)
+    renderFilesPage(switchSession)
+    const rows = await screen.findAllByTestId('files-row')
+
+    // Nothing selected → guidance placeholder, no card.
+    expect(screen.getByTestId('files-preview-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('files-preview-card')).not.toBeInTheDocument()
+
+    // Select q3-review.pptx (first cell).
+    fireEvent.click(within(rows[0]).getByTestId('files-row-select'))
+    expect(rows[0].getAttribute('data-selected')).toBe('true')
+
+    const card = screen.getByTestId('files-preview-card')
+    expect(card).toHaveTextContent('q3-review.pptx')
+    expect(card).toHaveTextContent('2.4 MB')
+    // Extension-grouped kind label in the preview zone (.pptx → Slides).
+    expect(card).toHaveTextContent('Slides')
+    // extracted_segments present → the badge with its count (B2 contract).
+    expect(screen.getByTestId('files-preview-extracted')).toHaveTextContent('Extracted 12 segments')
+    // session_id present → the 来源会话 jump now lives in the panel…
+    expect(screen.getByTestId('files-preview-source-jump')).toBeInTheDocument()
+    // …and still reuses jumpToSource (switchSession → /chat).
+    fireEvent.click(screen.getByTestId('files-preview-source-jump'))
+    await waitFor(() =>
+      expect(switchSession).toHaveBeenCalledWith('0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a'),
+    )
+
+    // The retracted actions hit the same OS wrappers.
+    fireEvent.click(screen.getByTestId('files-preview-open'))
+    await waitFor(() =>
+      expect(api.openWithDefaultApp).toHaveBeenCalledWith('/Users/demo/Documents/q3-review.pptx'),
+    )
+    fireEvent.click(screen.getByTestId('files-preview-reveal'))
+    await waitFor(() =>
+      expect(api.revealInFolder).toHaveBeenCalledWith('/Users/demo/Documents/q3-review.pptx'),
+    )
+    // Favorite from the panel flips the same persisted flag (was true).
+    fireEvent.click(screen.getByTestId('files-preview-favorite'))
+    await waitFor(() =>
+      expect(api.setFileIndexFavorite).toHaveBeenCalledWith('/Users/demo/Documents/q3-review.pptx', false),
+    )
+  })
+
+  it('≥1280px: no session_id → no jump; no extracted_segments → no badge (honest absence)', async () => {
+    installMatchMedia(true)
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+
+    fireEvent.click(within(rows[1]).getByTestId('files-row-select')) // notes.md
+    const card = screen.getByTestId('files-preview-card')
+    expect(card).toHaveTextContent('notes.md')
+    expect(screen.queryByTestId('files-preview-source-jump')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('files-preview-extracted')).not.toBeInTheDocument()
+  })
+
+  it('≥1280px: selecting a missing file shows the missing note and disables open/reveal in the panel', async () => {
+    installMatchMedia(true)
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+
+    fireEvent.click(within(rows[2]).getByTestId('files-row-select')) // gone.md
+    expect(screen.getByTestId('files-preview-missing')).toBeInTheDocument()
+    expect(screen.getByTestId('files-preview-open')).toBeDisabled()
+    expect(screen.getByTestId('files-preview-reveal')).toBeDisabled()
+  })
+
+  it('selection toggles off via the same card, the close button, and Esc', async () => {
+    installMatchMedia(true)
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+    const select = within(rows[0]).getByTestId('files-row-select')
+
+    // Re-click the same cell → back to the placeholder.
+    fireEvent.click(select)
+    expect(screen.getByTestId('files-preview-card')).toBeInTheDocument()
+    fireEvent.click(select)
+    expect(screen.getByTestId('files-preview-empty')).toBeInTheDocument()
+
+    // Panel close button.
+    fireEvent.click(select)
+    fireEvent.click(screen.getByTestId('files-preview-close'))
+    expect(screen.getByTestId('files-preview-empty')).toBeInTheDocument()
+
+    // Esc anywhere on the page.
+    fireEvent.click(select)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByTestId('files-preview-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('files-preview-card')).not.toBeInTheDocument()
+  })
+
+  it('<1280px: the panel is not rendered and the cells keep their inline actions (fallback form)', async () => {
+    installMatchMedia(false)
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+
+    expect(screen.queryByTestId('files-preview-panel')).not.toBeInTheDocument()
+    // Inline open/reveal still on the cell — the pre-B1 form.
+    expect(within(rows[0]).getByRole('button', { name: 'Open attachment' })).toBeInTheDocument()
+    expect(within(rows[0]).getByRole('button', { name: 'Show in folder' })).toBeInTheDocument()
+    expect(within(rows[0]).getByTestId('files-row-source-jump')).toBeInTheDocument()
+  })
+
+  it('≥1280px: the cell-level open/reveal/source actions are retracted into the panel', async () => {
+    installMatchMedia(true)
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+
+    expect(within(rows[0]).queryByRole('button', { name: 'Open attachment' })).not.toBeInTheDocument()
+    expect(within(rows[0]).queryByRole('button', { name: 'Show in folder' })).not.toBeInTheDocument()
+    expect(within(rows[0]).queryByTestId('files-row-source-jump')).not.toBeInTheDocument()
+    // The favorite star stays on the cell at both widths.
+    expect(within(rows[0]).getByRole('button', { name: 'Remove from favorites' })).toBeInTheDocument()
   })
 })

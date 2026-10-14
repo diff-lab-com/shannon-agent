@@ -206,7 +206,10 @@ let demoBudgetUsd: number | null = null
 // missing-file state is demoable. R2 Wave C′: the first two entries carry a
 // `session_id` (a demo rail session) so the 「来源会话」 jump is demoable;
 // the dangling historical row has none — the same honest absence as real
-// pre-contract rows.
+// pre-contract rows. R2 B2: only the office deck carries
+// `extracted_segments` (the one seed the extraction pipeline could really
+// have parsed — .md never runs through it), so the 「已提取 N 段」 badge and
+// its honest absence are both demoable.
 const demoFileIndex: FileIndexEntry[] = [
   {
     path: '/Users/demo/Documents/q3-review.pptx',
@@ -216,6 +219,7 @@ const demoFileIndex: FileIndexEntry[] = [
     favorite: true,
     source: 'generated',
     session_id: 'sess-001',
+    extracted_segments: 14,
   },
   {
     path: '/Users/demo/Downloads/notes.md',
