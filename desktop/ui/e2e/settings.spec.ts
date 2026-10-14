@@ -11,7 +11,7 @@ test.describe('Settings pages', () => {
     // Panes no longer render page-level headings ("System Settings" etc.) —
     // the banner carries the shared "Settings" h2 and each pane opens with a
     // stable section h3, which is what we assert on.
-    { path: '/settings/general', heading: /Approval Mode/i },
+    { path: '/settings/general', heading: /Default execution mode/i },
     { path: '/settings/theme', heading: /^Theme$/ },
     { path: '/settings/models', heading: /Performance Strategy/i },
     // /settings/advanced sits behind the RequireDevMode route guard
