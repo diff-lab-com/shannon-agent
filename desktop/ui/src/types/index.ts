@@ -1063,6 +1063,12 @@ export interface FileIndexEntry {
    *  active at registration, stamped backend-side. Absent for historical
    *  rows and session-less registrations — callers must render no jump. */
   session_id?: string
+  /** R2 B2 (design 11 提取状态徽章): how many segments the attachment
+   *  extraction pipeline produced for this file, backfilled by the send
+   *  pipeline when an extraction report exists. Absent = never extracted
+   *  or not yet reconciled — callers must render no badge (honesty
+   *  contract, same discipline as `session_id`). */
+  extracted_segments?: number
 }
 
 // --- MCP Types ---
