@@ -458,7 +458,13 @@ static UNRESOLVED_SG1: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bSG1:[A-Z2-7]{16}\b").expect("unresolved-surrogate regex compiles"));
 
 /// Outbound policy for the built-in guard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize` (lowercase — `"audit"` / `"redact"`) is the read-only status
+/// contract consumed by the desktop's `get_outbound_defense_status` command;
+/// there is deliberately no `Deserialize`: the mode is decided by env/config
+/// at install time, never parsed back from the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SecretGuardMode {
     /// Detect and count only (the `audit` posture; an explicit opt-in
     /// since the v0.13.0 default flip).
@@ -779,7 +785,12 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 // (nextest's per-process isolation hides this in CI).
 static ENABLED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-fn enabled_mode() -> Option<SecretGuardMode> {
+/// The guard's latched mode for this process: `Some` once
+/// [`init_from_env_or_config`] / [`init_from_env`] / [`init_from_config`]
+/// installed it, `None` while it has never installed (read-only status
+/// surface for hosts — the desktop `get_outbound_defense_status` command —
+/// with no side effect: it observes the latch, it never installs).
+pub fn enabled_mode() -> Option<SecretGuardMode> {
     use std::sync::atomic::Ordering::Relaxed;
     match ENABLED.load(Relaxed) {
         1 => Some(SecretGuardMode::Audit),
@@ -1697,6 +1708,47 @@ mod tests {
 
         set_context_transform(None);
         reset_redaction_suggestion();
+    }
+
+    // ---- Read-only status surface (S1.6 outbound-defense card) -------------
+    //
+    // The desktop's `get_outbound_defense_status` command reads
+    // [`enabled_mode`] + [`audit_hits`] without installing anything. Pin the
+    // latch reflection (None while unarmed — the status surface must never
+    // fabricate a mode) and the lowercase wire casing its JSON relies on.
+
+    #[test]
+    fn enabled_mode_reflects_the_install_latch_without_installing() {
+        let _g = global_lock();
+        reset_redaction_suggestion();
+        set_context_transform(None);
+
+        assert_eq!(enabled_mode(), None, "unarmed guard reports None");
+
+        set_enabled_mode(SecretGuardMode::Redact);
+        assert_eq!(enabled_mode(), Some(SecretGuardMode::Redact));
+        set_enabled_mode(SecretGuardMode::Audit);
+        assert_eq!(enabled_mode(), Some(SecretGuardMode::Audit));
+
+        set_context_transform(None);
+        reset_redaction_suggestion();
+        assert_eq!(enabled_mode(), None, "reset clears the latch");
+    }
+
+    #[test]
+    fn guard_mode_serializes_lowercase_for_the_status_surface() {
+        assert_eq!(
+            serde_json::to_string(&SecretGuardMode::Redact)
+                .expect("serialize")
+                .as_str(),
+            "\"redact\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SecretGuardMode::Audit)
+                .expect("serialize")
+                .as_str(),
+            "\"audit\""
+        );
     }
 
     // ---- T5: one-time mode notice latch --------------------------------------

@@ -93,6 +93,7 @@ import type {
   ProfilesList,
   ActiveProfileStatus,
   CustomProfileInfo,
+  OutboundDefenseStatus,
   OpcMetrics,
   TaskEvaluation,
   EvaluationResult,
@@ -2503,6 +2504,14 @@ export async function listHookEvents(): Promise<HookEventInfo[]> {
 
 export async function listPermissionProfiles(): Promise<ProfilesList> {
   return invoke('list_permission_profiles')
+}
+
+// S1.6 — outbound-defense read-only status (Settings 出站防线 card). The
+// DTOs live in @/types (OutboundDefenseStatus); see the honesty contract
+// documented there: null guard = never installed, 0 hits = armed with no
+// findings, counts are findings — never "blocked".
+export async function getOutboundDefenseStatus(): Promise<OutboundDefenseStatus> {
+  return invoke('get_outbound_defense_status')
 }
 
 /**

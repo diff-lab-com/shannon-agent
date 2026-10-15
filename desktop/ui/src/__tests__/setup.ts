@@ -533,6 +533,14 @@ vi.mock('@/lib/tauri-api', async (importOriginal) => ({
   activatePermissionProfile: vi.fn().mockResolvedValue({ active: null, approval_mode: null }),
   saveCustomProfile: vi.fn().mockResolvedValue({ name: 'p', description: '', auto_approve: [], confirm: [], deny: [] }),
   deleteCustomProfile: vi.fn().mockResolvedValue([]),
+  // S1.6 — outbound-defense status: the lit state (both real guards armed,
+  // secret guard with a nonzero finding count) mirrors the mock handler's
+  // demo default; the outbound-card tests override per scenario.
+  getOutboundDefenseStatus: vi.fn().mockResolvedValue({
+    key_redaction: { mode: 'redact', audit_hits: 4 },
+    injection_scan: { mode: 'audit', audit_hits: 2 },
+    signature_check: { install_time_only: true, semantics: 'self-declared' },
+  }),
   listHookEvents: vi.fn().mockResolvedValue([]),
   // X6 plugins page — installed management + add-from-three-sources.
   // Defaults keep the installed section quiet; plugin tests override via

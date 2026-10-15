@@ -18,6 +18,7 @@ const activatePermissionProfile = vi.mocked(api.activatePermissionProfile)
 const saveCustomProfile = vi.mocked(api.saveCustomProfile)
 const deleteCustomProfile = vi.mocked(api.deleteCustomProfile)
 const configure = vi.mocked(api.configure)
+const getOutboundDefenseStatus = vi.mocked(api.getOutboundDefenseStatus)
 
 vi.mock('sonner', () => ({
   toast: {
@@ -94,6 +95,7 @@ beforeEach(() => {
   saveCustomProfile.mockReset()
   deleteCustomProfile.mockReset()
   configure.mockReset()
+  getOutboundDefenseStatus.mockReset()
   listPermissionProfiles.mockResolvedValue(PROFILES)
   activatePermissionProfile.mockResolvedValue({ active: 'strict', approval_mode: 'suggest' })
   saveCustomProfile.mockResolvedValue({
@@ -105,6 +107,12 @@ beforeEach(() => {
   })
   deleteCustomProfile.mockResolvedValue(['.shannon/profiles/research-mode.toml'])
   configure.mockResolvedValue(undefined)
+  // S1.6 — lit outbound-defense default (both real guards armed).
+  getOutboundDefenseStatus.mockResolvedValue({
+    key_redaction: { mode: 'redact', audit_hits: 4 },
+    injection_scan: { mode: 'audit', audit_hits: 2 },
+    signature_check: { install_time_only: true, semantics: 'self-declared' },
+  })
   mockCatalog.config = {
     active_permission_profile: 'balanced',
     approval_mode: 'suggest',
@@ -390,5 +398,86 @@ describe('X3 scope filter — deep link panel', () => {
   it('renders no panel without a scope param', async () => {
     await renderLoaded()
     expect(screen.queryByTestId('permissions-scope-panel')).not.toBeInTheDocument()
+  })
+})
+
+describe('S1.6 outbound-defense card — live status, honesty contract', () => {
+  it('renders the lit state: modes, findings counts, and the static signature note', async () => {
+    await renderLoaded()
+    const card = screen.getByTestId('permissions-outbound-card')
+    // Secret guard: release-default redact mode, 4 findings this run.
+    const key = within(card).getByTestId('outbound-key-redaction-status')
+    expect(key).toHaveTextContent('Redacting')
+    expect(key).toHaveTextContent('Findings this run: 4')
+    // Injection scanner: default audit mode, 2 findings this run.
+    const injection = within(card).getByTestId('outbound-injection-scan-status')
+    expect(injection).toHaveTextContent('Auditing')
+    expect(injection).toHaveTextContent('Findings this run: 2')
+    // The reconcile note is gone — the guards DO run today, so the card
+    // must not claim they are still planned (reverse-distortion fix).
+    expect(within(card).queryByText(/no engine capability backs them yet/i)).not.toBeInTheDocument()
+    // Signature check: honest static capability note (install-time,
+    // self-declared) — never a fabricated runtime state.
+    expect(within(card).getByTestId('outbound-signature-note')).toHaveTextContent(
+      'Install-time check · self-declared semantics',
+    )
+    // Read-only round: no switches anywhere in the card.
+    expect(within(card).queryByRole('switch')).not.toBeInTheDocument()
+  })
+
+  it('refresh re-queries get_outbound_defense_status', async () => {
+    await renderLoaded()
+    expect(getOutboundDefenseStatus).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh defense status' }))
+    await waitFor(() => expect(getOutboundDefenseStatus).toHaveBeenCalledTimes(2))
+  })
+
+  it('renders unknown on command failure — never a fabricated zero or mode', async () => {
+    getOutboundDefenseStatus.mockRejectedValue(new Error('backend unavailable'))
+    await renderLoaded()
+    const card = screen.getByTestId('permissions-outbound-card')
+    const key = within(card).getByTestId('outbound-key-redaction-status')
+    expect(key).toHaveTextContent('Status unknown')
+    const injection = within(card).getByTestId('outbound-injection-scan-status')
+    expect(injection).toHaveTextContent('Status unknown')
+    // No count text anywhere in the two live rows, and no mode labels.
+    expect(within(card).queryByText(/Findings this run:/)).not.toBeInTheDocument()
+    expect(within(card).queryByText('Redacting')).not.toBeInTheDocument()
+    expect(within(card).queryByText('Auditing')).not.toBeInTheDocument()
+    // The failure note renders; the signature note stays static-honest.
+    expect(within(card).getByText(/Defense status could not be read right now/)).toBeInTheDocument()
+    expect(within(card).getByTestId('outbound-signature-note')).toHaveTextContent(
+      'Install-time check · self-declared semantics',
+    )
+  })
+
+  it('renders 未启用 for a null guard — distinct from zero findings', async () => {
+    // Fresh process where no engine query has installed the guards yet.
+    getOutboundDefenseStatus.mockResolvedValue({
+      key_redaction: null,
+      injection_scan: null,
+      signature_check: { install_time_only: true, semantics: 'self-declared' },
+    })
+    await renderLoaded()
+    const card = screen.getByTestId('permissions-outbound-card')
+    expect(within(card).getByTestId('outbound-key-redaction-status')).toHaveTextContent('Not enabled')
+    expect(within(card).getByTestId('outbound-injection-scan-status')).toHaveTextContent('Not enabled')
+    // "Not enabled" is a real state — it must not carry a findings count.
+    expect(within(card).queryByText(/Findings this run:/)).not.toBeInTheDocument()
+  })
+
+  it('renders an unknown future mode verbatim instead of guessing a label', async () => {
+    getOutboundDefenseStatus.mockResolvedValue({
+      key_redaction: { mode: 'future-mode', audit_hits: 1 },
+      injection_scan: { mode: 'audit', audit_hits: 0 },
+      signature_check: { install_time_only: true, semantics: 'self-declared' },
+    })
+    await renderLoaded()
+    // A mode the UI does not know renders as itself — the raw value is the
+    // only honest readout; zero findings stays a present zero.
+    expect(screen.getByTestId('outbound-key-redaction-status')).toHaveTextContent('future-mode')
+    expect(screen.getByTestId('outbound-injection-scan-status')).toHaveTextContent(
+      'Findings this run: 0',
+    )
   })
 })

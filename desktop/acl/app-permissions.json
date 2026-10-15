@@ -803,6 +803,15 @@
       }
     },
     {
+      "identifier": "allow-get-outbound-defense-status",
+      "description": "Enables the get_outbound_defense_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_outbound_defense_status"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-power-capabilities",
       "description": "Enables the get_power_capabilities command without any pre-configured scope.",
       "commands": {
@@ -3129,6 +3138,7 @@
         "allow-fetch-provider-models",
         "allow-get-config",
         "allow-get-launch-on-login",
+        "allow-get-outbound-defense-status",
         "allow-get-provider-status",
         "allow-list-provider-keys",
         "allow-list-provider-profiles",

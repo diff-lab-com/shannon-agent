@@ -79,6 +79,31 @@ function persistDemoPinned(): void {
 // demo feel live (get_config hands out a fresh clone of this).
 const demoConfig = clone(MOCK_CONFIG)
 
+// S1.6: demo twin of `get_outbound_defense_status` — the wire shape of
+// desktop/src/commands_security.rs. The lit default arms both real guards
+// (secret guard in the release-default `redact` mode with a nonzero finding
+// count, injection scanner in its `audit` default) so the card's live state
+// is demo/e2e-visible. The `shannon.demo.outboundDefense` = "unarmed"
+// localStorage variant returns both guards null (a fresh process where no
+// engine query has installed them yet) so the honest 未启用 state stays
+// testable without a chat script. Counters are findings, not blocks — the
+// audit-mode values were forwarded verbatim (commands_security.rs honesty
+// contract).
+const demoOutboundDefenseStatus = {
+  key_redaction: { mode: 'redact', audit_hits: 4 },
+  injection_scan: { mode: 'audit', audit_hits: 2 },
+  signature_check: { install_time_only: true, semantics: 'self-declared' },
+}
+function demoOutboundDefenseVariant(): 'lit' | 'unarmed' {
+  try {
+    return window.localStorage.getItem('shannon.demo.outboundDefense') === 'unarmed'
+      ? 'unarmed'
+      : 'lit'
+  } catch {
+    return 'lit'
+  }
+}
+
 // Wave-2 task 6: mutable local-voice (whisper-rs) config behind
 // get/save_voice_local_config. Starts disabled — the unarmed demo's
 // get_config gains a `voice_local` key ONLY after an explicit save, so the
@@ -2386,6 +2411,19 @@ export const handlers: Record<string, MockHandler> = {
   // --- Hook events + profiles ---
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
+  // S1.6 — outbound-defense read-only status. See demoOutboundDefenseStatus
+  // above for the shape contract and the "unarmed" variant switch.
+  async get_outbound_defense_status() {
+    await delay()
+    if (demoOutboundDefenseVariant() === 'unarmed') {
+      return {
+        key_redaction: null,
+        injection_scan: null,
+        signature_check: { install_time_only: true, semantics: 'self-declared' },
+      }
+    }
+    return clone(demoOutboundDefenseStatus)
+  },
   // P1-3: frozen contract — activate_permission_profile(name: string|null).
   // 缓期批 3 (mirrors backend 8803a519d): activation changes ONLY
   // `active_permission_profile` — approval_mode is NOT written anymore (the

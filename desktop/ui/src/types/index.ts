@@ -1803,6 +1803,34 @@ export interface ProfilesList {
   custom: CustomProfileInfo[]
 }
 
+// --- S1.6 outbound-defense read-only status (`get_outbound_defense_status`)
+
+/** One live guard: the latched mode plus process-lifetime audit findings. */
+export interface OutboundGuardStatus {
+  /** `redact` | `audit` (secret guard) / `audit` | `off` (injection scan). */
+  mode: string
+  audit_hits: number
+}
+
+/** The signature-check entry is a capability note, not runtime state. */
+export interface OutboundSignatureCheckStatus {
+  install_time_only: boolean
+  /** Always `"self-declared"` — parsed, never cryptographically verified. */
+  semantics: string
+}
+
+/// Wire contract of `get_outbound_defense_status` (commands_security.rs):
+/// snake_case keys, lowercase modes, and an important distinction — `null`
+/// guard = never installed in this process, while `audit_hits: 0` on a
+/// present guard = armed with no findings yet. Consumers must never map null
+/// to 0 or render the counts as "blocked" (in audit mode the values were
+/// forwarded verbatim).
+export interface OutboundDefenseStatus {
+  key_redaction: OutboundGuardStatus | null
+  injection_scan: OutboundGuardStatus | null
+  signature_check: OutboundSignatureCheckStatus
+}
+
 /// DTO mirroring Rust `TaskWorktreeDto`.
 export interface TaskWorktreeDto {
   task_id: string

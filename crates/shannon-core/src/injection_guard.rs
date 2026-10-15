@@ -106,7 +106,13 @@ fn cap_to_boundary(text: &str) -> &str {
 }
 
 /// `audit` (observe-only, the default) | `off` (disable entirely).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize` (lowercase — `"audit"` / `"off"`) is the read-only status
+/// contract consumed by the desktop's `get_outbound_defense_status` command;
+/// there is deliberately no `Deserialize`: the mode is decided by env/config
+/// at first use, never parsed back from the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InjectionGuardMode {
     Audit,
     Off,
@@ -148,7 +154,14 @@ fn resolve_mode_with_default(
 
 static ENABLED_MODE: OnceLock<Option<InjectionGuardMode>> = OnceLock::new();
 
-fn enabled_mode() -> Option<InjectionGuardMode> {
+/// The scanner's latched mode for this process (`Some(Audit)` / `Some(Off)`
+/// once resolved, `None` is never returned by the public surface — the
+/// `OnceLock` latches [`resolve_mode_with_default`], so an unset env/config
+/// resolves to the `audit` default here). Read-only status surface for
+/// hosts — the desktop `get_outbound_defense_status` command; first call
+/// performs the same one-time env/config resolution [`audit_text`] would,
+/// and later calls observe the latch.
+pub fn enabled_mode() -> Option<InjectionGuardMode> {
     *ENABLED_MODE.get_or_init(|| {
         resolve_mode_with_default(
             std::env::var("SHANNON_INJECTION_GUARD").ok().as_deref(),
@@ -280,5 +293,34 @@ mod tests {
         assert_eq!(n, 3);
         assert_eq!(audit_hits(), 3);
         // Content untouched, counter only counts (the function takes &str).
+    }
+
+    // ---- Read-only status surface (S1.6 outbound-defense card) -------------
+
+    #[test]
+    fn enabled_mode_latches_once_and_is_stable() {
+        // The latch resolves real env/config on first call, so the VALUE is
+        // environment-dependent and never pinned here — what the status
+        // surface relies on is stability: the second call observes the same
+        // latch instead of re-resolving.
+        let first = enabled_mode();
+        let second = enabled_mode();
+        assert_eq!(first, second, "OnceLock latch must be stable");
+    }
+
+    #[test]
+    fn guard_mode_serializes_lowercase_for_the_status_surface() {
+        assert_eq!(
+            serde_json::to_string(&InjectionGuardMode::Audit)
+                .expect("serialize")
+                .as_str(),
+            "\"audit\""
+        );
+        assert_eq!(
+            serde_json::to_string(&InjectionGuardMode::Off)
+                .expect("serialize")
+                .as_str(),
+            "\"off\""
+        );
     }
 }

@@ -128,12 +128,15 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(within(card).getByLabelText('Advanced')).toBeInTheDocument()
   })
 
-  it('PermissionsPane carries the honest 出站防线 card — badges, never switches', async () => {
-    // design-parity R2 (audit §3.2 M2, design 12-settings-security.html:
-    // 214-236): no engine capability backs the three outbound defenses yet,
-    // so every entry renders the amber dashed placeholder and the card
-    // contains ZERO switch-looking controls (the honesty rule: no dead
-    // entries that look usable).
+  it('PermissionsPane renders the 出站防线 card with live guard status — readout, never switches', async () => {
+    // S1.6 (backend ticket): two of the three defenses are REAL engine
+    // guards today, exposed read-only via `get_outbound_defense_status`.
+    // The card renders live state from the setup.ts mock (secret guard
+    // redact/4 findings, injection audit/2), the signature row keeps its
+    // honest static capability note (install-time, self-declared — no
+    // runtime state), and the card still contains ZERO switch-looking
+    // controls (this round is read-only; the only button is the refresh
+    // affordance).
     render(
       wrap(
         <Routes>
@@ -146,10 +149,20 @@ describe('merged settings panes (IA 8-section merge)', () => {
     expect(within(card).getByText('Outbound key scanning')).toBeInTheDocument()
     expect(within(card).getByText('Prompt-injection scanning')).toBeInTheDocument()
     expect(within(card).getByText('Skill & MCP signature verification')).toBeInTheDocument()
-    const badges = within(card).getAllByText('Enables after engine capability reconciliation')
-    expect(badges).toHaveLength(3)
+    // Live readout: mode labels + findings counts (setup.ts lit state).
+    expect(within(card).getByTestId('outbound-key-redaction-status')).toHaveTextContent('Redacting')
+    expect(within(card).getByTestId('outbound-key-redaction-status')).toHaveTextContent('Findings this run: 4')
+    expect(within(card).getByTestId('outbound-injection-scan-status')).toHaveTextContent('Auditing')
+    expect(within(card).getByTestId('outbound-injection-scan-status')).toHaveTextContent('Findings this run: 2')
+    // Honest static capability note for the signature row.
+    expect(within(card).getByTestId('outbound-signature-note')).toHaveTextContent(
+      'Install-time check · self-declared semantics',
+    )
+    // Read-only round: no switches, no dead controls — the refresh button
+    // is the only affordance.
     expect(within(card).queryByRole('switch')).not.toBeInTheDocument()
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument()
+    expect(within(card).getAllByRole('button')).toHaveLength(1)
+    expect(within(card).getByRole('button', { name: 'Refresh defense status' })).toBeInTheDocument()
   })
 
   it('GeneralPane closes the ring with a short link card pointing at 权限与安全', async () => {
