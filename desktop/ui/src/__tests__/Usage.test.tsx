@@ -181,6 +181,16 @@ describe('Usage page', () => {
   // M4 (设计 06 KPI 四卡之四「上下文峰值」): the session-index maximum of
   // SessionInfo.max_context_tokens, with the holding session's title as the
   // hint. No session ever logged a window → honest "—".
+  //
+  // R3 遗留裁决 (design 06:169-173「61% · 200k 窗口」): the percentage form
+  // is NOT implementable honestly — max_context_tokens IS the resolved
+  // context WINDOW (session_index.rs folds per-turn context_window_tokens,
+  // the "override > num_ctx > providers.toml > registry" window, peak not
+  // sum), so the card's 200K already IS the design's「200k 窗口」; the
+  // percentage's numerator (the session's peak USED context) exists on no
+  // wire this page reads (SessionInfo / get_usage_by_session /
+  // get_session_usage carry sums, never a per-turn maximum). No denominator
+  // game, no fabricated % — the negative assertion below pins that.
   it('renders the context-peak KPI card from the session index', async () => {
     vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
     vi.mocked(api.listSessions).mockResolvedValue([
@@ -199,6 +209,9 @@ describe('Usage page', () => {
     expect(card).toHaveTextContent('Context peak')
     expect(card).toHaveTextContent('200K')
     expect(card).toHaveTextContent('Fix billing webhook')
+    // 诚实契约反例:窗口在册也不渲染百分比 — 峰值已用分子不存在,
+    // 「61%」式形态拿不到数据就保持绝对值形态。
+    expect(card).not.toHaveTextContent('%')
     vi.mocked(api.listSessions).mockResolvedValue([]) // 还原,避免泄漏到其他用例
   })
 

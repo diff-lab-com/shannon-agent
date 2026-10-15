@@ -34,6 +34,16 @@
 // Selection toggles: click the same cell again, press Esc, or hit the
 // panel's close button. The breakpoint is JS-driven (window.matchMedia,
 // same pattern as Layout's mobile branch) so tests can pin either mode.
+//
+// R2 final sweep (design 11:133-144): the pagehead grows the design's
+// three pieces — the H1, its muted subtitle (11:138 「会话附件与 agent
+// 产出的统一索引，可预览、可溯源」) and the actions-area search box
+// (11:141-144, 220px, 「搜索文件名…」). The query filters by name/path,
+// stacks with the lens pills (intersection), and the pill counts ride
+// along so every lens shows its searched population. Esc in the input
+// clears it. The 来源会话 jump renders the joined readable session title
+// (`session_title`, joined backend-side at list time) and falls back to
+// the generic label when the join has nothing readable.
 
 // The page owns no state of the files themselves — it is a VIEW over
 // references, consistent with the trust theme: nothing here sends anything.
@@ -43,6 +53,7 @@ import { useIntl } from 'react-intl'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '@/i18n'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import EmptyState from '@/components/ui/empty-state'
 import LoadingState from '@/components/ui/loading-state'
 import { formatRelativeTime } from '@/components/SidebarSessions'
@@ -128,6 +139,10 @@ export default function FilesPage() {
   const [entries, setEntries] = useState<FileIndexEntry[] | null>(null)
   const [missing, setMissing] = useState<Record<string, boolean>>({})
   const [filter, setFilter] = useState<FilesFilter>('all')
+  // R2 final sweep (design 11:141-144): the pagehead search box. Client-side
+  // name/path substring match — no URL sync, no persistence, by design (the
+  // index is a view; the query is ephemeral).
+  const [query, setQuery] = useState('')
   // `now` pinned per load so every row's relative label agrees.
   const [now, setNow] = useState(() => Date.now())
   // R2 B1: currently selected index entry (by path), driving the preview
@@ -221,11 +236,24 @@ export default function FilesPage() {
     [navigate, sessionCtx, t],
   )
 
+  // R2 final sweep: the search predicate — trimmed, case-insensitive
+  // substring over name OR path. An empty query lets every row through.
+  const matchesQuery = useCallback(
+    (entry: FileIndexEntry) => {
+      const q = query.trim().toLowerCase()
+      if (!q) return true
+      return entry.name.toLowerCase().includes(q) || entry.path.toLowerCase().includes(q)
+    },
+    [query],
+  )
+
   // Per-lens counts stay live even while another lens is active (the
   // missing count trails its probes by design — it is a detection result,
-  // not a given).
+  // not a given). R2 final sweep: the counts answer to the search box too —
+  // each pill shows its lens's searched population, so the numbers and the
+  // visible grid never disagree.
   const counts = useMemo(() => {
-    const rows = entries ?? []
+    const rows = (entries ?? []).filter(matchesQuery)
     return {
       all: rows.length,
       attachments: rows.filter(e => e.source === 'attachment').length,
@@ -233,18 +261,30 @@ export default function FilesPage() {
       favorites: rows.filter(e => e.favorite).length,
       missing: rows.filter(e => missing[e.path] === true).length,
     }
-  }, [entries, missing])
+  }, [entries, missing, matchesQuery])
 
   const visible = useMemo(() => {
     if (!entries) return null
-    switch (filter) {
-      case 'attachments': return entries.filter(e => e.source === 'attachment')
-      case 'generated': return entries.filter(e => e.source === 'generated')
-      case 'favorites': return entries.filter(e => e.favorite)
-      case 'missing': return entries.filter(e => missing[e.path] === true)
-      default: return entries
-    }
-  }, [entries, filter, missing])
+    const base = (() => {
+      switch (filter) {
+        case 'attachments': return entries.filter(e => e.source === 'attachment')
+        case 'generated': return entries.filter(e => e.source === 'generated')
+        case 'favorites': return entries.filter(e => e.favorite)
+        case 'missing': return entries.filter(e => missing[e.path] === true)
+        default: return entries
+      }
+    })()
+    // Search stacks with the lens (intersection), never replaces it.
+    return base.filter(matchesQuery)
+  }, [entries, filter, missing, matchesQuery])
+
+  // R2 final sweep (design 11 预览卡可读标题): the source jump spells the
+  // joined session title when the backend could resolve one; otherwise it
+  // keeps the generic 「来源会话」 label (honest absence).
+  const sourceJumpLabel = useCallback(
+    (entry: FileIndexEntry) => entry.session_title ?? t('office.files.sourceJump'),
+    [t],
+  )
 
   // Selected entry resolved against the live index — a selection whose row
   // has vanished falls back to the placeholder instead of a stale card.
@@ -267,7 +307,36 @@ export default function FilesPage() {
   return (
     <div className="flex-1 overflow-y-auto">
       <div className={cn('mx-auto px-lg py-lg flex flex-col gap-md', widePreview ? 'max-w-6xl' : 'max-w-5xl')}>
-        <h1 className="font-headline-md text-headline-sm text-on-surface font-bold">{t('office.files.title')}</h1>
+        {/* R2 final sweep (design 11:133-144 pagehead): H1 + muted subtitle
+            on the left, the actions-area search box on the right (220px,
+            「搜索文件名…」); on narrow widths the rows stack. */}
+        <div className="flex items-start justify-between gap-md flex-wrap">
+          <div className="min-w-0">
+            <h1 className="font-headline-md text-headline-sm text-on-surface font-bold">{t('office.files.title')}</h1>
+            <p className="font-label-sm text-on-surface-variant mt-[2px]">{t('office.files.subtitle')}</p>
+          </div>
+          {/* Same pill search input as the Extensions hub — icon + borderless
+              Input inside a rounded shell. Esc clears (and does not also
+              deselect a preview card: the event stops here). */}
+          <div className="flex items-center bg-surface-container-lowest/50 rounded-full px-md py-xs border border-outline-variant/30 w-full max-w-[220px] focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20 transition-colors shrink-0">
+            <span className="material-symbols-outlined text-on-surface-variant mr-sm icon-md" aria-hidden="true">search</span>
+            <Input
+              type="text"
+              data-testid="files-search"
+              aria-label={t('office.files.searchAria')}
+              placeholder={t('office.files.searchPlaceholder')}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Escape') {
+                  e.stopPropagation()
+                  setQuery('')
+                }
+              }}
+              className="bg-transparent border-none outline-none focus:ring-0 text-label-md font-label-md w-full"
+            />
+          </div>
+        </div>
 
         {/* 五支筛选 pills (design 11-files.html:163) — counts ride along so
             each lens shows its own population up front. */}
@@ -423,21 +492,22 @@ export default function FilesPage() {
                         </Button>
                         {/* R2 Wave C′ (design 11 来源会话): provenance jump, only
                             when the backend stamped a session at registration —
-                            historical rows render nothing (honest absence). The
-                            jump label spells itself out on hover/AT; the icon
-                            keeps the cell compact. */}
+                            historical rows render nothing (honest absence).
+                            R2 final sweep: the label is the joined readable
+                            session title, falling back to the generic
+                            「来源会话」 when the join resolved nothing. */}
                         {entry.session_id && (
                           <Button
                             variant="ghost"
                             size="sm"
                             data-testid="files-row-source-jump"
-                            aria-label={t('office.files.sourceJump')}
-                            title={t('office.files.sourceJump')}
+                            aria-label={sourceJumpLabel(entry)}
+                            title={sourceJumpLabel(entry)}
                             onClick={() => void jumpToSource(entry)}
-                            className="ml-auto gap-xs text-label-xs text-on-surface-variant hover:text-primary hover:bg-surface-container"
+                            className="ml-auto gap-xs text-label-xs text-on-surface-variant hover:text-primary hover:bg-surface-container min-w-0"
                           >
                             <span className="material-symbols-outlined icon-sm">chat</span>
-                            {t('office.files.sourceJump')}
+                            <span className="truncate">{sourceJumpLabel(entry)}</span>
                           </Button>
                         )}
                       </div>
@@ -506,18 +576,22 @@ export default function FilesPage() {
                     )}
 
                     {/* 来源会话 jump — moved up from the cell (B1 回撤).
-                        Only for backend-stamped entries; absent stays absent. */}
+                        Only for backend-stamped entries; absent stays absent.
+                        R2 final sweep: the label prefers the joined readable
+                        session title (the preview card's whole point is
+                        provenance you can READ), generic label on absence. */}
                     {selectedEntry.session_id && (
                       <Button
                         variant="ghost"
                         size="sm"
                         data-testid="files-preview-source-jump"
-                        aria-label={t('office.files.sourceJump')}
+                        aria-label={sourceJumpLabel(selectedEntry)}
+                        title={sourceJumpLabel(selectedEntry)}
                         onClick={() => void jumpToSource(selectedEntry)}
-                        className="self-start gap-xs text-label-sm text-primary hover:bg-surface-container"
+                        className="self-start gap-xs text-label-sm text-primary hover:bg-surface-container min-w-0"
                       >
                         <span className="material-symbols-outlined icon-sm" aria-hidden="true">chat</span>
-                        {t('office.files.sourceJump')}
+                        <span className="truncate">{sourceJumpLabel(selectedEntry)}</span>
                       </Button>
                     )}
 

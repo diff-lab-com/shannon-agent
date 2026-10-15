@@ -61,3 +61,22 @@ lint 全绿(tsc/eslint/tokens/i18n 10-locale 4473 keys/import-collisions)· vite
 ---
 
 *四份走查代理报告全文已核校合并;行号以 `feat/files-library-batch` @ 09a59a823 工作树为准。*
+
+---
+
+## §4.1 收官扫尾批落地记录(2026-10-15 第二次批复,分支 feat/final-sweep-batch)
+
+> 用户批复「第一层 3 项 + 第二层 5 项凑收官扫尾批」。落地状态(随本批 PR 合入 dev 后本节生效):
+
+| 项 | 状态 | 备注 |
+|---|---|---|
+| MCP「去认证」 | ✅ | `deauthenticate_mcp_server`(keyring+文件双存储清除,幂等,ACL 注册);connected 态行内按钮+确认流;needs_auth 行按裁决不显示 |
+| 文件库信息补强 | ✅ | `session_title` join(占位标题/空标题视为缺席)+搜索框(与筛选叠加)+副标题(设计 11:138 逐字) |
+| 回合 meta 花费段 | ✅ | 时间窗匹配派生(rewind 安全),`$0.087` mono 形态;缺席不渲染 |
+| msg-meta「完成」chip | ✅ | 中性色,仅成功态;失败/中止 marker 不叠加 |
+| Reasoning 头分态 | ✅ | 进行中「思考中…」/完成「已思考 N 秒」(时长字段未上线,回退「已思考」——`reasoningDurationValue` 已就位) |
+| blocked 卡琥珀边 | ✅ | border-warning/35+左条 bg-warning(设计 09:226);紧急徽章保留自身语义 |
+| 峰值百分比形态 | ⚠️ 维持现状 | 诚实契约判定:分子(峰值已用 token)在任何 wire 契约上不存在(`max_context_tokens` 是窗口非用量),渲染百分比=编造数据;证据链已记录,待后端补峰值已用字段后再做 |
+| CONFIG_UPDATED 订阅 | ✅ | 事件过滤+重读+1-120 gate,静默回显;2 测试 |
+
+**仍在挂账**:03 主区整宽评审形态;已丢失卡整卡虚线;ask 档描述两侧收口;companion 文案微差;设计稿侧重绘批次(C2/F-9/07 措辞/气泡圆角/06 口径);C1 出站防线(挂 tripwires)。

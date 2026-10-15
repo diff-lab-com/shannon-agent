@@ -1535,6 +1535,14 @@ export async function reauthenticateMcpServer(name: string): Promise<McpServerIn
   return invoke('reauthenticate_mcp_server', { name })
 }
 
+// 去认证 (07-connectors, design-parity R3 §4): revoke an installed remote
+// entry's stored OAuth credential — deletes the local keyring token block,
+// strips the plaintext fallback, and stops the pool handle — leaving the row
+// installed but not connected until the next re-authentication.
+export async function deauthenticateMcpServer(name: string): Promise<McpServerInfo> {
+  return invoke('deauthenticate_mcp_server', { name })
+}
+
 export async function getMcpServerConfig(name: string): Promise<McpServerConfig> {
   return invoke('get_mcp_server_config', { name })
 }

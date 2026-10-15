@@ -1482,6 +1482,65 @@ pub fn set_mcp_server_enabled_to(
     Ok(true)
 }
 
+/// Revoke one `mcpServers.<name>` entry's local OAuth credential — the
+/// 07-connectors 去认证 action (design-parity R3 §4): the entry keeps its
+/// endpoint (`type`/`url`), custom headers and `enabled` flag, but the
+/// credential that connected it is gone, so the row is back to the
+/// un-authenticated, not-connected state until the user re-authenticates.
+///
+/// Two storage locations are cleaned (both idempotent — a missing entry is
+/// success, mirroring the uninstall cleanup's semantics):
+///
+/// 1. the keyring token block `shannon/mcp-oauth/<name>` (F5 mode), and
+/// 2. the in-file plaintext material — the `shannonOAuth` block plus the
+///    OAuth-mirrored `Authorization` header (legacy Bearer installs), with
+///    every user-configured header preserved.
+///
+/// Returns `Ok(false)` only when no entry with that name exists.
+pub fn clear_mcp_server_credentials(name: &str) -> Result<bool, String> {
+    clear_mcp_server_credentials_with_store(
+        &user_settings_path(),
+        name,
+        crate::secret_store::global().as_deref(),
+    )
+}
+
+/// `clear_mcp_server_credentials` against an explicit `settings.json` path.
+pub fn clear_mcp_server_credentials_to(path: &std::path::Path, name: &str) -> Result<bool, String> {
+    clear_mcp_server_credentials_with_store(path, name, crate::secret_store::global().as_deref())
+}
+
+/// Store-injected core of [`clear_mcp_server_credentials`] (tests pass a
+/// mock; `None` = degraded mode, only the in-file material to strip). The
+/// keyring delete runs before the file edit so an unknown name still drops
+/// any orphaned keyring material (leak prevention, same as the uninstall
+/// path) even though the function then reports `Ok(false)`.
+pub fn clear_mcp_server_credentials_with_store(
+    path: &std::path::Path,
+    name: &str,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+) -> Result<bool, String> {
+    crate::secret_store::delete_mcp_oauth_secret(store, name);
+
+    // In-place JSON edit (same shape as `set_mcp_server_enabled_to`): the
+    // struct round-trip must not touch url-only rows' `type`/`url` blob.
+    let mut root = read_settings_json_root(path)?;
+    let Some(entry) = root
+        .get_mut("mcpServers")
+        .and_then(|m| m.as_object_mut())
+        .and_then(|m| m.get_mut(name))
+    else {
+        return Ok(false);
+    };
+    let Some(entry_obj) = entry.as_object_mut() else {
+        return Err(format!("settings.json#mcpServers.{name} is not an object"));
+    };
+    entry_obj.remove("shannonOAuth");
+    strip_bearer_authorization(entry_obj);
+    write_settings_json_atomic(path, &root)?;
+    Ok(true)
+}
+
 /// Persist refreshed OAuth credentials for one `mcpServers.<name>` entry
 /// (W3-B, A2 token lifecycle). F5: with a working secret store the token
 /// block lives **in the keyring** (`shannon/mcp-oauth/<name>`) and the
@@ -3797,5 +3856,134 @@ mod tests {
         // Corrupt store → Err.
         std::fs::write(&path, "{broken").unwrap();
         assert!(set_mcp_server_enabled_to(&path, "fs", true).is_err());
+    }
+
+    // ── 去认证 (07-connectors, design-parity R3 §4):
+    //    clear_mcp_server_credentials ──────────────────────────────────────
+
+    /// A migrated OAuth row's keyring state (F5 mode): the live token block
+    /// sits under `shannon/mcp-oauth/linear`, the plaintext copy is gone.
+    fn migrated_oauth_store() -> MockSecretStore {
+        let store = MockSecretStore::new();
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("linear"),
+                r#"{"client_id":"cid","token_url":"https://t/token","refresh_token":"rt","access_token":"at"}"#,
+            )
+            .unwrap();
+        store
+    }
+
+    /// Acceptance: revoke clears BOTH credential locations — the keyring
+    /// block and the in-file plaintext material (`shannonOAuth` block +
+    /// OAuth-mirrored Authorization header) — while the endpoint blob
+    /// (`type`/`url`), the user-configured headers, `enabled`, and foreign
+    /// keys all survive. The load path then reports a plain, credential-less
+    /// remote row.
+    #[test]
+    fn clear_credentials_revokes_keyring_and_strips_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+        let store = migrated_oauth_store();
+
+        assert!(clear_mcp_server_credentials_with_store(&path, "linear", Some(&store)).unwrap());
+
+        // Keyring entry gone.
+        assert!(!store.contains(&crate::secret_store::mcp_oauth_key("linear")));
+
+        // File: secret material stripped, everything else kept.
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(
+            entry["headers"].get("Authorization").is_none(),
+            "the OAuth-mirrored Authorization header is revoked with the block: {entry}"
+        );
+        assert_eq!(
+            entry["headers"]["X-Custom"], "keep-me",
+            "user-configured headers are never touched by a revoke"
+        );
+        assert_eq!(entry["url"], "https://mcp.linear.app/sse");
+        assert_eq!(entry["type"], "http");
+        assert_eq!(entry["enabled"], false);
+        assert_eq!(root["other"], 1);
+
+        // The load path agrees the OAuth credential is gone (no token block
+        // derived from file or keyring). The row still reports
+        // `has_auth_headers` in THIS fixture only because the user-configured
+        // `X-Custom` header is itself a static credential the revoke must
+        // preserve — the bearer-only row in the idempotency test below shows
+        // the fully de-authenticated verdict.
+        let servers = load_mcp_servers_with_store(&path, Some(&store)).unwrap();
+        let linear = servers.iter().find(|s| s.name == "linear").unwrap();
+        assert!(linear.oauth.is_none());
+        assert_eq!(linear.url.as_deref(), Some("https://mcp.linear.app/sse"));
+    }
+
+    /// Idempotency: a second revoke on the same row — and a revoke of a row
+    /// that never held a credential — are both `Ok(true)` no-ops (the end
+    /// state the user asked for already holds), matching the keyring
+    /// delete's missing-entry-is-success semantics. The degraded mode
+    /// (`store = None`) takes the same path over the file alone.
+    #[test]
+    fn clear_credentials_is_idempotent_for_rows_without_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "linear":{"type":"http","url":"https://mcp.linear.app/sse","enabled":true,
+                          "headers":{"Authorization":"Bearer t"},"shannonOAuth":{"client_id":"c","access_token":"t"}},
+                "plain":{"type":"http","url":"https://mcp.example"}
+            }}"#,
+        )
+        .unwrap();
+
+        assert!(clear_mcp_server_credentials_to(&path, "linear").unwrap());
+        assert!(clear_mcp_server_credentials_to(&path, "linear").unwrap());
+        // A credential-less remote row: success, nothing to strip.
+        assert!(clear_mcp_server_credentials_with_store(&path, "plain", None).unwrap());
+
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let linear = &root["mcpServers"]["linear"];
+        assert!(linear.get("shannonOAuth").is_none(), "{linear}");
+        assert!(linear["headers"].get("Authorization").is_none(), "{linear}");
+        assert_eq!(linear["url"], "https://mcp.linear.app/sse");
+        // The untouched credential-less row is byte-identical.
+        assert_eq!(root["mcpServers"]["plain"]["url"], "https://mcp.example");
+
+        // Verdict after the revoke: with no header left and no token block,
+        // the row loads as a plain credential-less remote (the fully
+        // de-authenticated state).
+        let servers = load_mcp_servers_with_store(&path, None).unwrap();
+        let linear = servers.iter().find(|s| s.name == "linear").unwrap();
+        assert!(!linear.has_auth_headers, "{linear:?}");
+        assert!(linear.oauth.is_none());
+    }
+
+    /// An unknown name is `Ok(false)` — nothing to revoke — and the store
+    /// stays untouched (modulo the idempotent, no-op delete).
+    #[test]
+    fn clear_credentials_reports_missing_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = tmp_settings(dir.path());
+        std::fs::write(&path, linear_entry_json()).unwrap();
+        let store = migrated_oauth_store();
+
+        assert!(!clear_mcp_server_credentials_with_store(&path, "ghost", Some(&store)).unwrap());
+
+        // The named row and its keyring entry are untouched.
+        assert!(store.contains(&crate::secret_store::mcp_oauth_key("linear")));
+        let servers = load_mcp_servers_with_store(&path, Some(&store)).unwrap();
+        assert!(
+            servers
+                .iter()
+                .find(|s| s.name == "linear")
+                .unwrap()
+                .has_auth_headers
+        );
     }
 }

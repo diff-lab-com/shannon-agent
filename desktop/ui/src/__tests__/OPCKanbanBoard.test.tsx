@@ -157,3 +157,34 @@ describe('OPCKanbanBoard pending-review sub-state (audit §09, B3)', () => {
     expect(screen.queryByTestId('opc-review-t-blocked-1')).not.toBeInTheDocument()
   })
 })
+
+// ─── R3 遗留: blocked 卡琥珀边 (design 09:226) ───
+// 设计稿的已阻塞卡是琥珀 warn 边框 rgba(245,184,61,.35) — 阻塞是「等待」,
+// 不是失败,不与 error 红混用;失败列维持中性形态不跟进。
+
+describe('OPCKanbanBoard blocked-card amber accent (design 09:226)', () => {
+  it('blocked cards carry the warning border and the amber left bar', () => {
+    renderBoard([{ id: 't-blocked-2', title: 'NAS Backup Restore', status: 'blocked' }])
+    const card = screen.getByRole('button', { name: /NAS Backup Restore/ })
+    // border-warning/35 ≈ 设计稿 rgba(245,184,61,.35) 的语义 token 映射。
+    expect(card).toHaveClass('border-warning/35')
+    expect(card).toHaveClass('ring-warning/5')
+    // 左侧色条同为 warning 琥珀 (原 bg-error 红条)。
+    expect(card.querySelector('.bg-warning')).not.toBeNull()
+  })
+
+  it('blocked cards no longer use the error red while failed cards stay muted', () => {
+    renderBoard([
+      { id: 't-blocked-3', title: 'Blocked Plain', status: 'blocked' },
+      { id: 't-failed-1', title: 'Archived Task', status: 'failed' },
+    ])
+    const blocked = screen.getByRole('button', { name: /Blocked Plain/ })
+    expect(blocked).not.toHaveClass('border-error/20')
+    expect(blocked).not.toHaveClass('ring-error/5')
+    expect(blocked.querySelector('.bg-error')).toBeNull()
+    // 失败列不动:仍是 outline-variant 中性边,无琥珀外溢。
+    const failed = screen.getByRole('button', { name: /Archived Task/ })
+    expect(failed).toHaveClass('border-outline-variant/30')
+    expect(failed).not.toHaveClass('border-warning/35')
+  })
+})

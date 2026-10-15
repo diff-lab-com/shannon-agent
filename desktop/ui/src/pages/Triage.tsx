@@ -570,6 +570,17 @@ function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onT
 const MANUAL_MINUTES_MIN = 1
 const MANUAL_MINUTES_MAX = 120
 
+/// The gate every `manual_minutes_per_item` read applies — the mount read
+/// and the `config-updated` echo (below) alike: whole numbers in 1..=120
+/// pass through; everything else (unset, non-integer, out of range) falls
+/// back to the standing default so a stray value can never inflate the
+/// savings estimate. Exported for tests (the gate is a contract).
+export function sanitizeManualMinutes(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= MANUAL_MINUTES_MIN && v <= MANUAL_MINUTES_MAX
+    ? v
+    : MANUAL_MINUTES_PER_ITEM
+}
+
 function SavedMinutesFootnote({ minutes, onSaved }: {
   minutes: number
   onSaved: (next: number) => void
@@ -768,14 +779,27 @@ export default function Triage() {
     api.getConfig()
       .then(cfg => {
         if (cancelled) return
-        const v = cfg.manual_minutes_per_item
-        if (typeof v === 'number' && Number.isInteger(v) && v >= MANUAL_MINUTES_MIN && v <= MANUAL_MINUTES_MAX) {
-          setManualMinutes(v)
-        }
+        setManualMinutes(sanitizeManualMinutes(cfg.manual_minutes_per_item))
       })
       .catch(() => { /* keep the default */ })
     return () => { cancelled = true }
   }, [])
+
+  // R3 报告 §4 遗留项 (跨窗回显): the mount read above is a one-shot
+  // snapshot — a manual-minutes write from another window (or any other
+  // `configure` caller) used to leave this dial stale until reload.
+  // `CONFIG_UPDATED` — the event the backend emits after persisting the key
+  // (`apply_manual_minutes_arm`) — is the echo: re-read the config through
+  // the same 1-120 gate and repaint. Filtered on the payload key so
+  // unrelated config writes don't trigger an extra read; silent by design —
+  // this window's own saves already toast from the footnote's commit path,
+  // and an echo toast would double-fire.
+  useTauriEvent<{ key: string; value: string }>(EVENT_NAMES.CONFIG_UPDATED, (e) => {
+    if (e.payload.key !== 'manual_minutes_per_item') return
+    api.getConfig()
+      .then(cfg => { setManualMinutes(sanitizeManualMinutes(cfg.manual_minutes_per_item)) })
+      .catch(() => { /* keep the current display — nothing authoritative arrived */ })
+  })
 
   const weekSaved = useMemo(
     () => weekSavedOf(items, new Date(), manualMinutes),

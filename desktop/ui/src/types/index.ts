@@ -1075,6 +1075,14 @@ export interface FileIndexEntry {
    *  or not yet reconciled — callers must render no badge (honesty
    *  contract, same discipline as `session_id`). */
   extracted_segments?: number
+  /** R2 final sweep (design 11 预览卡可读标题): readable display title of
+   *  the source session, joined READ-side by `list_file_index` from the
+   *  same rail `list_sessions` serves. Never persisted — absent when the
+   *  row has no `session_id`, the session left the rail, or its title is
+   *  still the `Session <uuid-prefix>` placeholder; callers must fall back
+   *  to the generic source-jump label (honest absence, same discipline as
+   *  `session_id` / `extracted_segments`). */
+  session_title?: string
 }
 
 // --- MCP Types ---

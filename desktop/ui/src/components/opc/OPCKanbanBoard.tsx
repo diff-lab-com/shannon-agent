@@ -9,7 +9,8 @@
 //     deprecated with different status mappings — moving a card between
 //     Mission Control and OPC changed its meaning.
 //   - The optimistic local-override mechanism and variant card visuals are
-//     preserved (progress bar on active, red accent on blocked, etc.) by
+//     preserved (progress bar on active, amber warning accent on blocked —
+//     design 09:226 rgba(245,184,61,.35), etc.) by
 //     passing a custom renderCard to the shared primitive.
 //   - bucketFor() is kept as a thin wrapper over classifyStatus() so existing
 //     callers (and tests) keep working. It now returns the unified family.
@@ -177,9 +178,9 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
 
 /**
  * Dispatches to a variant card based on column family, preserving the visual
- * language the OPC board already had: red accent on blocked, progress bar on
- * active, check row on done, etc. Default falls through to a draggable card
- * that matches the old "todo" / "deprecated" look. All variants are clickable
+ * language the OPC board already had: amber warning accent on blocked
+ * (design 09:226 — the blocked state is a wait, not a failure), progress bar
+ * on active, check row on done, etc. All variants are clickable
  * + keyboard-accessible so users can open task detail from any column.
  */
 function VariantCard({ task, family, intl, openTask }: { task: TaskItem; family: TaskStatusFamily; intl: ReturnType<typeof useIntl>; openTask: (id: string) => void }) {
@@ -241,12 +242,12 @@ function BlockedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnTyp
       onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       onClick={() => openTask(task.id)}
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
-      className="bg-surface-container-lowest rounded-xl p-md border border-error/20 shadow-e1 mb-3 ring-1 ring-error/5 cursor-grab active:cursor-grabbing hover:border-error/40 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      className="bg-surface-container-lowest rounded-xl p-md border border-warning/35 shadow-e1 mb-3 ring-1 ring-warning/5 cursor-grab active:cursor-grabbing hover:border-warning/40 transition-colors relative focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
       aria-label={intl.formatMessage({ id: 'opc.kanban.openTaskAria' }, { title: task.title })}
     >
-      <div className="absolute left-0 top-0 bottom-0 w-1 bg-error rounded-l-xl" />
+      <div className="absolute left-0 top-0 bottom-0 w-1 bg-warning rounded-l-xl" />
       <div className="flex justify-between items-start mb-sm ml-xs">
         <span className="font-label-sm text-label-2xs font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {/* 待评审 badge — the blocked family's review sub-state (design 09
