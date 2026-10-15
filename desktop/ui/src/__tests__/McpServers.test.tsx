@@ -15,6 +15,7 @@ const uninstallMcpServer = vi.hoisted(() => vi.fn())
 const restartMcpServer = vi.hoisted(() => vi.fn())
 const setMcpServerEnabled = vi.hoisted(() => vi.fn())
 const reauthenticateMcpServer = vi.hoisted(() => vi.fn())
+const deauthenticateMcpServer = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -26,6 +27,7 @@ vi.mock('@/lib/tauri-api', () => ({
   restartMcpServer: (...a: unknown[]) => restartMcpServer(...a),
   setMcpServerEnabled: (...a: unknown[]) => setMcpServerEnabled(...a),
   reauthenticateMcpServer: (...a: unknown[]) => reauthenticateMcpServer(...a),
+  deauthenticateMcpServer: (...a: unknown[]) => deauthenticateMcpServer(...a),
 }))
 
 function renderWithRouter() {
@@ -170,6 +172,7 @@ beforeEach(() => {
   restartMcpServer.mockReset()
   setMcpServerEnabled.mockReset()
   reauthenticateMcpServer.mockReset()
+  deauthenticateMcpServer.mockReset()
   // Default: registry returns empty so any test opening the modal won't crash.
   listMcpRegistryServers.mockResolvedValue([])
 })
@@ -523,6 +526,99 @@ describe('McpServers (Cursor-style UX)', () => {
     await waitFor(() => {
       expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
     })
+  })
+
+  // 去认证 (07-connectors, design-parity R3 §4): the button gating — only a
+  // connected, credential-carrying (authorized) row offers De-authorize.
+  // Needs-auth rows keep only the recovery action; credential-less rows
+  // (stdio, pure remote) have nothing to revoke.
+  it('offers de-authorize only on connected authorized rows', async () => {
+    listMcpServers.mockResolvedValue([
+      sampleOAuthConnected,
+      sampleRemote,
+      sampleInstalled,
+      samplePureRemote,
+    ])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-deauth-linear-oauth')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('mcp-deauth-linear-oauth')).toBeEnabled()
+    expect(screen.queryByTestId('mcp-deauth-notion')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-deauth-filesystem')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('mcp-deauth-deepwiki')).not.toBeInTheDocument()
+  })
+
+  // 去认证: the click goes through the confirm dialog (revoke = clear this
+  // device's stored credential) — Cancel never calls the backend, Confirm
+  // calls it with the row name and the refresh re-reads the list.
+  it('de-authorizes through the confirm dialog and refreshes', async () => {
+    listMcpServers.mockResolvedValue([sampleOAuthConnected])
+    deauthenticateMcpServer.mockResolvedValue({
+      ...sampleOAuthConnected,
+      connected: false,
+      has_auth_headers: false,
+      last_connected: null,
+      credential_storage: null,
+    })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-deauth-linear-oauth')).toBeEnabled()
+    })
+    fireEvent.click(screen.getByTestId('mcp-deauth-linear-oauth'))
+
+    // The dialog names the action and explains the revoke before anything
+    // irreversible happens; Cancel dismisses it without a backend call.
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'De-authorize linear-oauth?',
+    })
+    expect(
+      within(dialog).getByText(/revokes the authorization and clears the credential/i),
+    ).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+    expect(deauthenticateMcpServer).not.toHaveBeenCalled()
+
+    // Reopen and confirm → the backend is called with the row name.
+    fireEvent.click(screen.getByTestId('mcp-deauth-linear-oauth'))
+    const reopened = await screen.findByRole('alertdialog', {
+      name: 'De-authorize linear-oauth?',
+    })
+    fireEvent.click(within(reopened).getByRole('button', { name: 'De-authorize' }))
+    await waitFor(() => {
+      expect(deauthenticateMcpServer).toHaveBeenCalledWith('linear-oauth')
+    })
+    // The refresh re-reads the installed list.
+    await waitFor(() => {
+      expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // 去认证 failure: the row stays intact (no local state was mutated) and
+  // the refresh still runs so the next list read decides what is shown.
+  it('keeps the row renderable when de-authorization fails', async () => {
+    listMcpServers.mockResolvedValue([sampleOAuthConnected])
+    deauthenticateMcpServer.mockRejectedValue(new Error('keyring refused'))
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-deauth-linear-oauth')).toBeEnabled()
+    })
+    fireEvent.click(screen.getByTestId('mcp-deauth-linear-oauth'))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'De-authorize linear-oauth?',
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'De-authorize' }))
+    await waitFor(() => {
+      expect(deauthenticateMcpServer).toHaveBeenCalledWith('linear-oauth')
+    })
+    // The refresh still runs.
+    await waitFor(() => {
+      expect(listMcpServers.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+    // The row itself is untouched by the failed attempt.
+    expect(screen.getByText('Online')).toBeInTheDocument()
   })
 
   // W3-B (A2): a connected OAuth row renders exactly like a stdio row —

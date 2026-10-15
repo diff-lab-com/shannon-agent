@@ -1,8 +1,12 @@
 // 补1 (R2 审查 §7.1 · 02-chat msg-meta) — assistant turn aggregate meta in
-// MessageBubble's header: 「N 个工具调用 · N 分钟」 derived from data the
-// bubble already holds. Honesty contract under test: a dimension that cannot
-// be derived renders NOTHING — never a 0, never a placeholder; turn-level
-// cost has no reachable data source, so no cost segment exists at all.
+// MessageBubble's header: 「N 个工具调用 · 2.4 分钟 · $0.087」 derived from data
+// the bubble already holds. Honesty contract under test: a dimension that
+// cannot be derived renders NOTHING — never a 0, never a placeholder.
+// R3 §4 遗留项: turn COST joined the tail (TimelineTurn.cost_usd projected
+// into TurnCostWindows by MessageArea; matched by timestamp overlap), and a
+// successfully completed assistant turn wears the neutral 「完成/Done」 chip
+// at the tail's head (failed/stopped turns keep their bubble-foot markers
+// and get no chip).
 //
 // Quadrants covered:
 //   tools + duration | tools + no duration
@@ -16,7 +20,7 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { IntlProvider } from 'react-intl'
 
-import { MessageBubble, turnDurationValue } from '@/components/chat/MessageBubble'
+import { MessageBubble, matchTurnCost, turnCostValue, turnDurationValue, type TurnCostWindow } from '@/components/chat/MessageBubble'
 import type { ChatMessage, ToolCall } from '@/types'
 import zhCN from '@/i18n/locales/zh-CN.json'
 
@@ -74,11 +78,19 @@ const call = (id: string, extra: Partial<ToolCall> = {}): ToolCall => ({
 })
 
 /** Render the message at `index` of `messages` (identity-preserved, exactly
- *  how MessageArea hands bubbles their rows). */
-function renderTurn(messages: ChatMessage[], index: number) {
+ *  how MessageArea hands bubbles their rows). `extra` carries the optional
+ *  lookup props (costWindows) MessageArea derives alongside durationLookup. */
+function renderTurn(messages: ChatMessage[], index: number, extra: { costWindows?: TurnCostWindow[] } = {}) {
   useChatMock.mockImplementation(() => makeCtx(messages))
   return render(
-    wrap(<MessageBubble message={messages[index]} messageIndex={index} onViewDiff={vi.fn()} />),
+    wrap(
+      <MessageBubble
+        message={messages[index]}
+        messageIndex={index}
+        onViewDiff={vi.fn()}
+        {...extra}
+      />,
+    ),
   )
 }
 
@@ -284,5 +296,165 @@ describe('MessageBubble turn meta — a11y 汇总 + zh-CN copy', () => {
     expect(meta).toHaveTextContent('3 个工具调用')
     expect(meta).toHaveTextContent('2.4 分钟')
     expect(meta).toHaveAttribute('aria-label', '本回合：3 个工具调用 · 2.4 分钟')
+  })
+})
+
+// R3 §4 遗留项 — the cost segment. Data path under test: MessageArea projects
+// TimelineTurn.cost_usd (trace_timeline IPC) into TurnCostWindows keyed by
+// epoch-ms windows; the bubble matches its turn window by timestamp OVERLAP
+// (matchTurnCost — rewind-proof, unlike the engine's envelope turn numbers).
+// Honesty contract: absent/0/non-finite costs never produce a window
+// upstream, and turnCostValue refuses them again at the render boundary.
+describe('MessageBubble turn meta — cost segment (R3 §4)', () => {
+  const OVERLAPPING: TurnCostWindow[] = [
+    { startMs: BASE - 1_000, endMs: BASE + 145_000, costUsd: 0.087 },
+  ]
+
+  it('renders the design figure $0.087 AFTER the duration segment when a window overlaps', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 144_000, { tool_calls: [call('a'), call('b'), call('c')] }),
+    ]
+    renderTurn(messages, 1, { costWindows: OVERLAPPING })
+    const meta = screen.getByTestId('turn-meta')
+    expect(meta).toHaveTextContent('$0.087')
+    expect(meta).toHaveTextContent('2.4 minutes')
+    // 追加语义: cost rides after the duration, tools stay first.
+    const text = meta.textContent ?? ''
+    expect(text.indexOf('tool calls')).toBeGreaterThan(-1)
+    expect(text.indexOf('2.4 minutes')).toBeGreaterThan(text.indexOf('tool calls'))
+    expect(text.indexOf('$0.087')).toBeGreaterThan(text.indexOf('2.4 minutes'))
+    // The cost joins the aria 汇总 too.
+    expect(meta).toHaveAttribute('aria-label', 'This turn: 3 tool calls · 2.4 minutes · $0.087')
+  })
+
+  it('omits the cost segment when no window overlaps the turn (反例: absent)', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 144_000, { tool_calls: [call('a')] }),
+    ]
+    renderTurn(messages, 1)
+    const meta = screen.getByTestId('turn-meta')
+    expect(meta).toHaveTextContent('1 tool call')
+    expect(meta).not.toHaveTextContent('$')
+  })
+
+  it('omits the cost segment when the only window lies OUTSIDE the turn', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 144_000, { tool_calls: [call('a')] }),
+    ]
+    renderTurn(messages, 1, {
+      costWindows: [{ startMs: BASE + 1_000_000, endMs: BASE + 1_100_000, costUsd: 0.5 }],
+    })
+    const meta = screen.getByTestId('turn-meta')
+    expect(meta).toHaveTextContent('1 tool call')
+    expect(meta).not.toHaveTextContent('$')
+  })
+
+  it('cost alone (no tools, sub-second span) still earns its segment', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 400),
+    ]
+    renderTurn(messages, 1, { costWindows: OVERLAPPING })
+    const meta = screen.getByTestId('turn-meta')
+    expect(meta).toHaveTextContent('$0.087')
+    expect(meta).not.toHaveTextContent('second')
+    expect(meta).not.toHaveTextContent('tool call')
+  })
+
+  it('turnCostValue refuses zero/negative/non-finite costs (never a $0.000)', () => {
+    expect(turnCostValue(0)).toBeNull()
+    expect(turnCostValue(-0.087)).toBeNull()
+    expect(turnCostValue(Number.NaN)).toBeNull()
+    expect(turnCostValue(Number.POSITIVE_INFINITY)).toBeNull()
+    // The design's three decimals under a dollar; plain currency above.
+    expect(turnCostValue(0.087)).toBe('$0.087')
+    expect(turnCostValue(1.2)).toBe('$1.20')
+  })
+
+  it('matchTurnCost uses overlap (not containment) and takes the first hit', () => {
+    const windows: TurnCostWindow[] = [
+      { startMs: BASE + 5_000, endMs: BASE + 50_000, costUsd: 0.01 },
+      { startMs: BASE + 60_000, endMs: BASE + 200_000, costUsd: 0.02 },
+    ]
+    // Containment would fail the first window (turn starts before it) —
+    // overlap matches it, mirroring real optimistic-message/event drift.
+    expect(matchTurnCost(windows, BASE, BASE + 10_000)).toBe(0.01)
+    expect(matchTurnCost(windows, BASE + 100_000, BASE + 150_000)).toBe(0.02)
+    expect(matchTurnCost(windows, BASE + 300_000, BASE + 400_000)).toBeNull()
+    expect(matchTurnCost(undefined, BASE, BASE + 1)).toBeNull()
+    expect(matchTurnCost(null, BASE, BASE + 1)).toBeNull()
+  })
+})
+
+// R3 §4 遗留项 — the neutral 「完成/Done」 chip at the meta tail's head
+// (02 页 msg-meta 首段 `st ok 完成`, rendered in the codebase's neutral form
+// — no green). 正例: every successfully completed assistant turn wears it.
+// 反例: failed/stopped turns keep their bubble-foot markers and get NO chip.
+describe('MessageBubble turn meta — 完成 chip (R3 §4)', () => {
+  it('renders the neutral Done chip on a successful assistant turn', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 144_000, { tool_calls: [call('a')] }),
+    ]
+    renderTurn(messages, 1)
+    const chip = screen.getByTestId('turn-meta-done')
+    expect(chip).toHaveTextContent('Done')
+    // 中性色非绿色: the chip shares the stopped-marker's neutral surface pair.
+    expect(chip.className).toContain('bg-surface-container-high')
+    expect(chip.className).toContain('text-on-surface-variant')
+    expect(chip.className).not.toContain('text-success')
+  })
+
+  it('renders the chip even when no numeric meta is derivable (group stays absent)', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE), // zero span, no tools, no cost — groupless turn
+    ]
+    renderTurn(messages, 1)
+    expect(screen.getByTestId('turn-meta-done')).toHaveTextContent('Done')
+    expect(screen.queryByTestId('turn-meta')).toBeNull()
+  })
+
+  it('renders NO chip on a failed turn (the failed marker plays that role)', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 60_000, {
+        interrupted: true,
+        interrupted_reason: 'failed',
+      }),
+    ]
+    renderTurn(messages, 1)
+    expect(screen.queryByTestId('turn-meta-done')).toBeNull()
+    expect(screen.getByTestId('message-failed-marker')).toBeInTheDocument()
+  })
+
+  it('renders NO chip on a stopped (cancelled) turn (不重复叠加)', () => {
+    const messages = [
+      user(BASE),
+      assistant(BASE + 60_000, {
+        interrupted: true,
+        interrupted_reason: 'cancelled',
+      }),
+    ]
+    renderTurn(messages, 1)
+    expect(screen.queryByTestId('turn-meta-done')).toBeNull()
+    expect(screen.getByTestId('message-stopped-marker')).toBeInTheDocument()
+  })
+
+  it('renders NO chip on user or tool messages', () => {
+    const messages: ChatMessage[] = [
+      user(BASE),
+      assistant(BASE + 60_000, { tool_calls: [call('a')] }),
+      { role: 'tool', content: 'tool ran', timestamp: BASE + 61_000 },
+    ]
+    const first = renderTurn(messages, 0)
+    expect(screen.queryByTestId('turn-meta-done')).toBeNull()
+    first.unmount()
+    useChatMock.mockImplementation(() => makeCtx(messages))
+    render(wrap(<MessageBubble message={messages[2]} messageIndex={2} onViewDiff={vi.fn()} />))
+    expect(screen.queryByTestId('turn-meta-done')).toBeNull()
   })
 })

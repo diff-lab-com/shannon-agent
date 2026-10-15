@@ -6,14 +6,16 @@
 // mocked `useTriageItems`; the bulk bar's direct `api.updateInboxItemStatus`
 // calls are asserted through the `@/lib/tauri-api` mock.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { IntlProvider } from 'react-intl'
 import { MemoryRouter, useLocation } from 'react-router-dom'
+import { listen } from '@tauri-apps/api/event'
 import { toast } from 'sonner'
 import Triage, { weekSavedOf } from '@/pages/Triage'
 import * as api from '@/lib/tauri-api'
 import type { InboxItem, InboxListFilter, ScheduledRoutine } from '@/types'
+import { EVENT_NAMES } from '@/types'
 
 // Test locale messages (minimal set for test assertions)
 const testMessages: Record<string, string> = {
@@ -1269,5 +1271,80 @@ describe('补2 — manual_minutes_per_item parameterized footnote', () => {
     // 回退: the footnote still shows the previous (still-configured) value.
     await waitFor(() => expect(screen.queryByTestId('manual-minutes-input')).not.toBeInTheDocument())
     expect(screen.getByTestId('manual-minutes-edit')).toHaveTextContent('5')
+  })
+})
+
+// ── R3 报告 §4 遗留项: 跨窗回显 — the mount read is a one-shot snapshot, so
+// a manual_minutes write from ANOTHER window reaches this page only via the
+// backend's `config-updated` emission (apply_manual_minutes_arm). The echo
+// re-reads the config through the same 1-120 gate (illegal → standing 5),
+// filters on the payload key, and stays silent (this window's own saves
+// already toast from the commit path). ─────────────────────────────────────
+describe('manual_minutes config-updated echo (cross-window)', () => {
+  type CfgEvent = { payload: unknown }
+  // Controllable `listen` (setup.ts stubs it inert globally): capture the
+  // handler the page registers for config-updated so a test can fire the
+  // backend echo at it — same pattern as companionBridge.test.tsx.
+  function captureConfigUpdatedListener() {
+    const handlers: Array<(e: CfgEvent) => void> = []
+    vi.mocked(listen).mockImplementation(async (event: string, handler: (e: CfgEvent) => void) => {
+      if (event === EVENT_NAMES.CONFIG_UPDATED) handlers.push(handler)
+      return () => {}
+    })
+    return {
+      fire(payload: { key: string; value: string }) {
+        act(() => { for (const h of handlers) h({ payload }) })
+      },
+    }
+  }
+
+  afterEach(() => {
+    // Restore the setup.ts default — the capturing implementation above
+    // must not leak into the later tests of this file.
+    vi.mocked(listen).mockReset()
+    vi.mocked(listen).mockResolvedValue(() => {})
+  })
+
+  it('re-reads the config and repaints the dial when the echo arrives for its key', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 12 })
+    const now = Date.now()
+    setItems([makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 })])
+    const echo = captureConfigUpdatedListener()
+    renderPage()
+    const stat = await screen.findByTestId('inbox-stat-saved')
+    await waitFor(() => expect(stat).toHaveTextContent('Estimated at ~12 min of manual work per item'))
+    expect(api.getConfig).toHaveBeenCalledTimes(1)
+
+    // An echo for an unrelated key triggers no re-read (payload-key filter).
+    echo.fire({ key: 'effort_level', value: 'high' })
+    expect(api.getConfig).toHaveBeenCalledTimes(1)
+
+    // Another window wrote 7: the backend echo re-reads and repaints —
+    // silently (the local commit path owns the toast, so no double-toast).
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 7 })
+    echo.fire({ key: 'manual_minutes_per_item', value: '7' })
+    await waitFor(() => expect(stat).toHaveTextContent('≈7 min saved'))
+    await waitFor(() => expect(stat).toHaveTextContent('Estimated at ~7 min of manual work per item'))
+    expect(api.getConfig).toHaveBeenCalledTimes(2)
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the standing 5 when the echoed value fails the 1-120 gate', async () => {
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 12 })
+    const now = Date.now()
+    setItems([makeItem({ id: 1, status: 'read', updatedAtMs: now - 3_600_000 })])
+    const echo = captureConfigUpdatedListener()
+    renderPage()
+    const stat = await screen.findByTestId('inbox-stat-saved')
+    await waitFor(() => expect(stat).toHaveTextContent('Estimated at ~12 min of manual work per item'))
+
+    // A stray out-of-range value on the re-read never repaints fiction —
+    // the dial drops back to the standing default (5).
+    vi.mocked(api.getConfig).mockResolvedValue({ manual_minutes_per_item: 999 })
+    echo.fire({ key: 'manual_minutes_per_item', value: '999' })
+    await waitFor(() => expect(stat).toHaveTextContent('≈5 min saved'))
+    await waitFor(() => expect(stat).toHaveTextContent('Estimated at ~5 min of manual work per item'))
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })

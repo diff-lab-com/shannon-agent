@@ -426,6 +426,9 @@ fn main() {
             extensions_commands::install_mcp_oauth_complete,
             extensions_commands::install_mcp_oauth_loopback,
             extensions_commands::reauthenticate_mcp_server,
+            // 07-connectors 去认证 (design-parity R3 §4) — revoke the local
+            // OAuth credential of an installed remote row.
+            extensions_commands::deauthenticate_mcp_server,
             extensions_commands::uninstall_mcp_server,
             // Extensions hub P3 — Skills catalog + installer
             extensions_commands::list_skill_catalog,

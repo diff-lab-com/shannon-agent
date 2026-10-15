@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 
-use crate::commands::AppState;
+use crate::commands::{AppState, SessionMeta};
 use crate::commands_agents::resolve_working_dir;
 use crate::events::HunkAction;
 use crate::resolve_path_in_working_dir;
@@ -897,6 +897,18 @@ pub struct FileIndexEntry {
     /// happened); the next send's extraction overwrites it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extracted_segments: Option<u32>,
+    /// R2 final sweep (design 11 预览卡可读标题): the display title of the
+    /// session the file came from, joined READ-side at `list_file_index`
+    /// time from the same in-memory rail `list_sessions` serves. Deliberately
+    /// NEVER persisted — the rail is the single source of title truth, so a
+    /// rename is reflected on the next list without any shelf write-back.
+    /// Absent when the row carries no `session_id`, the session left the
+    /// rail (archived / purged), or its title is still the
+    /// `Session <uuid-prefix>` placeholder — the Files card falls back to
+    /// the generic 「来源会话」 label on absence (honest-absence discipline,
+    /// same as `session_id` / `extracted_segments`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_title: Option<String>,
 }
 
 /// Resolve the index file path: `~/.shannon/desktop/file-index.json` — same
@@ -949,10 +961,45 @@ fn sort_by_registered_at_desc(entries: &mut [FileIndexEntry]) {
     entries.sort_by_key(|e| std::cmp::Reverse(key(e)));
 }
 
-/// `list_file_index` command: the shelf, newest registration first.
+/// Placeholder prefix a rail row carries until its first message auto-titles
+/// it (the same convention `auto_title_from_first_message` uses to detect
+/// the placeholder) — a placeholder is NOT a readable title, so the title
+/// join treats it as absent and the Files card keeps its generic label.
+const SESSION_PLACEHOLDER_TITLE_PREFIX: &str = "Session ";
+
+/// R2 final sweep (design 11 预览卡可读标题): join each entry's
+/// `session_title` from the session display list (the same store
+/// `list_sessions` serves), matched by `session_id`. Read-only and
+/// best-effort: a row without a `session_id`, an id that is no longer on
+/// the rail, or a still-placeholder-titled session all leave
+/// `session_title` absent — never synthesized. Pure over
+/// `(entries, sessions)` so tests drive it without app state.
+pub(crate) fn join_session_titles(entries: &mut [FileIndexEntry], sessions: &[SessionMeta]) {
+    for entry in entries.iter_mut() {
+        let title = entry
+            .session_id
+            .as_deref()
+            .and_then(|sid| sessions.iter().find(|s| s.id == sid))
+            .map(|s| s.title.as_str())
+            .filter(|t| !t.is_empty() && !t.starts_with(SESSION_PLACEHOLDER_TITLE_PREFIX))
+            .map(str::to_string);
+        entry.session_title = title;
+    }
+}
+
+/// `list_file_index` command: the shelf, newest registration first. The
+/// `State` handle is IPC-invisible (the frontend invoke keeps its zero-arg
+/// signature) — it only feeds the title join above.
 #[tauri::command]
-pub async fn list_file_index() -> Result<Vec<FileIndexEntry>, String> {
+pub async fn list_file_index(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<FileIndexEntry>, String> {
     let mut entries = load_file_index_inner(&file_index_path());
+    // Join the readable source-session titles off the live rail. The lock
+    // is held only across the clone-free read — no await inside.
+    let sessions = state.sessions.lock().await;
+    join_session_titles(&mut entries, &sessions);
+    drop(sessions);
     sort_by_registered_at_desc(&mut entries);
     Ok(entries)
 }
@@ -1031,6 +1078,8 @@ pub(crate) fn register_file_index_entry_inner(
             // only appears once the send pipeline actually parsed the file
             // (R2 B2 write-back below).
             extracted_segments: None,
+            // Titles are joined read-side at list time (never persisted).
+            session_title: None,
         }),
     }
     save_file_index_inner(index_path, &entries)
@@ -2947,6 +2996,80 @@ mod tests {
         .expect("re-register from other session");
         let entries = load_file_index_inner(&index);
         assert_eq!(entries[0].session_id.as_deref(), Some(other.as_str()));
+    }
+
+    // R2 final sweep (design 11 预览卡可读标题): `list_file_index` joins each
+    // row's readable source-session title from the `list_sessions` rail.
+    // Honesty rules: no session_id → absent; id off the rail → absent;
+    // placeholder-titled (`Session <uuid-prefix>`) or empty-titled → absent;
+    // a real title rides through verbatim.
+    #[test]
+    fn file_index_list_joins_readable_session_titles() {
+        let rail = vec![
+            SessionMeta {
+                id: "0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a".into(),
+                title: "Q3 复盘会话".into(),
+                created_at: 0,
+                message_count: 3,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            },
+            SessionMeta {
+                id: "11111111-2222-3333-4444-555555555555".into(),
+                title: "Session 11111111".into(), // still the placeholder
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            },
+            SessionMeta {
+                id: "99999999-8888-7777-6666-555555555555".into(),
+                title: String::new(), // degenerate: never a readable title
+                created_at: 0,
+                message_count: 0,
+                working_dir: None,
+                parent_id: None,
+                branch_point: None,
+            },
+        ];
+        let base = |session_id: Option<String>| FileIndexEntry {
+            path: "/tmp/f.md".into(),
+            name: "f.md".into(),
+            size_bytes: None,
+            registered_at: "2026-01-01T00:00:00+00:00".into(),
+            favorite: false,
+            source: "attachment".into(),
+            session_id,
+            extracted_segments: None,
+            session_title: None,
+        };
+        let mut entries = vec![
+            base(Some("0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a".into())),
+            base(Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into())), // off-rail
+            base(Some("11111111-2222-3333-4444-555555555555".into())),
+            base(Some("99999999-8888-7777-6666-555555555555".into())),
+            base(None),
+        ];
+
+        join_session_titles(&mut entries, &rail);
+        assert_eq!(entries[0].session_title.as_deref(), Some("Q3 复盘会话"));
+        assert_eq!(entries[1].session_title, None, "off-rail id stays absent");
+        assert_eq!(
+            entries[2].session_title, None,
+            "placeholder title is not a readable title"
+        );
+        assert_eq!(entries[3].session_title, None, "empty title stays absent");
+        assert_eq!(entries[4].session_title, None, "no session_id → no title");
+
+        // Absence omits the key on the wire (same frozen contract as the
+        // other optional fields).
+        let json = serde_json::to_value(&entries[1]).unwrap();
+        assert!(
+            json.get("session_title").is_none(),
+            "None must omit the key"
+        );
     }
 
     // ---- R2 B2: extraction-status write-back (提取状态徽章) ----

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   listMcpServers,
   reauthenticateMcpServer,
+  deauthenticateMcpServer,
   restartMcpServer,
   setMcpServerEnabled,
   uninstallMcpServer,
@@ -90,6 +91,8 @@ export default function McpServers() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  // 去认证 (07-connectors): the row awaiting the revoke confirmation.
+  const [deauthTarget, setDeauthTarget] = useState<string | null>(null);
 
   // F5 (A8): the page's credential-storage status line — where the
   // servers' OAuth tokens live. Derived from the rows the backend already
@@ -149,6 +152,28 @@ export default function McpServers() {
         intl.formatMessage(
           { id: "extensions.mcp.reauthFailed" },
           { error: safeErrorMessage(err, "re-authentication failed") },
+        ),
+      );
+    } finally {
+      setBusyId(null);
+      refreshInstalled();
+    }
+  }
+
+  // 去认证 (07-connectors, design-parity R3 §4): the connected-row counterpart
+  // of re-authenticate — revoke the authorization and clear the local
+  // credential; the row is back to not connected until the user signs in
+  // again. Only reached through the confirm dialog (deauthTarget).
+  async function handleDeauthenticate(name: string) {
+    setBusyId(`deauth:${name}`);
+    try {
+      await deauthenticateMcpServer(name);
+      toast.success(t("extensions.mcp.deauthSuccess", { name }));
+    } catch (err) {
+      toast.error(
+        intl.formatMessage(
+          { id: "extensions.mcp.deauthFailed" },
+          { error: safeErrorMessage(err, "de-authentication failed") },
         ),
       );
     } finally {
@@ -237,6 +262,7 @@ export default function McpServers() {
         onRestart={handleRestart}
         onToggle={handleToggle}
         onReauthenticate={handleReauthenticate}
+        onDeauthenticate={(name) => setDeauthTarget(name)}
         onOpenPermissions={(name) =>
           // X3 权限就近直达 — deep link into the permissions page pre-filtered
           // to this server. The page matches rules against `mcp__<name>__*`;
@@ -257,6 +283,23 @@ export default function McpServers() {
           if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
         }}
         onCancel={() => setRemoveTarget(null)}
+      />
+
+      {/* 去认证 (07-connectors): revoke = undo the authorization + clear this
+          device's stored credential. Destructive-flavored confirm — the row
+          disconnects until the next re-authentication. */}
+      <ConfirmDialog
+        open={deauthTarget !== null}
+        title={t("extensions.mcp.deauthConfirm.title", { name: deauthTarget ?? "" })}
+        message={t("extensions.mcp.deauthConfirm.message", { name: deauthTarget ?? "" })}
+        confirmLabel={t("extensions.mcp.deauthConfirm.confirm")}
+        cancelLabel={t("extensions.mcp.deauthConfirm.cancel")}
+        destructive
+        busy={busyId?.startsWith("deauth:") ?? false}
+        onConfirm={() => {
+          if (deauthTarget) void handleDeauthenticate(deauthTarget).finally(() => setDeauthTarget(null))
+        }}
+        onCancel={() => setDeauthTarget(null)}
       />
 
       <div className="flex justify-center pt-sm">
@@ -318,6 +361,7 @@ function InstalledSection({
   onRestart,
   onToggle,
   onReauthenticate,
+  onDeauthenticate,
   onOpenPermissions,
 }: {
   servers: McpServerInfo[];
@@ -331,6 +375,7 @@ function InstalledSection({
   onRestart: (name: string) => void;
   onToggle: (name: string, enabled: boolean) => void;
   onReauthenticate: (name: string) => void;
+  onDeauthenticate: (name: string) => void;
   onOpenPermissions: (name: string) => void;
 }) {
   const intl = useIntl();
@@ -371,6 +416,8 @@ function InstalledSection({
             const isToggling = busyId === `toggle:${srv.name}`;
             const isRestarting = busyId === `restart:${srv.name}`;
             const isReauthing = busyId === `reauth:${srv.name}`;
+            const isDeauthing = busyId === `deauth:${srv.name}`;
+            const rowBusy = isBusy || isToggling || isRestarting || isReauthing || isDeauthing;
             const failure = remoteFailureState(srv);
             // Build a mono preview: command + args, or the remote endpoint.
             const preview = srv.command || srv.url || "";
@@ -574,7 +621,7 @@ function InstalledSection({
                     aria-label={t("extensions.mcp.reauthAria", { name: srv.name })}
                     title={t("extensions.mcp.reauthAria", { name: srv.name })}
                     onClick={() => onReauthenticate(srv.name)}
-                    disabled={isBusy || isRestarting || isToggling || isReauthing}
+                    disabled={rowBusy}
                     className="shrink-0"
                     data-testid={`mcp-reauth-${srv.name}`}
                   >
@@ -582,6 +629,29 @@ function InstalledSection({
                       lock_open
                     </span>
                     {isReauthing ? "…" : t("extensions.mcp.reauth")}
+                  </Button>
+                ) : null}
+                {/* 去认证 (07-connectors): the connected/authorized rows'
+                    inverse of re-authenticate — revokes the authorization and
+                    clears this device's stored credential (confirm dialog
+                    below). NeedsAuth rows keep only the recovery action, and
+                    credential-less rows have nothing to revoke. */}
+                {srv.enabled && srv.connected && srv.has_auth_headers ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    aria-label={t("extensions.mcp.deauthAria", { name: srv.name })}
+                    title={t("extensions.mcp.deauthAria", { name: srv.name })}
+                    onClick={() => onDeauthenticate(srv.name)}
+                    disabled={rowBusy}
+                    className="text-on-surface-variant hover:text-primary shrink-0"
+                    data-testid={`mcp-deauth-${srv.name}`}
+                  >
+                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+                      logout
+                    </span>
+                    {isDeauthing ? "…" : t("extensions.mcp.deauth")}
                   </Button>
                 ) : null}
                 <Button
@@ -599,9 +669,7 @@ function InstalledSection({
                       : t("extensions.mcp.restartAria", { name: srv.name })
                   }
                   onClick={() => onRestart(srv.name)}
-                  disabled={
-                    isBusy || isRestarting || isToggling || isReauthing || failure === 'needs_auth'
-                  }
+                  disabled={rowBusy || failure === 'needs_auth'}
                   className="text-on-surface-variant hover:text-primary shrink-0"
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">

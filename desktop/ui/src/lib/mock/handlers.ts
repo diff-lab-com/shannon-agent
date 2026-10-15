@@ -209,7 +209,11 @@ let demoBudgetUsd: number | null = null
 // pre-contract rows. R2 B2: only the office deck carries
 // `extracted_segments` (the one seed the extraction pipeline could really
 // have parsed — .md never runs through it), so the 「已提取 N 段」 badge and
-// its honest absence are both demoable.
+// its honest absence are both demoable. R2 final sweep: only the deck
+// carries a joined `session_title` (mirroring the real backend's read-side
+// join off the demo rail — sess-001 is 「Q3 roadmap brainstorm」 there);
+// notes.md keeps a session but NO readable title so the generic-label
+// fallback stays demoable too.
 const demoFileIndex: FileIndexEntry[] = [
   {
     path: '/Users/demo/Documents/q3-review.pptx',
@@ -219,6 +223,7 @@ const demoFileIndex: FileIndexEntry[] = [
     favorite: true,
     source: 'generated',
     session_id: 'sess-001',
+    session_title: 'Q3 roadmap brainstorm',
     extracted_segments: 14,
   },
   {
@@ -1895,13 +1900,39 @@ export const handlers: Record<string, MockHandler> = {
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
     return srv ? { ...clone(srv), enabled: args.enabled, connected: args.enabled } : null
   },
-  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected.
+  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected. The
+  // demo twin persists the flip so the post-action refresh shows it (same
+  // state machine as the real backend's settings.json store).
   async reauthenticate_mcp_server(args: { name: string }) {
     await delay(400)
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
-    return srv
-      ? { ...clone(srv), connected: true, failure_kind: null, last_error: null, last_connected: Date.now() }
-      : null
+    if (!srv) return null
+    srv.enabled = true
+    srv.connected = true
+    srv.has_auth_headers = true
+    srv.failure_kind = null
+    srv.last_error = null
+    srv.last_connected = Date.now()
+    return clone(srv)
+  },
+  // 去认证 (07-connectors, design-parity R3 §4): revoke = clear the stored
+  // credential and drop the connection — the row is installed but back to
+  // the not-connected, unauthenticated state. The demo twin mutates the
+  // stored row so the post-confirm refresh shows the state change, exactly
+  // like the real backend rewriting settings.json + stopping the pool row.
+  async deauthenticate_mcp_server(args: { name: string }) {
+    await delay(300)
+    const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
+    if (!srv) return null
+    srv.connected = false
+    srv.has_auth_headers = false
+    srv.failure_kind = null
+    srv.last_error = null
+    srv.last_connected = null
+    srv.tool_count = 0
+    srv.tools = []
+    srv.credential_storage = null
+    return clone(srv)
   },
   async get_mcp_server_config(args: { name: string }) {
     await delay()

@@ -2099,6 +2099,15 @@
       }
     },
     {
+      "identifier": "allow-deauthenticate-mcp-server",
+      "description": "Enables the deauthenticate_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "deauthenticate_mcp_server"
+        ]
+      }
+    },
+    {
       "identifier": "allow-record-agent-message",
       "description": "Enables the record_agent_message command without any pre-configured scope.",
       "commands": {
@@ -3337,6 +3346,7 @@
         "allow-read-data-source-config",
         "allow-remove-mcp-server",
         "allow-reauthenticate-mcp-server",
+        "allow-deauthenticate-mcp-server",
         "allow-report-catalog-entry",
         "allow-restart-mcp-server",
         "allow-scan-prompt-injection",
