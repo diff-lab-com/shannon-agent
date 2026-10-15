@@ -197,3 +197,50 @@ pub async fn get_outbound_defense_status() -> Result<OutboundDefenseStatus, Stri
 ### RD.3 截图
 
 改动页 7 张重出:02-chat / 03-chat-review / 02c-chat-composer-tidy / 06-usage / 11-files / 12-settings-appearance / 13-companion(同名覆盖,1440×900 @2x)。其中 **02c 视口截图像素不变**(S3 弹框改动在首屏折叠线以下),文件字节一致,git 无 diff;其余 6 张内容可见变化。未改动页一律不出图,保持 diff 可审。
+
+---
+
+## 批次 E · 收尾裁决(登记关闭)
+
+> 2026-10-16 用户批复:「一个 PR 收尾:出站防线读态为主体;r4 登记表关闭裁决(7 项关闭 + Timeline 立票 + chip 稿样对齐)作为 docs 改动搭车。完成后挂账清单归零(Timeline 票按需另启)。」
+
+### E.0 出站防线读态实施记录(S1.6 工单落地)
+
+- 命令 `get_outbound_defense_status`(新 desktop/src/commands_security.rs;lib.rs `commands_security` 模块 + main.rs generate_handler + ACL `allow-get-outbound-defense-status` 加入 app-config 集):`{key_redaction:{mode,audit_hits}|null, injection_scan:{mode,audit_hits}|null, signature_check:{install_time_only:true,semantics:"self-declared"}}`——**null=守卫本进程未安装 vs `audit_hits:0`=已布防零命中**,语义由 Rust 测试钉死。
+- shannon-core:secret_guard/injection_guard 两处 `enabled_mode()` 转公开(`Option<Mode>`,latch 反射+稳定性单测);模式枚举加 `Serialize`(lowercase,刻意无 Deserialize);复用既有 `audit_hits()` 计数器。
+- 卡片(PermissionsSettings.tsx):挂载查询+幽灵刷新钮(在途禁用);四态诚实渲染——读取中(琥珀虚线)/状态未知(琥珀虚线+脚注,命令失败时)/未启用(中性,null 时)/实时(实心徽章 mode+「Findings this run: {hits}」,措辞用 findings 不用 blocked——audit 模式只读红线);签名校验行=能力注记徽章「安装时校验 · 自声明语义」,无条件渲染,非 pending 非实时;未来未知模式值逐字回显,不掩码。
+- 文案:删除不实的 `pendingBadge`/`reconcileNote` 与「规划中」desc 框架(×10 locale——守卫今日就在跑,原文案属反向诚实缺陷);新增 11 键 ×10 locale,无 ICU 复数;zh 系全角标点校正。
+- mock:默认点亮(redact/4 + audit/2);demo 变体 `localStorage['shannon.demo.outboundDefense']='unarmed'` → 双 null。
+- 门禁:cargo fmt/clippy 干净;shannon-core 3327 过;desktop 1657 过(+7 例既有环境性集合,过滤 18/18 全过);ACL 覆盖 6/6;vitest 33 过;tsc/eslint 干净;i18n-check OK。
+- 刻意不做:模式开关/toggle(需配置面+持久化+产品裁决,redact/audit 现默认合理)、实时订阅(设置页挂载查询+手动刷新足矣)。
+
+### E.1 W4 遗留登记 8 项处置(7 关闭 + 1 立票)
+
+| 登记(W4.2 遗留列) | 处置 | 依据 |
+|---|---|---|
+| chat 底部状态条无统计数字段 | **关闭(维持)** | 02c 裁决 D5 有意移入 SessionUsageDialog,非缺口 |
+| Usage KPI 卡横排解剖 | **关闭(维持)** | 2026-09-29 共享组件裁决 |
+| Extensions 主页签容器 chip 形态 | **关闭(维持)** | design-parity R2 IA 裁决(M1/X4) |
+| welcome 品牌区结构差异 | **关闭(有意差异)** | 顶部品牌行+圆点步进为既有 IA;重画属无用户价值 churn |
+| Tasks 日历部件挂点(侧栏 vs 主列) | **关闭(有意差异)** | 同上 |
+| Triage 头部紧凑 chips vs 三 stat 大卡 | **关闭(有意差异)** | 数据同源,呈现层差异 |
+| Memory 分类分布 ring vs 五枚 stat 卡 | **关闭(有意差异)** | 呈现层差异 |
+| Timeline 工具级瀑布 vs 回合卡 | **立票(defer)** | 产品演进候选而非 parity 债,见 E.3 |
+
+### E.2 Timeline 瀑布票(defer,按需另启)
+
+- scope: 10-timeline 工具级评审形态(4 stat 卡 + tl-row 瀑布 + 双累计图)vs 应用回合卡+累计曲线——不同代际的信息架构
+- 触发条件: 出现真实的 tool-level 事后审计/评审需求
+- est: 2-4d(动聊天评审核心,不与 parity 批混)
+
+### E.3 权限 chip 色调裁决(稿随落地反向对齐)
+
+现场核实:实现为**风险阶梯**色调(`lib/approvalModes.ts` `tone`: readonly/plan `border-success/50` 绿 → ask/auto-edit `border-warning/50` 琥珀 → full-auto/bypass `border-error/50` 红),颜色传达「授出多少自主权」,与权限下拉「高危提示」同语义;稿样 `.chip.acc` 紫为单一强调色、无分档信息。**裁决:维持实现,稿样反向对齐**(延续 RD「稿随落地」先例;本节更新 RD.2 该条「稿维持」的描述)。
+
+落地:shannon-ui.css 新增 `.chip.ok/.warn/.bad` 阶梯类(`--ok #3ddc97`/`--warn #f5b83d`/`--bad #fb7185` 体系),02-chat:268 与 03-chat-review:242 的权限 chip 改 `chip warn`(自动编辑=琥珀);01b:147/12-settings:190 的 `chip acc` 为任务名/模型名等非权限强调 chip,不动;02c 为历史裁决稿维持原样,以本节为准。ask/auto-edit 同琥珀的细分(ask 降中性)默认不做,无既有裁决需求。
+
+观察登记(不顺笔):02 页侧栏 `.mode-pill`「开发模式」——应用侧栏无模式指示物,词汇亦非权限命名 v2,属陈旧绘制,留待下批顺笔处置。
+
+### E.4 截图
+
+02-chat.png / 03-chat-review.png 重出(assets/shot.mjs,1440×900 @2x),chip 由紫转琥珀可见。
