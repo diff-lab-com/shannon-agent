@@ -226,6 +226,15 @@ input, textarea { font: inherit; color: var(--t1); background: none; border: 0; 
 .chip .cv { color: var(--t1); }
 .chip.acc { border-color: rgba(139,124,247,.4); background: var(--vio-dim); color: var(--vio-2); }
 .chip.acc .cv { color: var(--vio-2); }
+/* 2026-10-16 收尾裁决(r4 §E.4): 权限当前档 chip 用实现的风险阶梯色调
+   (lib/approvalModes.ts tone: readonly/plan 绿 → ask/auto-edit 琥珀 → full-auto/bypass 红),
+   稿随落地;`.chip.acc` 紫保留给非权限的强调 chip(任务名/模型名等) */
+.chip.ok   { border-color: rgba(61,220,151,.35);  color: var(--ok); }
+.chip.ok .cv   { color: var(--ok); }
+.chip.warn { border-color: rgba(245,184,61,.4);   color: var(--warn); }
+.chip.warn .cv { color: var(--warn); }
+.chip.bad  { border-color: rgba(251,113,133,.35); color: var(--bad); }
+.chip.bad .cv  { color: var(--bad); }
 .chip .caret { width: 12px; height: 12px; opacity: .6; }
 .chip .sw { width: 7px; height: 7px; border-radius: 99px; }
 

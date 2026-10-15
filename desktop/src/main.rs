@@ -31,6 +31,7 @@ fn main() {
     use shannon_desktop::commands_remote;
     use shannon_desktop::commands_rewind;
     use shannon_desktop::commands_routine_templates;
+    use shannon_desktop::commands_security;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
@@ -202,6 +203,10 @@ fn main() {
             commands_chat::estimate_send_cost,
             commands_config::configure,
             commands_config::get_config,
+            // S1.6 — outbound-defense read-only status (Settings 出站防线
+            // card): latched guard modes + process-lifetime audit-hit
+            // counters. Observes, never installs; see commands_security.
+            commands_security::get_outbound_defense_status,
             // 缓期批 3 — launch-on-login honest read: the OS autostart state
             // (plugin-managed LaunchAgent / registry Run / XDG desktop file)
             // is the source of truth; config only remembers user intent.

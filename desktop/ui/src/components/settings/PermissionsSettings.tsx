@@ -10,7 +10,13 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/loading-state'
 import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
-import type { BuiltinProfileInfo, CustomProfileInfo, ProfilesList } from '@/types'
+import type {
+  BuiltinProfileInfo,
+  CustomProfileInfo,
+  OutboundDefenseStatus,
+  OutboundGuardStatus,
+  ProfilesList,
+} from '@/types'
 import { useCatalog } from '@/context/CatalogContext'
 import { toastError } from '@/lib/errorToast'
 import { permissionPresetOption } from '@/lib/approvalModes'
@@ -144,6 +150,14 @@ export default function PermissionsSettings() {
   const { config, refreshConfig } = useCatalog()
   const [searchParams, setSearchParams] = useSearchParams()
 
+  // S1.6 — outbound-defense read-only status (`get_outbound_defense_status`).
+  // `null` status = not read yet (rendered as reading); `outboundFailed` =
+  // the read itself failed (rendered as unknown — honesty contract: never
+  // guess, never fabricate a zero or a mode for a missing value).
+  const [outbound, setOutbound] = useState<OutboundDefenseStatus | null>(null)
+  const [outboundFailed, setOutboundFailed] = useState(false)
+  const [outboundLoading, setOutboundLoading] = useState(true)
+
   // X3: `?scope=mcp%3A<server>` — server-scoped rule filter (cleared via the
   // chip in the scoped panel below).
   const rawScope = searchParams.get('scope')
@@ -192,6 +206,107 @@ export default function PermissionsSettings() {
       cancelled = true
     }
   }, [])
+
+  // S1.6: read the outbound-defense snapshot on mount; the refresh button
+  // re-runs the same read (settings page — no live subscription needed).
+  // The backend command is a side-effect-free read over the engine guards'
+  // latches and counters.
+  const loadOutbound = (active = true) => {
+    setOutboundLoading(true)
+    api
+      .getOutboundDefenseStatus()
+      .then((status) => {
+        if (!active) return
+        setOutbound(status)
+        setOutboundFailed(false)
+      })
+      .catch(() => {
+        if (!active) return
+        // A failed read must render as unknown — never as an armed guard,
+        // never as a fabricated zero.
+        setOutboundFailed(true)
+      })
+      .finally(() => {
+        if (active) setOutboundLoading(false)
+      })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    loadOutbound(!cancelled)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  /** Honest tri-state of one guard row from the loaded snapshot. */
+  type OutboundGuardState =
+    | { kind: 'loading' }
+    | { kind: 'unknown' }
+    | { kind: 'off' }
+    | { kind: 'live'; mode: string; auditHits: number }
+  const guardState = (guard: OutboundGuardStatus | null): OutboundGuardState => {
+    if (outboundFailed) return { kind: 'unknown' }
+    if (outbound == null) return { kind: 'loading' }
+    if (guard == null) return { kind: 'off' }
+    return { kind: 'live', mode: guard.mode, auditHits: guard.audit_hits }
+  }
+
+  /**
+   * Mode label with an honest fallback: known modes map to i18n labels; an
+   * unknown future value renders verbatim, never guessed into a label.
+   */
+  const outboundModeLabel = (mode: string): string => {
+    if (mode === 'redact' || mode === 'audit' || mode === 'off') {
+      return t(`settings.permissions.outbound.mode.${mode}`)
+    }
+    return mode
+  }
+
+  const renderGuardBadge = (testid: string, state: OutboundGuardState) => {
+    const badge = 'ml-auto inline-flex items-center gap-xs px-sm py-xs rounded-lg font-label-sm text-label-sm'
+    if (state.kind === 'loading') {
+      // Before the first read resolves: the old amber dashed shape, reading
+      // "reading" — no claim about the state yet.
+      return (
+        <span className={cn(badge, 'border border-dashed border-warning/50 text-warning')} data-testid={testid}>
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
+          {t('settings.permissions.outbound.loading')}
+        </span>
+      )
+    }
+    if (state.kind === 'unknown') {
+      // Read failed: unknown, never 0-for-missing, never "disabled".
+      return (
+        <span className={cn(badge, 'border border-dashed border-warning/50 text-warning')} data-testid={testid}>
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">help</span>
+          {t('settings.permissions.outbound.unknown')}
+        </span>
+      )
+    }
+    if (state.kind === 'off') {
+      // Status read succeeded and the guard never installed this process —
+      // a real, distinct state (not an error, not a zero).
+      return (
+        <span className={cn(badge, 'border border-solid border-outline-variant/30 text-on-surface-variant')} data-testid={testid}>
+          <span className="material-symbols-outlined icon-sm" aria-hidden="true">pause_circle</span>
+          {t('settings.permissions.outbound.guardOff')}
+        </span>
+      )
+    }
+    // Live: the guard is armed. Counts are FINDINGS — in audit mode the
+    // underlying values were forwarded verbatim, so the copy must never
+    // read as "blocked" (commands_security.rs honesty contract).
+    return (
+      <span className={cn(badge, 'border border-solid border-primary/30 bg-primary/5 text-on-surface')} data-testid={testid}>
+        <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">verified_user</span>
+        <span className="font-semibold">{outboundModeLabel(state.mode)}</span>
+        <span className="text-on-surface-variant">
+          {t('settings.permissions.outbound.auditHits', { hits: state.auditHits })}
+        </span>
+      </span>
+    )
+  }
 
   const sandboxMode = useMemo<'off' | 'local' | 'landlock'>(
     () => config?.sandbox?.mode ?? 'off',
@@ -522,22 +637,38 @@ export default function PermissionsSettings() {
             )}
           </section>
 
-          {/* 出站防线 (design 12-settings-security.html:214-236) — honest
-              edition, design-parity R2 (audit §3.2 M2). The design draws a
-              审计/改写/关闭 segmented control and two switches, but the repo
-              has NO engine capability behind any of the three defenses (key
-              redaction at egress, prompt-injection scanning, skill & MCP
-              update signature checks) — the honesty rule (design README
-              §5:130) forbids 「看起来可用」的死入口. So every entry renders
-              the amber dashed placeholder badge (MemoryPanel's
-              injection-preview-pending shape) reading 引擎能力对账后启用;
-              the real controls land in Wave C′ when the data sources exist. */}
+          {/* 出站防线 (design 12-settings-security.html:214-236) — S1.6
+              live-status edition. Two of the three defenses are REAL engine
+              guards today (shannon_core::secret_guard — release default
+              `redact`; shannon_core::injection_guard — default `audit`), and
+              the desktop exposes their latched modes + process-lifetime
+              finding counts via the read-only `get_outbound_defense_status`
+              command, so those two rows render live state (a failed read
+              renders as unknown — the honesty rule never guesses). The third
+              row, signature verification, stays honest-static: the only
+              enforcement point is the install-time gate with `SelfDeclared`
+              semantics (desktop/src/extensions/security.rs) — no runtime
+              state exists, and none is fabricated here. Counts are findings,
+              never "blocked" (in audit mode the values were forwarded). */}
           <section
             aria-label={t('settings.permissions.outbound.aria')}
             className="space-y-sm p-md rounded-xl border border-outline-variant/20 bg-surface-container-low"
             data-testid="permissions-outbound-card"
           >
-            <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.outbound.title')}</h3>
+            <div className="flex items-center justify-between gap-sm">
+              <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.outbound.title')}</h3>
+              <Button
+                variant="ghost"
+                aria-label={t('settings.permissions.outbound.refresh')}
+                title={t('settings.permissions.outbound.refresh')}
+                className="p-sm rounded-lg text-on-surface-variant hover:text-primary"
+                data-testid="permissions-outbound-refresh"
+                disabled={outboundLoading}
+                onClick={() => loadOutbound()}
+              >
+                <span className="material-symbols-outlined icon-md" aria-hidden="true">refresh</span>
+              </Button>
+            </div>
             <p className="text-body-sm text-on-surface-variant">{t('settings.permissions.outbound.desc')}</p>
             <ul className="space-y-xs">
               {([
@@ -545,16 +676,33 @@ export default function PermissionsSettings() {
                 { id: 'injection-scan', labelKey: 'settings.permissions.outbound.injectionScan' },
                 { id: 'signature-check', labelKey: 'settings.permissions.outbound.signatureCheck' },
               ] as const).map((entry) => (
-                <li key={entry.id} className="flex items-center gap-sm flex-wrap">
+                <li key={entry.id} className="flex items-center gap-sm flex-wrap" data-testid={`outbound-row-${entry.id}`}>
                   <span className="font-label-md text-on-surface">{t(entry.labelKey)}</span>
-                  <span className="ml-auto inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-dashed border-warning/50 font-label-sm text-label-sm text-warning">
-                    <span className="material-symbols-outlined icon-sm" aria-hidden="true">hourglass_top</span>
-                    {t('settings.permissions.outbound.pendingBadge')}
-                  </span>
+                  {entry.id === 'signature-check' ? (
+                    // Capability note, not status: install-time gate,
+                    // self-declared (non-cryptographic) semantics. Rendered
+                    // statically — no runtime state exists to query.
+                    <span
+                      className="ml-auto inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-solid border-outline-variant/30 font-label-sm text-label-sm text-on-surface-variant"
+                      data-testid="outbound-signature-note"
+                    >
+                      <span className="material-symbols-outlined icon-sm" aria-hidden="true">fact_check</span>
+                      {t('settings.permissions.outbound.signatureNote')}
+                    </span>
+                  ) : entry.id === 'key-scan' ? (
+                    renderGuardBadge('outbound-key-redaction-status', guardState(outbound?.key_redaction ?? null))
+                  ) : (
+                    renderGuardBadge('outbound-injection-scan-status', guardState(outbound?.injection_scan ?? null))
+                  )}
                 </li>
               ))}
             </ul>
-            <p className="text-label-md text-on-surface-variant/80">{t('settings.permissions.outbound.reconcileNote')}</p>
+            {outboundFailed && (
+              <p className="text-label-md text-warning" role="status">
+                {t('settings.permissions.outbound.statusUnavailable')}
+              </p>
+            )}
+            <p className="text-label-md text-on-surface-variant/80">{t('settings.permissions.outbound.statusLive')}</p>
           </section>
 
           {/* Command sandbox (P1-3) */}
