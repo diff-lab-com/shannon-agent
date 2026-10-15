@@ -77,7 +77,7 @@
   --color-on-surface-container: #212122;
 }
 
-/* Tokyo Night (dark) */
+/* Tokyo Night (dark) — primary family shifted to the Aurora design violet #8b7cf7 (ui-redesign-2026-10 W3); ANSI terminal palette keeps the official TN blue */
 [data-theme='tokyo-night'] {
   --radius: 0.625rem;
   --material-base: var(--color-surface-dim);
@@ -87,7 +87,7 @@
   --card-foreground: #a9b1d6;
   --popover: #1f2335;
   --popover-foreground: #a9b1d6;
-  --primary: #7aa2f7;
+  --primary: #8b7cf7;
   --primary-foreground: #1a1b26;
   --secondary: #9d7cd8;
   --secondary-foreground: #1a1b26;
@@ -98,15 +98,15 @@
   --destructive: #f7768e;
   --border: #292e42;
   --input: #292e42;
-  --ring: #7aa2f7;
+  --ring: #8b7cf7;
 
-  --color-primary: #7aa2f7;
+  --color-primary: #8b7cf7;
   --color-link: var(--color-primary);
-  --color-primary-container: #3b4261;
+  --color-primary-container: #3f3b61;
   --color-on-primary: #1a1b26;
-  --color-on-primary-container: #c0d0f7;
-  --color-primary-fixed: #c0d0f7;
-  --color-on-primary-fixed: #0d1b3e;
+  --color-on-primary-container: #c7c0f7;
+  --color-primary-fixed: #c7c0f7;
+  --color-on-primary-fixed: #130d3e;
   --color-secondary: #af94df;
   --color-on-secondary: #1a1b26;
   --color-tertiary: #e0af68;
@@ -144,7 +144,7 @@
   --color-outline-variant: #3b4261;
   --color-background: #1a1b26;
   --color-on-background: #c0caf5;
-  --chart-series-1: #7aa2f7;
+  --chart-series-1: #8b7cf7;
   --chart-series-2: #9ece6a;
   --chart-series-3: #e0af68;
   --chart-series-4: #f7768e;

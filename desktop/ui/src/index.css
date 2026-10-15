@@ -165,6 +165,12 @@
   --font-body-sm: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-body-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  /* W2 视觉收敛: the design's var(--mono) stack (shannon-ui.css) leads with
+     JetBrains Mono — self-hosted via @fontsource-variable/jetbrains-mono
+     (imported next to Inter in main.tsx). Overrides the Tailwind v4 default
+     so every `font-mono` call site (timestamps, ids, numeric columns, code)
+     renders it without touching the sans/body tokens above. */
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* Text Sizing Overrides */
   /* label-2xs (Batch 1): 10px was the most-used non-token size (59 sites —
@@ -399,6 +405,51 @@
    by its intrinsic lightness — the violet anchor carries the line). */
 [data-theme-mode="light"] .aurora-line::before {
   background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.85), rgba(86, 200, 221, 0.7), transparent);
+}
+
+/* ── Aurora ambient light (W1 视觉收敛; design assets/shannon-ui.css `.ambient`)
+   ── The mockups' fixed full-viewport wash: two radial gradients anchored
+   above the window's top edge (violet #8b7cf7 + aurora cyan #56c8dd,
+   "极光余晖"), ported with the design's exact geometry. The app's content
+   tier deliberately paints OPAQUE --color-surface on <main> (G2, see
+   Layout.tsx), so the mockup's body-level underlay div would be invisible
+   behind it — the equivalent paint result is a fixed-ATTACHMENT
+   background-image on the content shell itself: viewport-anchored like the
+   design's position:fixed layer, under every route content, no stacking-
+   context change to <main> (in-place fixed z-modal overlays — RightDock,
+   LinkContextMenu — must keep outranking the app chrome). Plain gradients
+   only: NO backdrop-filter, so the ≤4 backdrop-filter budget above is
+   untouched, and being part of main's own background it can never intercept
+   pointers or assistive tech (axe-safe by construction). */
+@utility aurora-ambient {
+  background-image:
+    radial-gradient(1100px 340px at 22% -8%, rgba(139, 124, 247, 0.1), transparent 60%),
+    radial-gradient(900px 300px at 85% -6%, rgba(86, 200, 221, 0.07), transparent 60%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* Light themes render the same aurora at half strength (50% of the design
+   alphas — the brief's 40–60% band): the mockups are dark-first, and the
+   full wash reads as a smudge on the light surfaces. Unlayered +
+   attribute-scoped, same mechanism as the aurora-line light override above. */
+[data-theme-mode="light"] .aurora-ambient {
+  background-image:
+    radial-gradient(1100px 340px at 22% -8%, rgba(139, 124, 247, 0.05), transparent 60%),
+    radial-gradient(900px 300px at 85% -6%, rgba(86, 200, 221, 0.035), transparent 60%);
+}
+
+/* Reduced transparency (OS signal or the in-app 材质「减弱」opt-in, parity R1):
+   the ambient IS a transparency effect — drop it, same contract as the glass
+   solid fallbacks above. */
+.aurora-ambient {
+  @media (prefers-reduced-transparency: reduce) {
+    background-image: none;
+  }
+
+  html.reduce-glass & {
+    background-image: none;
+  }
 }
 
 /* Elevation utilities for solid (non-glass) cards — replaces ad-hoc
