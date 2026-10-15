@@ -179,3 +179,24 @@
 3. **顺带② · 06-usage 页头「导出 CSV」核对**:稿内已有(`06-usage.html:146`,与实现 `Usage.tsx` M5a / `usage.export.csv` 一致),未改动。
 
 **截图(收口批)**:02-chat / 03-chat-review / 12-settings / 12-settings-security / 12-settings-general 已重新出图覆盖同名 PNG(06-usage 未改动故不出图)。
+
+---
+
+## 7. 2026-10-15 重绘收口批(设计稿向已落地实现对账)
+
+> 依据 [视觉收敛 R4](../../reviews/2026-10-15-visual-convergence-r4.md) §RD:PR #411(视觉收敛批,2026-10-16 合入,CI 20 checks green)把 W1-W3/T1/T2 与历轮裁决落进了实现;本批把**已在实现里成立的形态**对账回 14 页设计稿——原则不变:**实现是事实标准,设计稿向实现对齐**。逐项对账表见 R4 §RD。
+
+1. **02 / 03 · composer 02c D1-D5 折叠**:主对话页与评审页的 composer 从「权限四档分段 + 推理 chip + @ chip」旧形制,折叠为 02c 提案 ② 的收敛形态——`+` 菜单(附件/临时会话角标)、权限当前档 chip(下拉四档见 02c S4)、用量 38% chip(数字入弹框,02c S3)、模型 chip、effort 可点 gauge chip;`@` 引用经 placeholder 教学,不占常驻位。规格标注句按 02c D3「各宽度同一形态」口径回改(解除 R2 §7-C2 的 F-9 句式张力;<1200px 仅 gauge 四点收缩)。
+2. **02 · 状态条 D5 瘦身**:移除 上下文 38% / 缓存命中 92% / 本会话 $0.087 / 预算余 $19.91 四段数字——02c 裁决 D5 有意移入 SessionUsageDialog(r4 W4 已登记「非缺口」),状态条仅留 目录 + 分支。
+3. **02 · 用户气泡按 R3 §4 收口**(shannon-ui.css `.msg-user`):实体亮紫底 `#e9ddff` / 深紫字 `#23005c`(主题无关 fixed token),`rounded-2xl rounded-tr-none`(16px、右上直角),去描边——与 `MessageBubble.tsx:690` 一致;原「半透明紫底+描边、右下 4px」旧形制撤销。
+4. **02 · 思考头分态补齐**:完成态「已思考 6 秒」维持(T1,时长可推导才显示,缺席 → 素「已思考」);进行中「正在整理升级注意事项…」→「思考中…」(`chat.streaming.thinking`,R3 §4 分态裁决)。
+5. **02c · S3 用量弹框 T2 形态**:「窗口峰值 96k」→「会话峰值 9.6万 / 20万(48%)」(`chat.input.usage.sessionPeak.pct`,peak_used+窗口预算同在才渲染百分比,皆缺整行隐藏);预算行改「$0.087 / $19.91 预算余」+「设置会话预算…」入口(花费/预算余口径,W7)。
+6. **06 · 上下文峰值 KPI 对齐 T2**:值 = 峰值已用 token(跨会话取最大,「7.6万」),副行 = 「{持有会话}({峰值/窗口}%)」;原「61% · 200k 窗口」旧口径撤销——绝不拿窗口当用量。
+7. **11 · B1/B2 注记与文案**:双栏预览卡与提取徽章此前已在稿内;补「≥1280px 双栏(1fr + 320px 预览卡,格内操作回撤进卡)· <1280px 降级单栏」规格注记(`FilesPage.tsx:69` WIDE_QUERY);丢失徽章文案对齐 `office.files.missing`「原文件已移动或删除」。
+8. **12-appearance · tokyo-night 色板紫化(W3)**:主题卡 swatch accent `#7aa2f7` → `#8b7cf7`(主色族已紫化,`themes.css:80`);`#7aa2f7` 仅存于 xterm ANSI 终端蓝,不代表主题 accent。
+9. **13 · companion 文案微差收口(R3 §4 遗留)**:「发到主窗口」→「发送」;底部契约句 →「只写入主窗口草稿,不自动发送」(`companion.footer.hint`);置顶图标钮 →「窗口置顶」勾选项;原「# 会话」目标 chip 实现不存在,删除,改为行内状态「已发送到主窗口」(回执/错误/空 至多一条)。
+10. **shannon-ui.css · 顺笔注记**:`.ambient` 加注 W1 已落地与浅色主题 50% alpha 属应用侧细节;`--mono`(JetBrains Mono)与品牌紫 `#8b7cf7` 核对不变。
+
+**刻意不改**(登记不回改):03 主区整宽评审形态与「已丢失卡整卡虚线」稿内已画(app 侧仍挂账 R3 §4,见 R4 §RD);11 提取徽章按已落地形态只画在预览卡(格行不带徽章);05 stat 大卡 / 06 KPI 横纵解剖 / 10 瀑布结构 / 12-models 供应商卡等 r4 W4 已登记的呈现层差异维持设计稿原样;07 卡足安全话术措辞、安全白皮书按钮注记、06「每日成本」首屏口径三项 R3 顺笔项不在本批批准清单,留待下批。
+
+**截图**:02-chat / 03-chat-review / 02c-chat-composer-tidy / 06-usage / 11-files / 12-settings-appearance / 13-companion 已用 `assets/shot.mjs`(1440×900 @2x,playwright 取自 desktop/ui)重新出图;其中 02c 的改动(S3 弹框)位于首屏折叠线以下,视口截图像素不变,文件字节一致故 git 无 diff。

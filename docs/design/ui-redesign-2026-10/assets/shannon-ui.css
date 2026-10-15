@@ -65,7 +65,9 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
-/* 页面环境光:极光余晖,极低强度,只出现在窗口上缘 */
+/* 页面环境光:极光余晖,极低强度,只出现在窗口上缘
+   (W1 已落地:实现 aurora-ambient 与本稿逐值一致,index.css:451;
+    浅色主题实现侧把两枚 alpha 减半 —— .05/.035,属应用侧细节,稿不改) */
 .ambient { position: fixed; inset: 0; pointer-events: none; z-index: 0;
   background:
     radial-gradient(1100px 340px at 22% -8%, rgba(139,124,247,.10), transparent 60%),
@@ -360,8 +362,13 @@ input, textarea { font: inherit; color: var(--t1); background: none; border: 0; 
 
 /* ---------- 消息流(对话页) ---------- */
 .stream { max-width: 792px; margin: 0 auto; padding: 26px 24px 30px; display: flex; flex-direction: column; gap: 22px; }
-.msg-user { align-self: flex-end; max-width: 78%; background: var(--vio-dim); border: 1px solid rgba(139,124,247,.28);
-  border-radius: 16px 16px 4px 16px; padding: 10px 14px; font-size: 13.5px; color: var(--t1); }
+/* 用户气泡(2026-10-15 重绘收口:R3 §4「用户气泡圆角/头像形态」按已落地形态回改 ——
+   MessageBubble.tsx:690 bg-primary-fixed + text-on-primary-fixed + rounded-2xl rounded-tr-none:
+   实体亮紫底 #e9ddff / 深紫字 #23005c(主题无关 fixed token),无描边,右上角直角,其余 16px) */
+.msg-user { align-self: flex-end; max-width: 78%; background: #e9ddff; color: #23005c;
+  border-radius: 16px 0 16px 16px; padding: 10px 14px; font-size: 13.5px; font-weight: 500;
+  box-shadow: var(--sh-1); }
+.msg-user b { font-weight: 650; }
 .msg-ai { display: flex; gap: 11px; }
 .msg-ai .avatar { width: 26px; height: 26px; border-radius: 8px; flex: none; margin-top: 2px;
   background: var(--grad-aurora); display: grid; place-items: center; color: #fff; box-shadow: 0 3px 12px rgba(139,124,247,.3); }

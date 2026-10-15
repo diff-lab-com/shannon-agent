@@ -36,6 +36,7 @@
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M20.5 14.5a8.5 8.5 0 1 0-17 0"/><path d="M12 14.5l3.6-3.6"/></symbol>
   <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
@@ -141,13 +142,16 @@
     <div class="content">
       <div class="stream">
 
-        <!-- 用户消息 -->
+        <!-- 用户消息(气泡形制见 shannon-ui.css .msg-user —— 2026-10-15 按 R3 §4 收口回改:
+             实体亮紫底/深紫字/右上直角,MessageBubble.tsx:690 bg-primary-fixed rounded-tr-none) -->
         <div class="msg-user">生产环境的 billing webhook 一直在报签名校验失败,帮我定位一下原因并修复。</div>
 
         <!-- 助手回合 -->
         <div class="msg-ai">
           <div class="avatar"><svg><use href="#i-logo"/></svg></div>
           <div class="body">
+            <!-- T1(视觉收敛批已落地):完成态思考头 = 「已思考 N 秒」(reasoning_duration_ms
+                 可推导时);推导不出 → 素「已思考」,绝不编造时长(MessageBubble.tsx:799)。 -->
             <div class="think">
               <div class="h"><svg class="ic"><use href="#i-spark"/></svg> 已思考 6 秒<svg class="ic" style="margin-left:6px"><use href="#i-chev-d"/></svg></div>
               <p class="mt8">签名校验失败常见于:密钥轮换后未同步、时间戳容差、payload 编码差异。先看 webhook 验签代码和最近一次失败日志,再对照 Stripe 文档的签名规范。</p>
@@ -232,7 +236,9 @@
           <div class="avatar"><svg><use href="#i-logo"/></svg></div>
           <div class="body">
             <div class="think">
-              <div class="h"><svg class="ic"><use href="#i-spark"/></svg> 正在整理升级注意事项…</div>
+              <!-- 进行中思考头 = 「思考中…」(chat.streaming.thinking;完成态才挂时长,
+                   R3 §4 分态裁决 + StreamingResponse.tsx:80) -->
+              <div class="h"><svg class="ic"><use href="#i-spark"/></svg> 思考中…</div>
             </div>
             <div class="toolstack">
               <button class="tool">
@@ -253,39 +259,34 @@
       <div class="composer aurora-line">
         <div class="ta"><textarea rows="2" placeholder="回复 Shannon,或输入 / 唤起技能、@ 引用文件…"></textarea></div>
         <div class="compose-row">
-          <!-- 2026-10-14 R2:词汇按权限命名 v2 回改(与 02c D7 同口径)——
-               四档主词 = 询问 / 自动编辑 / 计划 / 全自动,对齐实现 approvalModes.ts 单词汇表;
-               副语见 02c S4 弹层。 -->
-          <div class="seg">
-            <button><svg class="ic"><use href="#i-shield"/></svg>询问</button>
-            <button class="on"><svg class="ic"><use href="#i-edit"/></svg>自动编辑</button>
-            <button>计划</button>
-            <button>全自动</button>
-          </div>
-          <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
-          <button class="chip">推理<span class="cv">标准</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
-          <button class="chip"><svg class="ic"><use href="#i-at"/></svg><span class="cv">shannon-mono</span></button>
+          <!-- 2026-10-15 重绘收口:02c 裁决 D1-D5 折叠入主对话页(02c 提案 ②/A1-A4 形态,
+               与 ChatInput.tsx 落地一致)—— 规划/执行档位与权限四档分段移除(D1/D3):
+               权限 = 当前档 chip,点击弹四档下拉(逐档副语 + 高危提示,见 02c S4);
+               用量 = 38% chip(数字收编弹框,见 02c S3);effort = 可点 gauge chip(D2,
+               标准档低对比);@ 引用经 placeholder 教学,不占常驻位。词汇 = 权限命名 v2。 -->
+          <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <button class="chip acc"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+          <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+          <button class="chip"><svg class="ic"><use href="#i-spark"/></svg><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+          <button class="chip"><svg class="ic"><use href="#i-gauge"/></svg>推理<span style="display:inline-flex;align-items:center;gap:2.5px"><i style="width:5.5px;height:5.5px;border-radius:99px;background:var(--vio-2)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:var(--vio-2)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:var(--vio-2)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:rgba(255,255,255,.16)"></i></span><span class="cv">深</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
           <span class="spacer"></span>
-          <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-clip"/></svg></button>
           <button class="iconbtn"><svg class="ic"><use href="#i-mic"/></svg></button>
           <button class="send stop"><svg class="ic"><use href="#i-stop"/></svg></button>
         </div>
       </div>
-      <!-- 规格标注(F-9 响应式降级,非 UI 元素) -->
+      <!-- 规格标注(F-9 响应式降级,非 UI 元素;2026-10-15 按 02c D3「各宽度同一形态」
+           口径回改 —— R2 §7-C2 张力解除) -->
       <div style="max-width:792px;margin:8px auto 0;text-align:center;font-size:10.5px;color:var(--t3);border:1px dashed var(--hair);border-radius:8px;padding:4px 10px">
-        响应式:&lt;1360px 右停靠自动折叠(图标呼出) · &lt;1200px 执行模式折叠为「当前档 chip」,三要素恒可达
+        响应式:&lt;1360px 右停靠自动折叠(图标呼出) · composer 控件各宽度同一形态(02c D3,无 1200px 断点折叠;&lt;1200px 仅 gauge 四点收缩为 icon+档位词)
       </div>
     </div>
 
-    <!-- 状态条 -->
+    <!-- 状态条(02c 裁决 D5:仅目录 + 分支,缺席即隐藏 —— 上下文/缓存/花费/预算数字
+         由用量 %chip → SessionUsageDialog 承载(02c S3);r4 W4 已登记「无会话统计数字
+         非缺口」,本稿据此移除旧状态条数字段) -->
     <div class="statusbar">
       <span class="seg2"><svg class="ic"><use href="#i-folder"/></svg>~/work/shannon/shannon-mono</span>
       <span class="seg2"><svg class="ic"><use href="#i-branch"/></svg>fix/billing-webhook</span>
-      <span class="spacer"></span>
-      <span class="seg2"><svg class="ic"><use href="#i-db"/></svg>上下文 38% · 74k/200k</span>
-      <span class="seg2" style="color:var(--ok)">缓存命中 92%</span>
-      <span class="seg2">本会话 <b class="money" style="color:var(--t2)">$0.087</b></span>
-      <span class="seg2">预算余 $19.91</span>
     </div>
   </div>
 
