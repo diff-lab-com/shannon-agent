@@ -119,7 +119,10 @@ export function PairingRequestsCard({ config, procState }: PairingRequestsCardPr
               return (
                 <li
                   key={`${request.platform}:${request.senderId}:${request.code}`}
-                  className="flex items-center justify-between gap-md"
+                  // W4 视觉收敛 (design 12-settings-connections:208): the
+                  // pending-pairing callout is an aurora surface — one
+                  // gradient top edge per actionable request row.
+                  className="aurora-line flex items-center justify-between gap-md"
                   data-testid={`pairing-request-${request.code}`}
                 >
                   <div className="flex flex-col">

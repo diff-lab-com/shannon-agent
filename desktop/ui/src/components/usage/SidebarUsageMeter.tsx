@@ -51,7 +51,7 @@ export default function SidebarUsageMeter({ onNavigate }: { onNavigate?: () => v
             )
           : intl.formatMessage({ id: 'sidebar.usage.meterNoBudgetTitle' }, { spent: fmtUsd(intl.locale, governance.last7dCostUsd) })
       }
-      className="w-full flex flex-col gap-1 px-3 py-sm rounded-lg font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 text-left"
+      className="w-full flex flex-col gap-1 px-3 py-sm rounded-lg font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all h-auto min-w-0 text-left tabular-nums"
     >
       <span className="flex items-center gap-sm min-w-0 w-full">
         <span

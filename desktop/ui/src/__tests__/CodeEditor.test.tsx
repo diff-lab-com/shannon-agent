@@ -182,12 +182,12 @@ describe('cmTheme — dark syntax highlighting (B6b)', () => {
 
   it('dark palette falls back to the fixed AA floor when tokens are unreadable (jsdom)', () => {
     const palette = cmSyntaxPaletteFor('dark') as CmSyntaxPalette
-    expect(palette.keyword).toBe('#7aa2f7') // primary family, 6.79:1 on #1a1b26
+    expect(palette.keyword).toBe('#8b7cf7') // primary family (W4 violet floor), 5.15:1 on #1a1b26
     expect(palette.string).toBe('#e0af68') // 8.55:1
     expect(palette.comment).toBe('#a9b1d6') // 8.10:1, italic applied at style level
     expect(palette.constant).toBe('#9d7cd8') // 5.13:1
     expect(palette.tag).toBe('#f7768e') // 6.46:1
-    expect(palette.attribute).toBe('#7aa2f7') // shares the keyword family
+    expect(palette.attribute).toBe('#8b7cf7') // shares the keyword family
     expect(palette.heading).toBe('#a9b1d6') // on-surface, bold applied at style level
   })
 

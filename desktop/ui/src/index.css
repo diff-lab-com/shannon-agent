@@ -407,6 +407,33 @@
   background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.85), rgba(86, 200, 221, 0.7), transparent);
 }
 
+/* ── Aurora tab underline (W4 视觉收敛; design assets/shannon-ui.css
+   `.tab.on::after`) ── The design's active underline-tab indicator: a 2px
+   violet→cyan gradient bar seated on the row's bottom hairline (bottom:-1px,
+   inset 10px, rounded). Replaces the old `border-b-primary` treatment whose
+   border-color leaked to all four sides of the base button border and read
+   as an outlined box instead of a tab. Fixed brand hues (the full-strength
+   --grad-aurora triple, same pair as aurora-line) — deliberately not theme
+   tokens, so the signature reads identically across all 12 themes; at full
+   opacity no light-theme lift is needed (unlike the hairline alphas above).
+   Purely static decorative paint (::after, pointer-events:none) — selection
+   stays carried by the tab's text color + aria-selected, so neither
+   prefers-reduced-motion nor reduced-transparency needs a fallback here. */
+@utility aurora-tab {
+  position: relative;
+  &::after {
+    content: "";
+    position: absolute;
+    left: 10px;
+    right: 10px;
+    bottom: -1px;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(93deg, #8b7cf7 0%, #6fa8e8 55%, #56c8dd 100%);
+    pointer-events: none;
+  }
+}
+
 /* ── Aurora ambient light (W1 视觉收敛; design assets/shannon-ui.css `.ambient`)
    ── The mockups' fixed full-viewport wash: two radial gradients anchored
    above the window's top edge (violet #8b7cf7 + aurora cyan #56c8dd,

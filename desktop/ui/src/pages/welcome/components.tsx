@@ -52,14 +52,23 @@ export function Stepper({ step, labels }: { step: number; labels: string[] }) {
   )
 }
 
-export function WelcomeCard({ title, subtitle, footer, children }: {
+export function WelcomeCard({ title, subtitle, footer, aurora, children }: {
   title: string
   subtitle: string
   footer: React.ReactNode
+  /** W4 视觉收敛 (design 01b done-card `.glasscard aurora-line`): the flow's
+   *  completion card carries the aurora top edge. Opt-in — the design only
+   *  draws it on the done state (01b), not on the intermediate step cards. */
+  aurora?: boolean
   children: React.ReactNode
 }) {
   return (
-    <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-e1">
+    <section
+      className={
+        'bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-xl shadow-e1' +
+        (aurora ? ' aurora-line' : '')
+      }
+    >
       <h1 className="font-headline-lg text-on-surface mb-xs">{title}</h1>
       <p className="font-body-md text-on-surface-variant mb-xl">{subtitle}</p>
       {children}
