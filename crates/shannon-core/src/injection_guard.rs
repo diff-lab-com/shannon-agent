@@ -156,10 +156,10 @@ static ENABLED_MODE: OnceLock<Option<InjectionGuardMode>> = OnceLock::new();
 
 /// The scanner's latched mode for this process (`Some(Audit)` / `Some(Off)`
 /// once resolved, `None` is never returned by the public surface — the
-/// `OnceLock` latches [`resolve_mode_with_default`], so an unset env/config
+/// `OnceLock` latches `resolve_mode_with_default`, so an unset env/config
 /// resolves to the `audit` default here). Read-only status surface for
 /// hosts — the desktop `get_outbound_defense_status` command; first call
-/// performs the same one-time env/config resolution [`audit_text`] would,
+/// performs the same one-time env/config resolution `audit_text` would,
 /// and later calls observe the latch.
 pub fn enabled_mode() -> Option<InjectionGuardMode> {
     *ENABLED_MODE.get_or_init(|| {
