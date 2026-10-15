@@ -162,3 +162,38 @@ pub async fn get_outbound_defense_status() -> Result<OutboundDefenseStatus, Stri
 - `node scripts/contrast-audit.mjs`(cwd desktop/ui):**All theme token pairs pass AA**,exit 0。
 - `npx tsc --noEmit`:0 错;改动文件 `eslint --max-warnings 0`:0;`check-design-tokens.mjs`:0 error(13 条既有文档化 warning,无新增);`i18n-check.mjs`:OK。
 - 极光面上机验证(Playwright computedStyle):companion 根、memory 横幅、tasks 激活 tab、chat composer 的 `::before/::after` 渐变均实测在位;tokyo-night-light 抽查通过。
+
+---
+
+## RD · 设计稿重绘收口
+
+**日期**:2026-10-16 · **分支**:`docs/design-redraw`(基线 origin/dev,已含 PR #411) · **方法**:逐项核对 R2 §3.4/§7、R3 §4/§4.1 遗留清单与本 PR(视觉收敛批)已落地形态,以 `MessageBubble/ChatInput/SessionUsageDialog/FilesPage/CompanionPage/Usage` 等实现源码为准绳回改设计稿;截图用 `assets/shot.mjs`(playwright,1440×900 @2x)重出。
+
+**PR #411 合并记录**:feat/visual-convergence → dev,**merged 2026-10-16,CI 20 checks green**。
+
+### RD.1 对账表(批准的收口清单)
+
+| # | 项 | 页 | 状态 | 说明 |
+|---|---|---|---|---|
+| 1 | composer D1-D5 收敛 | 02 / 03 | **已重绘** | 两页仍画旧形制(四档分段 seg + 推理 chip + @ chip)→ 按 02c 提案 ②/A1-A4 折叠:`+` 菜单 / 权限当前档 chip(下拉=02c S4)/ 用量 38% chip / 模型 chip / effort gauge chip;02c 提案页自身**已在**(7534e0895 起,84b34d4ea 词汇 v2 收口)。顺笔按 02c D3「各宽度同一形态」口径回改两页 F-9 规格句(R2 §7-C2 张力解除) |
+| 2 | C2 文件库双栏预览(B1) | 11 | **已在 + 注记** | 320px 预览卡 + 格内操作回撤稿内已画;补「≥1280px 双栏 · <1280px 降级单栏」规格注记(= `FilesPage.tsx:69` WIDE_QUERY,已落地) |
+| 3 | F-9 抽取徽标(B2) | 11 | **已在(按已落地形态注记)** | 「已提取 12 段」徽章稿内已画在预览卡——与实现一致(`files-preview-extracted` 同位,extracted_segments 门控,缺席不显示);**格行不带徽章是实现形态,故不给网格卡补画** |
+| 4 | 06 用量口径(T2 峰值形态) | 06 + 02c | **按已落地形态重绘** | 06 KPI:值=峰值已用「7.6万」+ 副行「修复 billing webhook 签名校验(38%)」(`usage.stat.contextPeak.pct`),旧「61% · 200k 窗口」撤销;02c S3:「窗口峰值 96k」→「会话峰值 9.6万 / 20万(48%)」,预算行 →「$0.087 / $19.91 预算余」+ 设置入口 |
+| 5 | 气泡圆角(R3 §4 用户气泡圆角/头像形态) | 02(CSS) | **按已落地形态重绘** | `.msg-user` → 实体 `#e9ddff` 底 / `#23005c` 字、16px 圆角右上直角(rounded-tr-none)、去描边(= `MessageBubble.tsx:690` bg-primary-fixed);旧「半透明紫+描边、右下 4px」撤销 |
+| 6 | ask 档描述两侧收口(R3 §4.1) | 02c | **已在** | 02c S4 四档副语已与实现 `settings.general.approvalMode.*` 逐字一致(84b34d4ea D7 收口);下拉容器两侧同为 min-w-56 不折行——**无残差,不重绘** |
+| 7 | companion 文案微差(R3 §4.1) | 13 | **按已落地形态重绘** | 「发到主窗口」→「发送」;foot →「只写入主窗口草稿,不自动发送」;置顶图标钮 →「窗口置顶」勾选项;「# 会话」chip 实现不存在 → 删,改行内状态「已发送到主窗口」(= `companion.*` i18n) |
+| 8 | 03 主区整宽评审 + 已丢失卡整卡虚线(R3 §4.1) | 03 / 11 | **已在** | 设计 03 已画主区整宽评审(review-wrap,app 侧仍挂账);设计 11 已画整卡虚线+琥珀徽章;顺笔 ③:/review 占位句删除(R2 §7.1-⑤ 裁决选 b:功能未立项)→ 03 占位改「对改动提问…」并留注 |
+| 9 | T1「已思考 N 秒」 | 02 | **已在 + 分态补齐** | 完成态「已思考 6 秒」已在(r4 前入稿);进行中「正在整理升级注意事项…」→「思考中…」(R3 §4 分态 + `chat.streaming.thinking`),注记诚实门控(无时长 → 素「已思考」) |
+| 10 | Token 对齐(mono / 旧蓝残留) | CSS + 12-appearance | **已在 + 1 处已重绘** | `--mono` 已是 JetBrains Mono 首位、品牌紫已 `#8b7cf7` 领衔、`.ambient` 与 W1 逐值一致(加注浅色 50% alpha 属应用侧);全稿唯一旧蓝残留 = 12-appearance tokyo-night 色板 accent `#7aa2f7` → **`#8b7cf7`**(ANSI 终端蓝按 W3 裁决不动,色板表主题 accent) |
+
+### RD.2 刻意不画(登记)
+
+- **r4 W4 遗留登记的呈现层差异一律维持设计稿原样,不反向回改**:01 品牌区结构、05 stat 大卡 vs 紧凑 chips、06 KPI 横排解剖(2026-09-29 共享组件裁决)、10 瀑布 vs 回合卡(结构登记)、12-models 供应商卡 vs 性能策略 IA、12-connections callout vs 行式列表——这些登记的含义是「实现不重建」,不是「设计稿要改」。
+- **07 卡足「注入扫描 ✓ 已签名 ✓」措辞诚实化 / 「去授权」文案、安全白皮书按钮注记、06「每日成本」首屏口径**(R3 §4 设计稿侧顺笔三项):不在本批批准清单,留待下批顺笔。
+- **F-9 响应式注记只落在被重绘的 02/03**:其余页的同族规格句未在批准清单内,未触。
+- **02 权限 chip 描边色**:实现用 `border-warning/50`(amber 系)而稿画 `.chip.acc` 紫——02c 已裁决稿形态为紫,未作为裁决登记,稿维持;实现侧是否跟紫留实现批自决。
+- **msg-user 悬浮操作条**(copy/edit/branch):交互态,静态稿不画,与既稿 AI 侧 hover 图标行同待遇。
+
+### RD.3 截图
+
+改动页 7 张重出:02-chat / 03-chat-review / 02c-chat-composer-tidy / 06-usage / 11-files / 12-settings-appearance / 13-companion(同名覆盖,1440×900 @2x)。其中 **02c 视口截图像素不变**(S3 弹框改动在首屏折叠线以下),文件字节一致,git 无 diff;其余 6 张内容可见变化。未改动页一律不出图,保持 diff 可审。
