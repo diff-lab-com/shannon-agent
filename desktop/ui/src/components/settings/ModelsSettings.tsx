@@ -332,7 +332,9 @@ export default function ModelsSettings() {
                 aria-controls="provider-catalog-panel"
                 className={cn(
                   'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                  !activeProvider ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                  // W4 视觉收敛 (design .tab.on::after): aurora gradient
+                  // underline instead of the four-side border-primary box.
+                  !activeProvider ? 'border-transparent text-link font-bold aurora-tab' : 'border-transparent text-on-surface-variant hover:text-primary',
                 )}
               >{t('settings.models.tabAll')}</Button>
               {providers.map(p => (
@@ -346,7 +348,7 @@ export default function ModelsSettings() {
                   aria-controls="provider-catalog-panel"
                   className={cn(
                     'h-auto pb-sm px-xs border-b-2 font-label-md whitespace-nowrap cursor-pointer transition-colors rounded-none',
-                    activeProvider === p ? 'border-primary text-link font-bold' : 'border-transparent text-on-surface-variant hover:text-primary',
+                    activeProvider === p ? 'border-transparent text-link font-bold aurora-tab' : 'border-transparent text-on-surface-variant hover:text-primary',
                   )}
                 >{p}</Button>
               ))}

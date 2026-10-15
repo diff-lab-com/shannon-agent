@@ -92,8 +92,10 @@ export default function McpAddServerDialog({
               onClick={() => setTab(tb.key)}
               className={cn(
                 "px-md py-sm rounded-none text-label-sm font-bold border-b-2 -mb-px transition-colors",
+                // W4 视觉收敛 (design 07 .tab.on::after): aurora gradient
+                // underline instead of the four-side border-primary box.
                 tab === tb.key
-                  ? "border-primary text-primary hover:bg-transparent"
+                  ? "border-transparent text-primary hover:bg-transparent aurora-tab"
                   : "border-transparent text-on-surface-variant hover:text-on-surface hover:bg-transparent",
               )}
             >

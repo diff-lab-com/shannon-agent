@@ -211,8 +211,13 @@ export function Layout() {
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <KeyboardShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
         {/* G2: the content tier paints surface over the body's L0 base so
-            cards (container-lowest) keep their layer against it. */}
-        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative bg-surface" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
+            cards (container-lowest) keep their layer against it.
+            aurora-ambient (W1 视觉收敛): the design's fixed `.ambient`
+            aurora wash rides on main's own background — viewport-anchored
+            fixed attachment, above the surface fill, under every route
+            content; plain gradients, no backdrop-filter (blur budget ≤4).
+            Theme intensity is handled inside index.css (data-theme-mode). */}
+        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative bg-surface aurora-ambient" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
           {initError && (
             <Banner tone="error" className="items-center shrink-0">
               <span className="material-symbols-outlined icon-md text-error shrink-0" aria-hidden="true">error</span>

@@ -95,6 +95,16 @@ pub struct SessionIndex {
     /// and stay valid (the next incremental update refreshes it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
+    /// Peak context USED (峰值已用, R3 §4.1 T2): the running max over
+    /// `turn/end` usage payloads of `input + cache_read + output` tokens —
+    /// the same numerator the frontend's context-occupancy arithmetic reads
+    /// (ContextBreakdownCard's 口径), so 「峰值 X / 预算 Y（Z%）」 can render
+    /// without fabricating the used leg. `None` until some logged turn
+    /// carried a non-zero figure (never a 0 — 0 means "no data"). Additive +
+    /// optional: indexes written before the field load as `None` and stay
+    /// valid (the next incremental update / rebuild refreshes it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_context_used_tokens: Option<u64>,
     /// First `user/message` body (seq + content prefix), for the
     /// first-user preview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,6 +222,7 @@ pub struct SessionIndexAccumulator {
     total_input_tokens: u64,
     total_output_tokens: u64,
     max_context_tokens: Option<u64>,
+    peak_context_used_tokens: Option<u64>,
     first_user_message: Option<IndexedUserText>,
     last_user_message: Option<IndexedUserText>,
     first_tool_result_seq: Option<u64>,
@@ -235,6 +246,7 @@ impl SessionIndexAccumulator {
             total_input_tokens: 0,
             total_output_tokens: 0,
             max_context_tokens: None,
+            peak_context_used_tokens: None,
             first_user_message: None,
             last_user_message: None,
             first_tool_result_seq: None,
@@ -255,6 +267,7 @@ impl SessionIndexAccumulator {
             total_input_tokens: previous.total_input_tokens,
             total_output_tokens: previous.total_output_tokens,
             max_context_tokens: previous.max_context_tokens,
+            peak_context_used_tokens: previous.peak_context_used_tokens,
             first_user_message: previous.first_user_message.clone(),
             last_user_message: previous.last_user_message.clone(),
             first_tool_result_seq: previous.first_tool_result_seq,
@@ -303,6 +316,20 @@ impl SessionIndexAccumulator {
                             (Some(a), None) | (None, Some(a)) => Some(a),
                             (None, None) => None,
                         };
+                    // 峰值已用 (T2): running max of the per-turn context
+                    // footprint, input + cache_read + output — the frontend
+                    // occupancy 口径. Monotonic max; a zero-footprint turn
+                    // records nothing (0 = "no data", never published).
+                    let used = usage
+                        .input_tokens
+                        .saturating_add(usage.cache_read_tokens)
+                        .saturating_add(usage.output_tokens);
+                    if used > 0 {
+                        self.peak_context_used_tokens = Some(
+                            self.peak_context_used_tokens
+                                .map_or(used, |peak| peak.max(used)),
+                        );
+                    }
                 }
             }
             SessionEventBody::UserMessage(p) => {
@@ -353,6 +380,7 @@ impl SessionIndexAccumulator {
             total_input_tokens: self.total_input_tokens,
             total_output_tokens: self.total_output_tokens,
             max_context_tokens: self.max_context_tokens,
+            peak_context_used_tokens: self.peak_context_used_tokens,
             first_user_message: self.first_user_message,
             last_user_message: self.last_user_message,
             first_tool_result_seq: self.first_tool_result_seq,
@@ -494,6 +522,10 @@ mod tests {
         assert_eq!(index.total_input_tokens, proj.total_input_tokens);
         assert_eq!(index.total_output_tokens, proj.total_output_tokens);
         assert_eq!(index.max_context_tokens, proj.max_context_tokens);
+        assert_eq!(
+            index.peak_context_used_tokens, proj.peak_context_used_tokens,
+            "峰值已用 must answer identically on both paths"
+        );
 
         // Replicate session_store::preview() over the projected messages and
         // compare with the index's preview answers.
@@ -697,6 +729,120 @@ mod tests {
         // The rebuild path's projection fold answers identically.
         let proj = super::super::projections::project_conversation(&events);
         assert_eq!(proj.max_context_tokens, Some(200_000));
+    }
+
+    /// T2: a `turn/end` whose usage carries the full token quadruple plus
+    /// the window — the realistic shape for the 峰值已用 fold.
+    fn turn_end_full(
+        seq: u64,
+        input: u64,
+        cache_read: u64,
+        output: u64,
+        window: Option<u64>,
+    ) -> SessionEvent {
+        event(
+            seq,
+            SessionEventBody::TurnEnd(TurnEndPayload {
+                llm_steps: None,
+                reason: TurnEndPayload::REASON_COMPLETED.into(),
+                usage: Some(TokenUsage {
+                    input_tokens: input,
+                    output_tokens: output,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: cache_read,
+                    cost_usd: None,
+                    context_window_tokens: window,
+                }),
+                error: None,
+            }),
+        )
+    }
+
+    #[test]
+    fn accumulator_tracks_peak_context_used_tokens() {
+        // 口径: input + cache_read + output, running MAX (monotonic; a
+        // smaller later turn must not pull the peak down).
+        let events = vec![
+            turn_end_full(0, 1_000, 4_000, 500, Some(200_000)), // used 5_500
+            turn_end_full(1, 800, 3_000, 200, Some(128_000)),   // used 4_000
+            turn_end_full(2, 2_000, 90_000, 4_000, None),       // used 96_000
+        ];
+        let mut acc = SessionIndexAccumulator::fresh();
+        for e in &events {
+            acc.observe(e);
+        }
+        let index = acc.finish(Some((1, 2))).unwrap();
+        assert_eq!(index.peak_context_used_tokens, Some(96_000));
+        // The window peak folds independently of the used peak.
+        assert_eq!(index.max_context_tokens, Some(200_000));
+
+        // Seeding carries the used peak forward; a much smaller later turn
+        // pulls the max down not one token.
+        let mut acc2 = SessionIndexAccumulator::from_index(&index);
+        acc2.observe(&turn_end(3, 1, 1));
+        let index2 = acc2.finish(Some((3, 4))).unwrap();
+        assert_eq!(index2.peak_context_used_tokens, Some(96_000));
+
+        // The rebuild path's projection fold answers identically.
+        let proj = super::super::projections::project_conversation(&events);
+        assert_eq!(proj.peak_context_used_tokens, Some(96_000));
+    }
+
+    #[test]
+    fn peak_context_used_never_records_zero_or_usageless_turns() {
+        // All-zero usage and window-less turn ends alike keep the peak
+        // `None` — 0 is "no data", never a published peak.
+        let events = vec![turn_end(0, 0, 0), turn_end(1, 0, 0)];
+        let mut acc = SessionIndexAccumulator::fresh();
+        for e in &events {
+            acc.observe(e);
+        }
+        let index = acc.finish(Some((1, 2))).unwrap();
+        assert_eq!(index.peak_context_used_tokens, None);
+
+        // A zero turn must not erase an established peak either.
+        let mut seeded = SessionIndexAccumulator::from_index(&index);
+        seeded.observe(&turn_end_full(2, 100, 50, 25, None));
+        seeded.observe(&turn_end(3, 0, 0));
+        let index2 = seeded.finish(Some((4, 5))).unwrap();
+        assert_eq!(index2.peak_context_used_tokens, Some(175));
+    }
+
+    #[test]
+    fn old_index_schema_without_peak_used_loads_as_none() {
+        // Backward compatibility: an index.json written before the field
+        // existed deserializes with peak_context_used_tokens = None and is
+        // still a valid cache (no version drift — the field is additive).
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("events.jsonl");
+        std::fs::write(&log, b"x\n").unwrap();
+        let index_path = tmp.path().join("index.json");
+        let old = serde_json::json!({
+            "version": SESSION_INDEX_VERSION,
+            "log_len": 2,
+            "log_mtime_ns": stat_len_mtime(&log).unwrap().1,
+            "event_count": 1,
+            "created_at_ns": 1_000,
+            "updated_at_ns": 1_000,
+            "model": "",
+            "turn_count": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "first_user_message": { "seq": 0, "content": "hi" },
+            "last_user_message": { "seq": 0, "content": "hi" }
+        });
+        std::fs::write(&index_path, serde_json::to_string(&old).unwrap()).unwrap();
+        let loaded = SessionIndex::load_if_valid(&log, &index_path).expect("old index loads");
+        assert_eq!(loaded.max_context_tokens, None);
+        assert_eq!(loaded.peak_context_used_tokens, None);
+
+        // And the freshly written schema never emits the key when None
+        // (skip_serializing_if keeps old readers byte-compatible).
+        let mut acc = SessionIndexAccumulator::fresh();
+        acc.observe(&user_msg(0, "hi"));
+        let fresh = acc.finish(Some((1, 2))).unwrap();
+        let json = serde_json::to_value(&fresh).unwrap();
+        assert!(json.get("peak_context_used_tokens").is_none());
     }
 
     #[test]

@@ -278,6 +278,15 @@ pub struct SessionInfo {
     /// + `skip_serializing_if` keep the wire shape unchanged when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
+    /// 峰值已用 (R3 §4.1 T2): the session's peak context USED tokens — the
+    /// L0 session-index running max of `input + cache_read + output` per
+    /// `turn/end`, joined at list time. The real numerator for
+    /// 「峰值 X / 预算 Y（Z%）」. `None` when no logged turn carried a
+    /// non-zero usage figure — the UI keeps its absolute/hidden peak forms
+    /// (honesty rule). `serde(default)` + `skip_serializing_if` keep the
+    /// wire shape unchanged when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_context_used_tokens: Option<u64>,
 }
 
 /// Session loaded event with messages.
@@ -703,6 +712,7 @@ mod tests {
             updated_at: None,
             pinned: false,
             max_context_tokens: None,
+            peak_context_used_tokens: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(!json.contains("working_dir"));
@@ -713,6 +723,7 @@ mod tests {
         assert!(!json.contains("running"));
         assert!(!json.contains("updated_at"));
         assert!(!json.contains("max_context_tokens"));
+        assert!(!json.contains("peak_context_used_tokens"));
         // Older payloads without the optional fields still parse; the T7 pin
         // flag serde-defaults to unpinned.
         let legacy: SessionInfo =
@@ -721,6 +732,7 @@ mod tests {
         assert_eq!(legacy.id, "s1");
         assert_eq!(legacy.running, None);
         assert_eq!(legacy.updated_at, None);
+        assert_eq!(legacy.peak_context_used_tokens, None);
         assert!(!legacy.pinned);
     }
 

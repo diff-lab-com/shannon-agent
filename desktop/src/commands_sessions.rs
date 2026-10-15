@@ -232,6 +232,7 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
         updated_at: session_log_mtime(state, &s.id),
         pinned,
         max_context_tokens: session_context_peak(state, &s.id),
+        peak_context_used_tokens: session_context_peak_used(state, &s.id),
     }
 }
 
@@ -243,6 +244,23 @@ async fn session_wire_info(state: &AppState, s: &SessionMeta) -> events::Session
 /// hides the percentage — honesty rule) or the index is missing/stale (the
 /// next `SessionStore::list` pass rebuilds it).
 fn session_context_peak(state: &AppState, id: &str) -> Option<u64> {
+    session_index_for(state, id).and_then(|index| index.max_context_tokens)
+}
+
+/// 峰值已用 (R3 §4.1 T2): the L0 session index's running max over logged
+/// turns of `input + cache_read + output` — the real numerator for the
+/// 「峰值 X / 预算 Y（Z%）」 form. Same per-row `index.json` read and same
+/// `None` honesty rule as [`session_context_peak`]: no logged usage (or a
+/// missing/stale index) stays `None`, never a fabricated 0.
+fn session_context_peak_used(state: &AppState, id: &str) -> Option<u64> {
+    session_index_for(state, id).and_then(|index| index.peak_context_used_tokens)
+}
+
+/// The session's L0 index sidecar, when present and still a faithful cache.
+fn session_index_for(
+    state: &AppState,
+    id: &str,
+) -> Option<shannon_core::session_log::SessionIndex> {
     let uuid = uuid::Uuid::parse_str(id).ok()?;
     let events_path = state
         .l0_store()
@@ -251,7 +269,6 @@ fn session_context_peak(state: &AppState, id: &str) -> Option<u64> {
         .join("events.jsonl");
     let index_path = shannon_core::session_log::session_index::index_path_for(&events_path);
     shannon_core::session_log::SessionIndex::load_if_valid(&events_path, &index_path)
-        .and_then(|index| index.max_context_tokens)
 }
 
 /// Last-activity epoch ms for a session, taken from its L0 log's mtime.
@@ -2105,6 +2122,7 @@ pub async fn duplicate_session(
         // A fresh duplicate starts unpinned — the pin belongs to the
         // original conversation, not its copy.
         max_context_tokens: None,
+        peak_context_used_tokens: None,
         pinned: false,
     })
 }
@@ -2196,6 +2214,7 @@ pub(crate) async fn branch_session_internal(
         // Same contract as duplicate: a brand-new branch starts unpinned.
         pinned: false,
         max_context_tokens: None,
+        peak_context_used_tokens: None,
     })
 }
 

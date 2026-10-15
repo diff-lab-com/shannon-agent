@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import WelcomeState from '@/components/WelcomeState'
-import { MessageBubble, type RegeneratePayload, type TurnCostWindow } from '@/components/chat/MessageBubble'
+import { MessageBubble, type RegeneratePayload, type TurnCostWindow, type TurnReasoningWindow } from '@/components/chat/MessageBubble'
 import RunCompletionChips from '@/components/chat/RunCompletionChips'
 import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useChat } from '@/context/ChatContext'
@@ -156,15 +156,22 @@ export function StreamNoticeLine({ notice }: { notice: StreamNotice }) {
  * (session_log/writer.rs), so after truncating the L0 log a resent turn gets
  * a number above the pre-rewind count — index-based attribution would show
  * another turn's spend; timestamps cannot lie across a rewind.
+ *
+ * T1 (R3 §4.1 Reasoning 时长): the same read also projects each turn's
+ * TimelineTurn.reasoning_duration_ms (the backend fold of the turn's
+ * thinking-chunk ts span) into TurnReasoningWindows — same window shape,
+ * same honesty rule (no thinking events → no window).
  */
 interface TraceTimelineMeta {
   durationLookup: Map<string, number>
   costWindows: TurnCostWindow[]
+  reasoningWindows: TurnReasoningWindow[]
 }
 
 function useTraceTimelineLookup(sessionId: string | null, isQuerying: boolean): TraceTimelineMeta {
   const [durationLookup, setDurationLookup] = useState<Map<string, number>>(() => new Map())
   const [costWindows, setCostWindows] = useState<TurnCostWindow[]>(() => [])
+  const [reasoningWindows, setReasoningWindows] = useState<TurnReasoningWindow[]>(() => [])
   // One tick per settle transition (not per render) feeds the fetch effect.
   const [settleTick, setSettleTick] = useState(0)
   const wasQueryingRef = useRef(isQuerying)
@@ -176,6 +183,7 @@ function useTraceTimelineLookup(sessionId: string | null, isQuerying: boolean): 
     if (!sessionId) {
       setDurationLookup(new Map())
       setCostWindows([])
+      setReasoningWindows([])
       return
     }
     let cancelled = false
@@ -184,6 +192,7 @@ function useTraceTimelineLookup(sessionId: string | null, isQuerying: boolean): 
         if (cancelled) return
         const durations = new Map<string, number>()
         const windows: TurnCostWindow[] = []
+        const reasoning: TurnReasoningWindow[] = []
         for (const turn of tl.turns) {
           for (const tool of turn.tools) {
             if (tool.duration_ms != null) durations.set(tool.tool_use_id, tool.duration_ms)
@@ -195,14 +204,22 @@ function useTraceTimelineLookup(sessionId: string | null, isQuerying: boolean): 
               costUsd: turn.cost_usd,
             })
           }
+          if (typeof turn.reasoning_duration_ms === 'number' && Number.isFinite(turn.reasoning_duration_ms) && turn.reasoning_duration_ms > 0) {
+            reasoning.push({
+              startMs: turn.start_ts_ns / 1e6,
+              endMs: turn.end_ts_ns / 1e6,
+              reasoningMs: turn.reasoning_duration_ms,
+            })
+          }
         }
         setDurationLookup(durations)
         setCostWindows(windows)
+        setReasoningWindows(reasoning)
       })
       .catch(() => { /* durations and costs are opportunistic */ })
     return () => { cancelled = true }
   }, [sessionId, settleTick])
-  return { durationLookup, costWindows }
+  return { durationLookup, costWindows, reasoningWindows }
 }
 
 interface MessageAreaProps {
@@ -275,7 +292,7 @@ export default function MessageArea({
 }: MessageAreaProps) {
   const { messages, streamingText, thinkingText, activeToolCalls, toolProgress, streamNotices, checkpoints, rewindSession, isQuerying } = useChat()
   const { currentSessionId, sessionActivity, switchingSession } = useSessions()
-  const { durationLookup, costWindows } = useTraceTimelineLookup(currentSessionId, isQuerying)
+  const { durationLookup, costWindows, reasoningWindows } = useTraceTimelineLookup(currentSessionId, isQuerying)
   const checkpointTurns = useMemo(() => checkpoints.map(c => c.turn_index), [checkpoints])
   const rewind = useMemo(() => {
     return (msgIndex: number) => {
@@ -353,6 +370,7 @@ export default function MessageArea({
     onRewind: rewindSession,
     durationLookup,
     costWindows,
+    reasoningWindows,
     onEditMessage,
     searchFlash: searchFlashIndex === index,
     regenerate: index === lastAssistantIndex ? regenerateInfo : undefined,

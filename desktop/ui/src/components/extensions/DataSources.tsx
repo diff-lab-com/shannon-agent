@@ -266,8 +266,10 @@ export default function DataSources() {
           onClick={() => setActiveTab('adapters')}
           className={cn(
             "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
+            // W4 视觉收敛 (design 07 .tab.on::after): aurora gradient
+            // underline instead of the four-side border-primary box.
             activeTab === 'adapters'
-              ? 'text-primary border-primary hover:bg-transparent'
+              ? 'text-primary border-transparent hover:bg-transparent aurora-tab'
               : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
           )}
         >
@@ -280,7 +282,7 @@ export default function DataSources() {
           className={cn(
             "px-md py-sm rounded-none font-bold text-label-md transition-colors border-b-2 -mb-px",
             activeTab === 'query'
-              ? 'text-primary border-primary hover:bg-transparent'
+              ? 'text-primary border-transparent hover:bg-transparent aurora-tab'
               : 'text-on-surface-variant hover:text-on-surface border-transparent hover:bg-transparent',
           )}
         >

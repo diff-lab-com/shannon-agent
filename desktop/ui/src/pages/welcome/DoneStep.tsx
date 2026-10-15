@@ -61,6 +61,7 @@ export function DoneStep({
   }))
   return (
     <WelcomeCard
+      aurora // design 01b: the done-card is an aurora surface
       title={intl.formatMessage({ id: 'welcome.done.title' })}
       subtitle={intl.formatMessage({ id: 'welcome.done.subtitle' })}
       footer={

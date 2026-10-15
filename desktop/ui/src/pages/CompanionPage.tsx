@@ -132,7 +132,11 @@ export default function CompanionPage() {
   }
 
   return (
-    <div className="flex h-screen min-h-0 flex-col" data-testid="companion-page">
+    // W4 视觉收敛 (design 13 `.companion-win glass-2 aurora-line`): the page
+    // IS the companion window's content, so the window's aurora top edge
+    // rides on the page root — at the true 356px window size it reads exactly
+    // as the mockup's frame light.
+    <div className="aurora-line flex h-screen min-h-0 flex-col" data-testid="companion-page">
       <div className="flex items-center justify-between gap-2 border-b border-outline-variant/40 px-3 py-2">
         <h1 className="text-body-md font-medium">{t('companion.title')}</h1>
         <label className="flex cursor-pointer items-center gap-1.5 text-label-sm text-on-surface-variant">

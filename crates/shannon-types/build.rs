@@ -366,6 +366,12 @@ pub struct SessionInfo {
     /// `None` when unknown. Additive — must mirror src/events.rs exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
+    /// 峰值已用 (R3 §4.1 T2): the session's peak context USED tokens
+    /// (running max of `input + cache_read + output` per `turn/end`);
+    /// `None` when no logged turn carried one. Additive — must mirror
+    /// src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_context_used_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
