@@ -419,23 +419,48 @@ export default function Usage() {
     return intl.formatMessage({ id: 'usage.stat.vsYesterday' }, { pct: signed })
   }, [todayCostUsd, yesterdayCostUsd, intl])
 
-  // 设计 06 KPI 四卡之四 (M4): context peak — the largest context-window
-  // peak across the session index (SessionInfo.max_context_tokens, the same
-  // L0 joined field the sidebar rail's 峰值 chip shows). The usage ledger
-  // has no per-day window series, so the card reports the session-index
-  // maximum with the session that holds it as the hint; "—" when no session
-  // ever logged a window (honesty contract).
+  // 设计 06 KPI 四卡之四 (M4): context peak. T2 (R3 §4.1 峰值已用): once ANY
+  // session reports the real used numerator (SessionInfo
+  // .peak_context_used_tokens), the card shows the PEAK USED with the
+  // 「（Z%）」 occupancy against that session's window in the hint — the same
+  // 口径 as SessionUsageDialog's 峰值 row; sessions without the field simply
+  // don't compete (no mixed 口径). When NO session has one (old indexes), the
+  // card keeps its original window-peak reading with the holding session as
+  // the hint; "—" when neither exists anywhere (honesty contract).
   const { sessions } = useSessions()
   const contextPeak = useMemo(() => {
-    let best: { tokens: number; title: string } | null = null
+    let usedBest: { tokens: number; window: number | null; title: string } | null = null
+    let windowBest: { tokens: number; title: string } | null = null
     for (const s of sessions ?? []) {
+      const u = s.peak_context_used_tokens
+      if (u != null && u > 0 && (usedBest == null || u > usedBest.tokens)) {
+        usedBest = { tokens: u, window: s.max_context_tokens ?? null, title: s.title }
+      }
       const p = s.max_context_tokens
-      if (p != null && p > 0 && (best == null || p > best.tokens)) {
-        best = { tokens: p, title: s.title }
+      if (p != null && p > 0 && (windowBest == null || p > windowBest.tokens)) {
+        windowBest = { tokens: p, title: s.title }
       }
     }
-    return best
+    if (usedBest != null) return usedBest
+    return windowBest != null ? { ...windowBest, window: null } : null
   }, [sessions])
+
+  // The hint: session title, plus the （Z%） occupancy when the winning
+  // session's window budget is known (the brief's 峰值 X / 预算 Y（Z%） form
+  // — X rides as the card's value). Plain derivation (no hook — the page's
+  // `t` is a per-render closure): intl.formatMessage carries the VALUES,
+  // the page-local `t` helper is a values-less one-liner.
+  const contextPeakHint = contextPeak == null
+    ? t('usage.stat.contextPeak.none')
+    : contextPeak.window != null && contextPeak.window > 0
+      ? intl.formatMessage(
+          { id: 'usage.stat.contextPeak.pct' },
+          {
+            title: contextPeak.title,
+            pct: Math.min(100, Math.round((contextPeak.tokens / contextPeak.window) * 100)),
+          },
+        )
+      : contextPeak.title
 
   // 设计 06 KPI: cache hit rate — the same frozen formula the chat context
   // card uses (cache_read / (cache_read + input)); no denominator → null,
@@ -723,7 +748,7 @@ export default function Usage() {
               icon="target"
               label={t('usage.stat.contextPeak')}
               value={contextPeak != null ? fmtTokens(intl.locale, contextPeak.tokens) : '—'}
-              hint={contextPeak != null ? contextPeak.title : t('usage.stat.contextPeak.none')}
+              hint={contextPeakHint}
               data-testid="usage-stat-context-peak"
             />
           </div>

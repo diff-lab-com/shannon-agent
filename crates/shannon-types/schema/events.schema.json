@@ -483,6 +483,15 @@
           "null"
         ]
       },
+      "peak_context_used_tokens": {
+        "description": "峰值已用 (R3 §4.1 T2): the session's peak context USED tokens (running max of `input + cache_read + output` per `turn/end`); `None` when no logged turn carried one. Additive — must mirror src/events.rs exactly.",
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
       "pinned": {
         "default": false,
         "description": "Settings R3 T7 mirror — must mirror src/events.rs exactly.",

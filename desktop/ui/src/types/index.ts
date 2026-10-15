@@ -307,6 +307,12 @@ export interface SessionInfo {
    *  show the window a reopened session peaked at. Absent when no logged
    *  turn knew its window — the UI hides the chip (honesty contract). */
   max_context_tokens?: number
+  /** 峰值已用 (R3 §4.1 T2): the session's peak context USED tokens — the
+   *  L0 session-index running max of `input + cache_read + output` per
+   *  `turn/end`. The real numerator for the 「峰值 X / 预算 Y（Z%）」 form.
+   *  Absent when no logged turn carried a non-zero figure — the UI keeps
+   *  its absolute/hidden peak forms (honesty contract: never a 0). */
+  peak_context_used_tokens?: number
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -2137,6 +2143,11 @@ export interface TimelineTurn {
   cache_creation_tokens: number
   cache_read_tokens: number
   cost_usd?: number | null
+  /** Reasoning 时长 (R3 §4.1 T1): the span of this turn's thinking-flagged
+   *  `assistant/chunk` events, last ts − first ts in ms (rounded). Absent
+   *  when the turn logged no thinking events — the bubble then keeps the
+   *  duration-less 「已思考」 header (never an invented duration). */
+  reasoning_duration_ms?: number | null
   tools: TimelineToolEntry[]
 }
 

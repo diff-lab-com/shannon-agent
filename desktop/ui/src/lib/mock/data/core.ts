@@ -366,7 +366,10 @@ export const MOCK_SESSIONS: SessionInfo[] = [
   // in handlers.ts ('/home/demo/workspace/{shannon,website}') so the rail
   // tree and the /tasks,/triage?project= deep links resolve end-to-end;
   // some sessions stay unhoused (no dir) on purpose.
-  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14, updated_at: now - 30 * 60_000, working_dir: '/home/demo/workspace/shannon' },
+  // T2 (R3 §4.1 峰值已用): sess-001 carries BOTH the peak-used numerator and
+  // the window so the dialog's 「峰值 X / 预算 Y（Z%）」 form is demoable;
+  // every other session stays without either (the absolute/hidden states).
+  { id: 'sess-001', title: 'Q3 roadmap brainstorm', created_at: now - 2 * 3600_000, message_count: 14, updated_at: now - 30 * 60_000, working_dir: '/home/demo/workspace/shannon', max_context_tokens: 200_000, peak_context_used_tokens: 96_000 },
   { id: 'sess-002', title: 'Fix billing webhook timeout', created_at: now - 5 * 3600_000, message_count: 28, updated_at: now - 60_000, running: true, working_dir: '/home/demo/workspace/shannon' },
   { id: 'sess-003', title: 'Pricing page copy review', created_at: now - dayMs, message_count: 9, updated_at: now - dayMs + 3600_000, working_dir: '/home/demo/workspace/website' },
   { id: 'sess-004', title: 'Customer feedback synthesis', created_at: now - 2 * dayMs, message_count: 22, updated_at: now - 2 * dayMs + 2 * 3600_000 },
@@ -626,7 +629,13 @@ export const MOCK_BACKGROUND_TASKS: BackgroundTaskInfo[] = [
 // §4.14 — Turn Timeline demo fixture (trace_timeline). Deterministic ~5.5
 // minute span, two turns; turn 1 carries a failed Bash call and turn 2 an
 // interrupted Grep call — the shapes the panel (and e2e) must render.
-const tlStart = now - 6 * minMs
+// T1 (R3 §4.1 Reasoning 时长): turn 1 is anchored on the seeded roadmap
+// turn (its prompt sits at now − 30min in the mock conversation) and carries
+// a real reasoning_duration_ms, so the committed thinking block's
+// 「已思考 N 秒」 header is demoable; turn 2 deliberately carries none (the
+// honest absent state). Same window alignment also lights the msg-meta cost
+// segments for the seeded conversation.
+const tlStart = now - 30 * minMs
 const tlMin = minMs
 export const MOCK_TURN_TIMELINE: TurnTimeline = {
   session_id: 'sess-001',
@@ -643,6 +652,9 @@ export const MOCK_TURN_TIMELINE: TurnTimeline = {
       output_tokens: 1240,
       cache_creation_tokens: 1200,
       cache_read_tokens: 3600,
+      // T1 (R3 §4.1): ONE seeded turn reasons for 42s — the lit 「已思考
+      // 42 秒」 demo state; turn 2 stays absent on purpose.
+      reasoning_duration_ms: 42_000,
       cost_usd: 0.0214,
       tools: [
         {

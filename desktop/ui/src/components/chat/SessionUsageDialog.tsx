@@ -54,13 +54,28 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
 
   // 设计稿 02c S3 (W8): the window-peak row reads SessionInfo
   // .max_context_tokens — the same L0 session-index peak the rail's chip
-  // shows. The contract has no separate per-window peak beyond this
-  // session-level one, so the row is labelled 「会话峰值」; hidden entirely
-  // when the backend reports nothing (数字缺席即隐藏, honesty contract).
-  const sessionPeak = currentSessionId != null
-    ? sessions?.find(s => s.id === currentSessionId)?.max_context_tokens ?? null
+  // shows. Hidden entirely when the backend reports nothing (数字缺席即隐藏,
+  // honesty contract).
+  // T2 (R3 §4.1 峰值已用): when the session index ALSO carries the real
+  // used numerator (peak_context_used_tokens, the running max of
+  // input + cache_read + output per turn), the row renders the % form
+  // 「峰值 X / 预算 Y（Z%）」; with only the window it keeps the absolute
+  // form; with neither it hides. A used figure without a window budget can
+  // never fabricate a percentage — it degrades to the hidden row too.
+  const currentSession = currentSessionId != null
+    ? sessions?.find(s => s.id === currentSessionId)
+    : undefined
+  const sessionPeak = currentSession?.max_context_tokens ?? null
+  const peakUsed = currentSession?.peak_context_used_tokens ?? null
+  const peakLabel = sessionPeak != null && sessionPeak > 0
+    ? (peakUsed != null && peakUsed > 0
+        ? t('chat.input.usage.sessionPeak.pct', {
+            used: fmtCompactTokens(peakUsed, intl.locale),
+            budget: fmtCompactTokens(sessionPeak, intl.locale),
+            pct: Math.min(100, Math.round((peakUsed / sessionPeak) * 100)),
+          })
+        : fmtCompactTokens(sessionPeak, intl.locale))
     : null
-  const peakLabel = sessionPeak != null && sessionPeak > 0 ? fmtCompactTokens(sessionPeak, intl.locale) : null
 
   return (
     <>
@@ -78,7 +93,9 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
                   <div className="flex items-center justify-between gap-sm" data-testid="session-usage-peak">
                     <span
                       className="font-body-sm text-on-surface-variant truncate"
-                      title={t('sidebar.sessions.contextPeak.title', { tokens: peakLabel })}
+                      title={t('sidebar.sessions.contextPeak.title', {
+                        tokens: sessionPeak != null ? fmtCompactTokens(sessionPeak, intl.locale) : peakLabel,
+                      })}
                     >
                       {t('chat.input.usage.sessionPeak')}
                     </span>

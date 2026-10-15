@@ -74,6 +74,10 @@ interface MessageBubbleProps {
    *  as durationLookup (MessageArea derives both from one IPC). Absent in
    *  isolated renders — the cost segment then simply never renders. */
   costWindows?: TurnCostWindow[]
+  /** T1 (R3 §4.1 Reasoning 时长): per-turn reasoning spans from the same
+   *  trace-timeline read as costWindows. Absent in isolated renders — the
+   *  committed thinking header then keeps the duration-less 「已思考」. */
+  reasoningWindows?: TurnReasoningWindow[]
   /** B1 §4-7: present only on the LAST assistant message of the session —
    *  its presence is the regenerate button's visibility condition. */
   regenerate?: RegeneratePayload | null
@@ -116,6 +120,12 @@ export interface TurnMeta {
    *  null when no window overlaps this turn — the segment then does not
    *  render (absent/0 costs never produce a window upstream). */
   costUsd: number | null
+  /** T1 (R3 §4.1 Reasoning 时长): the turn's TimelineTurn
+   *  .reasoning_duration_ms, matched by the same timestamp-window overlap as
+   *  costUsd. Feeds the committed thinking block's 「已思考 N 秒」 header
+   *  (NOT this header's meta tail); null when no reasoning window overlaps —
+   *  the chip then keeps the duration-less 「已思考」 (honesty contract). */
+  reasoningMs: number | null
 }
 
 /**
@@ -151,6 +161,32 @@ export function matchTurnCost(windows: TurnCostWindow[] | undefined | null, firs
   return null
 }
 
+/**
+ * T1 (R3 §4.1 Reasoning 时长): one turn's projected reasoning span from the
+ * SAME trace-timeline read as TurnCostWindow — TimelineTurn
+ * .reasoning_duration_ms (first→last thinking-flagged `assistant/chunk` ts,
+ * backend-folded). Built ONLY for turns where the backend projected a value:
+ * a turn with no thinking events carries NO window, so the bubble's
+ * committed 「已思考」 header can never invent a duration (honesty contract).
+ */
+export interface TurnReasoningWindow {
+  startMs: number
+  endMs: number
+  reasoningMs: number
+}
+
+/**
+ * T1: the same overlap (not containment) match matchTurnCost uses — first
+ * window wins (timeline turns are sequential, non-overlapping).
+ */
+export function matchTurnReasoning(windows: TurnReasoningWindow[] | undefined | null, firstTs: number, lastTs: number): number | null {
+  if (!Array.isArray(windows)) return null
+  for (const w of windows) {
+    if (w.startMs <= lastTs && w.endMs >= firstTs) return w.reasoningMs
+  }
+  return null
+}
+
 /** Turn cost → the design's 「$0.087」 shape. Sub-cent and non-finite inputs
  *  yield null — OMITTED, never shown as $0.000 (honesty contract). Under a
  *  dollar the design's three decimals are kept (cents carry the signal at
@@ -176,18 +212,37 @@ export function turnCostValue(usd: number): string | null {
  * — 「已思考 N 秒」 from the reasoning block's own start/end timestamps.
  * DATA-SOURCE STATUS (2026-10-15): the L0 log DOES timestamp every thinking
  * delta (assistant/chunk events carry ts_ns + a thinking flag,
- * shannon-types/session_event.rs), but no wire field reaches this bubble —
- * ChatMessage.thinking is a bare string (types/index.ts:160) and the live
- * QUERY_THINKING payload carries query_id + content only (types/index.ts:41).
- * With no inputs the helper returns null and the header falls back to the
- * duration-less 「已思考」 (chat.streaming.thought) — never an invented 0.
- * When a projection field lands, wire it through here; the seconds math
- * mirrors turnDurationValue's sub-granularity omission.
+ * shannon-types/session_event.rs), but no per-block wire field reaches this
+ * bubble — ChatMessage.thinking is a bare string (types/index.ts:160) and
+ * the live QUERY_THINKING payload carries query_id + content only
+ * (types/index.ts:41). With no inputs the helper returns null and the header
+ * falls back to the duration-less 「已思考」 (chat.streaming.thought) — never
+ * an invented 0.
+ *
+ * T1 (same day): the TURN-LEVEL projection DID land —
+ * TimelineTurn.reasoning_duration_ms (the backend fold of the turn's
+ * thinking-chunk ts span) rides the trace-timeline IPC as TurnReasoningWindows.
+ * reasoningDurationFromMs consumes it below; this helper stays for a future
+ * per-block field (the seconds math is shared).
  */
 export function reasoningDurationValue(startMs?: number | null, endMs?: number | null): { seconds: number } | null {
   if (startMs == null || endMs == null) return null
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null
   const sec = Math.round((endMs - startMs) / 1000)
+  if (sec < 1) return null
+  return { seconds: sec }
+}
+
+/**
+ * T1 (R3 §4.1): the landed projection field's consumer — a turn's
+ * reasoning_duration_ms → 「已思考 N 秒」. Same displayed-granularity
+ * discipline as reasoningDurationValue: absent/invalid/non-positive ms and
+ * sub-second spans (rounding below 1s) yield null — the header falls back
+ * to the duration-less 「已思考」, never shows a 0.
+ */
+export function reasoningDurationFromMs(ms?: number | null): { seconds: number } | null {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return null
+  const sec = Math.round(ms / 1000)
   if (sec < 1) return null
   return { seconds: sec }
 }
@@ -445,7 +500,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, costWindows, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, costWindows, reasoningWindows, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -608,9 +663,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     const costUsd = firstTs != null
       ? matchTurnCost(costWindows, firstTs, Math.max(lastTs, firstTs))
       : null
-    if (toolCount === 0 && durationMs == null && costUsd == null) return null
-    return { toolCount, durationMs, costUsd }
-  }, [isUser, message, messageIndex, listMessages, costWindows])
+    // T1 (R3 §4.1 Reasoning 时长): the SAME window match as the cost leg,
+    // against reasoningWindows from the same timeline read. Feeds the
+    // committed thinking block's header, not this header's meta tail — the
+    // field rides on TurnMeta purely so both derivations share one span scan.
+    const reasoningMs = firstTs != null
+      ? matchTurnReasoning(reasoningWindows, firstTs, Math.max(lastTs, firstTs))
+      : null
+    if (toolCount === 0 && durationMs == null && costUsd == null && reasoningMs == null) return null
+    return { toolCount, durationMs, costUsd, reasoningMs }
+  }, [isUser, message, messageIndex, listMessages, costWindows, reasoningWindows])
 
   if (isUser) {
     return (
@@ -726,11 +788,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   // R3 §4 遗留项 (Reasoning 头分态): a COMMITTED block belongs to a settled
   // turn, so the live 「思考中…」 label (chat.streaming.thinking —
   // StreamingResponse only) would lie here. Completed header: 「已思考 N 秒」
-  // when the block's timestamps are derivable, 「已思考」 otherwise (never an
-  // invented duration). The derivation has NO inputs on today's wire (see
-  // reasoningDurationValue) — the call below states that absence explicitly;
-  // when a projection field lands, thread it through instead of removing it.
-  const reasoningDur = reasoningDurationValue()
+  // when the turn's reasoning duration is derivable, 「已思考」 otherwise
+  // (never an invented duration).
+  // T1 (2026-10-15): the turn-level projection DID land —
+  // TimelineTurn.reasoning_duration_ms rides the trace-timeline IPC into
+  // turnMeta.reasoningMs (timestamp-window match, the same one as the cost
+  // leg); reasoningDurationFromMs refuses absent/sub-second values so the
+  // header shows the duration ONLY when the backend projected one.
+  const reasoningDur = reasoningDurationFromMs(turnMeta?.reasoningMs) ?? reasoningDurationValue()
   const reasoningHeader = reasoningDur != null
     ? intl.formatMessage({ id: 'chat.streaming.thoughtSeconds' }, { seconds: reasoningDur.seconds })
     : intl.formatMessage({ id: 'chat.streaming.thought' })
