@@ -1087,6 +1087,10 @@ export interface SessionUsageSummary {
   cost_usd: number
   /** Ledger events seen for this session (0 may mean a pre-attribution log). */
   events: number
+  /** G3 (2026-10-15 parity review §2.3-4): events whose rate was unknown —
+   *  they add nothing to cost_usd, so a nonzero count marks the total a
+   *  lower bound. Optional for tolerance of pre-G3 backends; absent = 0. */
+  unknown_rate_events?: number
 }
 
 export async function getSessionUsage(sessionId: string): Promise<SessionUsageSummary> {

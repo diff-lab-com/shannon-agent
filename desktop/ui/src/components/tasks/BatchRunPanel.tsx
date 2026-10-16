@@ -12,6 +12,7 @@ import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import { cn } from '@/lib/utils'
 import { useBatchRuns } from '@/hooks/batchRuns'
 import type { BatchBranch, BatchRunDto, BatchRunStatus } from '@/types'
@@ -172,11 +173,19 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
       </ul>
 
       <div className="mt-sm flex items-center justify-between gap-md">
-        <span className="font-label-sm text-on-surface-variant tabular-nums">
-          {t('batch.card.totalSpent', {
-            count: run.branches.length,
-            spent: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
-          })}
+        {/* G3 (2026-10-15 parity review §2.3): the live spend is a derived,
+            estimated figure (unknown rates fold nothing into it) — the
+            aggregate total carries the unified「估算」badge. Per-branch $
+            chips stay as-is: the badge there would repeat per branch and
+            drown the card. */}
+        <span className="font-label-sm text-on-surface-variant tabular-nums inline-flex items-center gap-xs min-w-0">
+          <span className="truncate">
+            {t('batch.card.totalSpent', {
+              count: run.branches.length,
+              spent: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
+            })}
+          </span>
+          <EstimatedBadge />
         </span>
         <div className="flex items-center gap-xs">
           {terminal && run.status !== 'discarded' && (

@@ -20,6 +20,7 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import { cn } from '@/lib/utils'
 import { useSessions } from '@/context/SessionContext'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
@@ -59,7 +60,10 @@ function fmtTokensFull(locale: string, n: number): string {
   return new Intl.NumberFormat(locale).format(n)
 }
 
-function fmtCost(locale: string, n: number): string {
+function fmtCost(locale: string, n: number | null | undefined): string {
+  // G3 honesty: a null cost (unknown rate) renders as「—」, never $0 —
+  // absent means unknown, not free.
+  if (n == null) return '—'
   return `$${new Intl.NumberFormat(locale, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
@@ -111,19 +115,22 @@ function buildUsageCsv(byDay: UsageBucket[], bySession: SessionUsageRow[]): stri
  *  numeric identity, so the value reads mono + tabular-nums. Page-local twin
  *  of ui/stat-card (shared with Memory/OPC, which stay sans) — same layout,
  *  mono value only. Keep testids on the outer card like StatCard's rest
- *  props did. */
+ *  props did. G3: `estimated` rides the label row with the unified
+ *  「估算」 badge — the $ cards are estimates by construction and say so. */
 function KpiCard({
   icon,
   label,
   value,
   hint,
   testid,
+  estimated = false,
 }: {
   icon: string
   label: string
   value: string
   hint?: string
   testid?: string
+  estimated?: boolean
 }) {
   return (
     <div
@@ -133,7 +140,10 @@ function KpiCard({
       <span className="material-symbols-outlined text-primary icon-lg">{icon}</span>
       <div className="min-w-0">
         <div className="font-headline-sm font-bold text-on-surface leading-none font-mono tabular-nums">{value}</div>
-        <div className="font-label-xs text-on-surface-variant mt-[2px]">{label}</div>
+        <div className="font-label-xs text-on-surface-variant mt-[2px] flex items-center gap-1">
+          <span className="truncate">{label}</span>
+          {estimated && <EstimatedBadge />}
+        </div>
       </div>
       {hint && (
         <span
@@ -255,9 +265,16 @@ function BucketDataTable({ labelTitle, buckets, locale, emptyLabel }: {
     },
     {
       accessorKey: 'cost_usd',
-      header: tB('usage.col.cost'),
+      // G3: the $ column is an estimate by construction — the header (not
+      // every cell) carries the unified「估算」badge; null cells read「—」.
+      header: () => (
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+          {tB('usage.col.cost')}
+          <EstimatedBadge />
+        </span>
+      ),
       cell: ({ getValue }) => (
-        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number | null)}</span>
       ),
     },
     { accessorKey: 'requests', header: tB('usage.col.reqs') },
@@ -305,9 +322,16 @@ function SessionTable({ rows, locale, emptyTitle, emptyLabel }: {
     },
     {
       accessorKey: 'costUsd',
-      header: t('usage.col.cost'),
+      // G3: same estimated-$ column treatment as the bucket tables — badge
+      // on the header,「—」for a null (unknown-rate) cell.
+      header: () => (
+        <span className="inline-flex items-center gap-1 whitespace-nowrap">
+          {t('usage.col.cost')}
+          <EstimatedBadge />
+        </span>
+      ),
       cell: ({ getValue }) => (
-        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number)}</span>
+        <span className="font-mono text-label-sm text-on-surface-variant">{fmtCost(locale, getValue() as number | null)}</span>
       ),
     },
     { accessorKey: 'requests', header: t('usage.col.reqs') },
@@ -740,16 +764,18 @@ export default function Usage() {
         </div>
       ) : (
         <div className="space-y-lg">
-          {/* Totals — 设计 06 KPI row: the four ledger totals plus the two
-              derived cards the design names (今日消耗 from the local-day
-              bucket, 缓存命中率 from the frozen cache formula) and the
-              fourth design card 上下文峰值 (M4, session-index maximum).
-              2×4 grid to match the design's four-across KPI band. */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
+          {/* Totals — G3 (2026-10-15 parity review §2.3-2): token metrics are
+              the primary 口径 and own the first row (Tokens / Cache /
+              Requests / Cache hit rate / Context peak); the two derived $
+              cards (estimated cost, today's spend) move to a second row,
+              each carrying the unified「估算」badge. 5-across token band,
+              then the money pair. */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-md">
             <KpiCard
               icon="token"
               label={t('usage.stat.tokens')}
               value={fmtTokens(intl.locale, stats!.totals.input_tokens + stats!.totals.output_tokens)}
+              testid="usage-stat-tokens"
             />
             <KpiCard
               icon="cached"
@@ -758,21 +784,9 @@ export default function Usage() {
               hint={t('usage.stat.cacheHint')}
             />
             <KpiCard
-              icon="payments"
-              label={t('usage.stat.cost')}
-              value={fmtCost(intl.locale, stats!.totals.cost_usd)}
-            />
-            <KpiCard
               icon="chat_bubble"
               label={t('usage.stat.requests')}
               value={String(stats!.totals.requests)}
-            />
-            <KpiCard
-              icon="today"
-              label={t('usage.stat.todayCost')}
-              value={fmtCost(intl.locale, todayCostUsd ?? 0)}
-              hint={vsYesterdayHint}
-              testid="usage-stat-today-cost"
             />
             <KpiCard
               icon="speed"
@@ -787,6 +801,23 @@ export default function Usage() {
               value={contextPeak != null ? fmtTokens(intl.locale, contextPeak.tokens) : '—'}
               hint={contextPeakHint}
               testid="usage-stat-context-peak"
+            />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-md">
+            <KpiCard
+              icon="payments"
+              label={t('usage.stat.cost')}
+              value={fmtCost(intl.locale, stats!.totals.cost_usd)}
+              estimated
+              testid="usage-stat-estimated-cost"
+            />
+            <KpiCard
+              icon="today"
+              label={t('usage.stat.todayCost')}
+              value={fmtCost(intl.locale, todayCostUsd ?? 0)}
+              hint={vsYesterdayHint}
+              estimated
+              testid="usage-stat-today-cost"
             />
           </div>
 
@@ -910,6 +941,22 @@ export default function Usage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* G3 honesty footnote (2026-10-15 parity review §2.3-4): records whose
+          model rate was unknown are excluded from every $ figure on this
+          page — the count makes that gap visible instead of letting the
+          sums read as complete. One page-level note, both modes. */}
+      {(stats?.unknown_rate_records ?? 0) > 0 && (
+        <p
+          data-testid="usage-unknown-rate-note"
+          className="font-label-sm text-label-sm text-on-surface-variant/70 text-center mt-md"
+        >
+          {intl.formatMessage(
+            { id: 'usage.unknownRate.note' },
+            { count: stats!.unknown_rate_records! },
+          )}
+        </p>
       )}
     </div>
   )

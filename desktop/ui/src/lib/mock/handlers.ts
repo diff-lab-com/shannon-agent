@@ -1706,7 +1706,7 @@ export const handlers: Record<string, MockHandler> = {
     // arrives via budget:* events, not history. Unknown/unarmed → demo data.
     const seeded = seededUsage(args?.sessionId)
     if (seeded) return seeded
-    return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6 }
+    return { input_tokens: 12400, output_tokens: 3150, cache_creation_tokens: 0, cache_read_tokens: 9800, cost_usd: 0.0731, events: 6, unknown_rate_events: 0 }
   },
   // P0-4 cost observability: demo budget (mutable so the banner flow is
   // explorable), a fixed six-category breakdown and two attributed
@@ -2233,6 +2233,7 @@ export const handlers: Record<string, MockHandler> = {
         { ...totals, label: 'anthropic', requests: totals.requests - Math.round(totals.requests * 0.22) },
       ],
       by_day: byDay,
+      unknown_rate_records: 0,
     }
   },
   // --- Usage governance (P2-1 — sidebar % bar + budget card, demo at 62%) ---

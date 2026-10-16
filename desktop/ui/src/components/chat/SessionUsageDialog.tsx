@@ -118,6 +118,18 @@ export default function SessionUsageDialog({ open, onClose, usageTick }: Session
                     {t('budget.menu.set')}
                   </Button>
                 </div>
+                {/* G3 (2026-10-15 parity review §2.3-4): events whose model
+                    rate was unknown add nothing to the spend figure — when any
+                    exist, say so instead of letting the total read complete.
+                    The USD cap row above stays the budget-control face. */}
+                {(sessionUsage?.unknown_rate_events ?? 0) > 0 && (
+                  <p
+                    data-testid="session-usage-unknown-rates"
+                    className="font-label-xs text-on-surface-variant/70"
+                  >
+                    {t('chat.input.usage.unknownRates')}
+                  </p>
+                )}
               </div>
             </>
           ) : (

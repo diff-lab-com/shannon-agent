@@ -1,8 +1,11 @@
-// S3-6 — pre-send cost estimate row: renders the backend's billing-grade
-// projection (tokens + ≈low–high range) after the 300 ms debounce, hides on
-// an empty composer / a failed call (advisory-only contract — never an error
-// toast, never a send gate), and links to the session budget at ≥80% with a
-// warning tint + share copy (BudgetBanner stays the single banner).
+// S3-6 / G3 — pre-send estimate row: renders the backend's projected input
+// tokens (「≈ N tokens」, the Chatbox-validated form) after the 300 ms
+// debounce, hides on an empty composer / a failed call (advisory-only
+// contract — never an error toast, never a send gate), and links to the
+// session budget at ≥80% with a warning tint + share copy (BudgetBanner
+// stays the single banner). The $ range is gone (2026-10-15 parity review
+// §2.3-2): token counts need no rate table and stay honest for
+// unknown-rate models.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import ChatInput, { ESTIMATE_DEBOUNCE_MS } from '@/components/chat/ChatInput'
@@ -107,7 +110,7 @@ describe('ChatInput pre-send cost estimate (S3-6)', () => {
     expect(estimateSendCost.fn).not.toHaveBeenCalled()
   })
 
-  it('renders tokens + the cost range after the debounce', async () => {
+  it('renders the token estimate after the debounce (no $ — G3 token-first)', async () => {
     const { rerender } = renderChatInput({ value: '' })
     rerender(<ChatInput value="hello world" onChange={vi.fn()} onSend={vi.fn()} onExecuteSlash={vi.fn()} attachedFiles={[]} onAttach={vi.fn()} onDetachAll={vi.fn()} isQuerying={false} onCancelQuery={vi.fn()} onOpenQuickFix={vi.fn()} onOpenEditor={vi.fn()} sessionId="sess-1" />)
     // Inside the debounce window: no call yet.
@@ -119,11 +122,23 @@ describe('ChatInput pre-send cost estimate (S3-6)', () => {
     await act(async () => {})
     expect(estimateSendCost.fn).toHaveBeenCalledTimes(1)
     expect(estimateSendCost.fn).toHaveBeenCalledWith('sess-1', 'hello world', [])
-    // Range copy: token count and both ends of the interval.
+    // Token-first 口径 (2026-10-15 parity review §2.3-2): the row shows the
+    // projected input token count — and NO dollar range anymore.
     const row = screen.getByTestId('send-cost-estimate')
     expect(row).toHaveTextContent(/1,234/)
-    expect(row).toHaveTextContent(/\$0\.0037/)
-    expect(row).toHaveTextContent(/\$0\.0649/)
+    expect(row.textContent).not.toMatch(/\$/)
+  })
+
+  it('renders the token estimate even when the model rate is unknown', async () => {
+    // Unknown pricing (costLow/costHigh null) used to hide the whole row;
+    // the G3 token form does not depend on a rate table, so it stays.
+    estimateSendCost.fn.mockResolvedValue({ ...BASE_ESTIMATE, costLow: null, costHigh: null })
+    renderChatInput({ value: 'hello' })
+    act(() => { vi.advanceTimersByTime(ESTIMATE_DEBOUNCE_MS) })
+    await act(async () => {})
+    const row = screen.getByTestId('send-cost-estimate')
+    expect(row).toHaveTextContent(/1,234/)
+    expect(row.textContent).not.toMatch(/\$/)
   })
 
   it('debounces rapid keystrokes into one call', async () => {

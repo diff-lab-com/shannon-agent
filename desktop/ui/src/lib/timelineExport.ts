@@ -81,7 +81,10 @@ export function timelineToHtml(timeline: TurnTimeline): string {
             )
             .join('\n')
         : '        <li class="tool tool-empty">no tool calls</li>'
-      const cost = tu.cost_usd != null ? ` · ${COST_FORMAT.format(tu.cost_usd)}` : ''
+      // G3 (2026-10-15 parity review §2.3): the exported $ stays (audit
+      // artifact) but reads as an estimate — same (est.) marker the live
+      // page's legend carries.
+      const cost = tu.cost_usd != null ? ` · ${COST_FORMAT.format(tu.cost_usd)} (est.)` : ''
       return [
         '    <section class="turn">',
         `      <h2>Turn ${tu.turn} <span class="reason" style="color:${badgeColor}">${escapeHtml(tu.reason ?? '')}</span></h2>`,

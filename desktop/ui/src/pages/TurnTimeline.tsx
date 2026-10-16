@@ -28,6 +28,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import ErrorState from '@/components/ui/error-state'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import { Icon } from '@/components/ui/icon'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
@@ -445,7 +446,10 @@ export default function TurnTimeline({ sessionId }: TurnTimelineProps) {
               })}
             />
             {totalCost != null && (
-              <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} />
+              // G3 (2026-10-15 parity review §2.3-2): the audit-area $ stays
+              // (timeline is a named retention surface) but carries the
+              // unified「估算」badge — tokens above are the primary 口径.
+              <SummaryChip icon="payments" label={COST_FORMAT.format(totalCost)} estimated />
             )}
             {/* R2 audit (10:176): 「预算 $X · 已用 Y%」 next to the cost KPI —
                 only when the session carries a spend cap; past 100% the chip
@@ -542,6 +546,7 @@ function SummaryChip({
   label,
   ariaLabel,
   error = false,
+  estimated = false,
   testId,
 }: {
   icon: string
@@ -550,6 +555,8 @@ function SummaryChip({
   ariaLabel?: string
   /** Semantic failure tone (e.g. over-budget KPI) — error text + border. */
   error?: boolean
+  /** G3: rides the unified「估算」badge — the label is an estimated figure. */
+  estimated?: boolean
   testId?: string
 }) {
   return (
@@ -564,6 +571,7 @@ function SummaryChip({
     >
       <Icon name={icon} size="xs" />
       {label}
+      {estimated && <EstimatedBadge />}
     </span>
   )
 }
@@ -671,9 +679,14 @@ function CumulativeCurve({
           <span aria-hidden="true" className="mx-xs">·</span>
           {t('timeline.curve.samples', { count: cumulative.length })}
           {showCost && (
+            // G3: the cumulative cost leg keeps its audit role but reads as
+            // an estimate — the legend entry carries the「估算」badge.
             <>
               <span aria-hidden="true" className="mx-xs">·</span>
-              {t('timeline.curve.cost', { cost: COST_FORMAT.format(costMax) })}
+              <span className="inline-flex items-center gap-1">
+                {t('timeline.curve.cost', { cost: COST_FORMAT.format(costMax) })}
+                <EstimatedBadge />
+              </span>
             </>
           )}
         </span>
@@ -755,10 +768,14 @@ function TurnCard({
           </span>
         </div>
         <div className="flex items-center gap-3 font-label-xs text-xs text-on-surface-variant pt-xs">
-          <span className="inline-flex items-center gap-xs">
+          {/* G3 (2026-10-15 parity review §2.3-2): token chips are the turn's
+              primary read; the $ chip demotes to a muted secondary (still in
+              the audit area, so it keeps the「估算」badge instead of
+              implying an exact figure). */}
+          <span className="inline-flex items-center gap-xs font-medium text-on-surface">
             <Icon name="login" size="xs" />↓ {nf.format(turn.input_tokens)}
           </span>
-          <span className="inline-flex items-center gap-xs">
+          <span className="inline-flex items-center gap-xs font-medium text-on-surface">
             <Icon name="logout" size="xs" />↑ {nf.format(turn.output_tokens)}
           </span>
           <span className="inline-flex items-center gap-xs">
@@ -766,9 +783,10 @@ function TurnCard({
             ↻ {nf.format(turn.cache_read_tokens)}/{nf.format(turn.cache_creation_tokens)}
           </span>
           {turn.cost_usd != null && (
-            <span className="inline-flex items-center gap-xs">
+            <span className="inline-flex items-center gap-xs text-on-surface-variant/50">
               <Icon name="payments" size="xs" />
               {COST_FORMAT.format(turn.cost_usd)}
+              <EstimatedBadge />
             </span>
           )}
         </div>

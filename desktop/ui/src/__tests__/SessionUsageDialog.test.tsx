@@ -91,6 +91,25 @@ describe('SessionUsageDialog', () => {
     expect(screen.getByRole('button', { name: /set session budget/i })).toBeInTheDocument()
   })
 
+  // G3 (2026-10-15 parity review §2.3-4): unknown-rate events add nothing
+  // to the spend figure — a nonzero count appends the muted honesty note.
+  it('appends the unknown-rate note when some events have no rate', async () => {
+    vi.mocked(api.getSessionUsage).mockResolvedValue({
+      input_tokens: 600, output_tokens: 400, cache_creation_tokens: 0,
+      cache_read_tokens: 300, cost_usd: 0.0123, events: 4,
+      unknown_rate_events: 2,
+    } as api.SessionUsageSummary)
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    const note = await screen.findByTestId('session-usage-unknown-rates')
+    expect(note).toHaveTextContent(/unknown rates/i)
+  })
+
+  it('omits the unknown-rate note when every rate was known', async () => {
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    await waitFor(() => expect(screen.getByText('System prompt')).toBeInTheDocument())
+    expect(screen.queryByTestId('session-usage-unknown-rates')).not.toBeInTheDocument()
+  })
+
   // W8 (设计稿 02c S3「窗口峰值 96k」): the row reads SessionInfo
   // .max_context_tokens — the session-index peak; compact formatting like
   // the rail chip (96000 → "96K" in en).

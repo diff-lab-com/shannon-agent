@@ -562,7 +562,8 @@ describe('BatchDiffCompare W4 export', () => {
     expect(markdown).toContain('## Branch #0 — batch-abcd1234-0')
     expect(markdown).toContain('- Status: Completed')
     expect(markdown).toContain('- Changes: 3 files · +10 −2')
-    expect(markdown).toContain('- Spent: $0.25')
+    // G3: the exported spend reads as an estimate.
+    expect(markdown).toContain('- Spent (est.): $0.25')
     expect(markdown).toContain('- Verification: 14/14 tests passed')
     expect(markdown).toContain('`/repo/.shannon/scheduled-worktrees/batch-abcd1234-0`')
     // Branch 1 carries no verification data — the export invents nothing.

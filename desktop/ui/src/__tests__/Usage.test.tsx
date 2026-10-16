@@ -178,6 +178,40 @@ describe('Usage page', () => {
     expect(screen.getByTestId('usage-stat-today-cost')).toHaveTextContent('vs yesterday —')
   })
 
+  // G3 (2026-10-15 parity review §2.3-2): token metrics own the first KPI
+  // row; the two $ cards move to a second row and carry the unified「估算」
+  // badge — DOM order is the reading order.
+  it('orders token KPIs before the estimated-$ cards and badges the latter', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    const { unmount } = renderUsage()
+
+    const tokens = await screen.findByTestId('usage-stat-tokens')
+    const estimatedCost = screen.getByTestId('usage-stat-estimated-cost')
+    const todayCost = screen.getByTestId('usage-stat-today-cost')
+    expect(tokens.compareDocumentPosition(estimatedCost) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(estimatedCost.compareDocumentPosition(todayCost) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Both $ cards say they are estimates; token cards do not.
+    expect(estimatedCost).toHaveTextContent('est.')
+    expect(todayCost).toHaveTextContent('est.')
+    unmount()
+  })
+
+  // G3 §2.3-4 honesty footnote: a nonzero unknown-rate count renders the
+  // muted page-level note (both modes render it; zero/absent hides it).
+  it('renders the unknown-rate footnote only when the count is positive', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue({ ...fixture, unknown_rate_records: 3 })
+    const { unmount } = renderUsage()
+
+    const note = await screen.findByTestId('usage-unknown-rate-note')
+    expect(note).toHaveTextContent(/3 records used models with unknown rates/)
+    unmount()
+
+    vi.mocked(api.getUsageStats).mockResolvedValue({ ...fixture, unknown_rate_records: 0 })
+    renderUsage()
+    await waitFor(() => expect(screen.getByTestId('usage-stat-tokens')).toBeInTheDocument())
+    expect(screen.queryByTestId('usage-unknown-rate-note')).not.toBeInTheDocument()
+  })
+
   // M4 (设计 06 KPI 四卡之四「上下文峰值」): the session-index maximum of
   // SessionInfo.max_context_tokens, with the holding session's title as the
   // hint. No session ever logged a window → honest "—".
@@ -300,14 +334,15 @@ describe('Usage page', () => {
   })
 
   // 设计 06: the daily chart carries the Token/成本 metric toggle — the
-  // cost metric renames the card to its own title so title = data.
+  // cost metric renames the card to its own title so title = data. G3: the
+  // cost title carries the (est.) marker — the $ series is an estimate.
   it('switches the daily chart between the Token and cost metric', async () => {
     vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
     renderUsage()
 
     await waitFor(() => expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: 'Cost' }))
-    await waitFor(() => expect(screen.getByText('Daily cost · 30 days')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Daily cost (est.) · 30 days')).toBeInTheDocument())
     expect(screen.queryByText('Daily tokens · 30 days')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Tokens' }))
     await waitFor(() => expect(screen.getByText('Daily tokens · 30 days')).toBeInTheDocument())

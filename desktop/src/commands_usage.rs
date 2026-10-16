@@ -303,6 +303,11 @@ pub struct UsageStats {
     pub by_provider: Vec<BucketTotals>,
     /// Sorted chronologically (oldest first).
     pub by_day: Vec<BucketTotals>,
+    /// G3 (2026-10-15 parity review §2.3-4): how many ledger records in the
+    /// window had an unknown rate (cost_usd None) — the USD aggregates skip
+    /// them, so the UI surfaces this count as an honest「N 条记录费率未知」
+    /// footnote instead of letting the sums look complete.
+    pub unknown_rate_records: u64,
 }
 
 /// P1-14: bucket by the **local** calendar day, matching the per-row local
@@ -357,6 +362,11 @@ fn compute_stats(days: u32, records: &[UsageRecord], now_ms_value: u64) -> Usage
         totals.add(r);
     }
 
+    // Honesty counter (§2.3-4): records whose rate was unknown at billing
+    // time. They already stay out of every USD sum below; this makes the
+    // gap visible instead of silent. Counted before `filtered` is consumed.
+    let unknown_rate_records = filtered.iter().filter(|r| r.cost_usd.is_none()).count() as u64;
+
     let owned: Vec<UsageRecord> = filtered.into_iter().cloned().collect();
     let mut by_model = aggregate_by(&owned, |r| r.model.clone());
     by_model.sort_by(|a, b| b.cost_usd.total_cmp(&a.cost_usd));
@@ -373,6 +383,7 @@ fn compute_stats(days: u32, records: &[UsageRecord], now_ms_value: u64) -> Usage
         by_model,
         by_provider,
         by_day,
+        unknown_rate_records,
     }
 }
 
@@ -406,6 +417,11 @@ pub struct SessionUsageSummary {
     pub cache_read_tokens: u64,
     pub cost_usd: f64,
     pub events: usize,
+    /// G3 (2026-10-15 parity review §2.3-4): events attributed to this
+    /// session whose rate was unknown (cost_usd None). They add nothing to
+    /// `cost_usd`, so a nonzero count means the total is a lower bound —
+    /// the session-usage dialog flags it with a「部分记录费率未知」note.
+    pub unknown_rate_events: usize,
 }
 
 #[tauri::command]
@@ -424,6 +440,7 @@ fn summarize_session(records: &[UsageRecord], session_id: &str) -> SessionUsageS
         cache_read_tokens: 0,
         cost_usd: 0.0,
         events: 0,
+        unknown_rate_events: 0,
     };
     for r in records {
         if r.session_id.as_deref() == Some(session_id) {
@@ -433,6 +450,8 @@ fn summarize_session(records: &[UsageRecord], session_id: &str) -> SessionUsageS
             summary.cache_read_tokens += r.cache_read_tokens;
             if let Some(cost) = r.cost_usd {
                 summary.cost_usd += cost;
+            } else {
+                summary.unknown_rate_events += 1;
             }
             summary.events += 1;
         }
@@ -522,6 +541,9 @@ mod tests {
         assert!((stats.totals.cost_usd - 0.01).abs() < 1e-9);
         assert_eq!(stats.totals.requests, 2);
         assert_eq!(stats.totals.input_tokens, 200);
+        // G3 honesty counter: exactly the one unknown-rate record is counted
+        // so the UI can footnote「N 条记录费率未知」.
+        assert_eq!(stats.unknown_rate_records, 1);
     }
 
     #[test]
@@ -714,15 +736,26 @@ mod tests {
         let mut b = rec(2_000, "m", "p", 0.20);
         b.session_id = Some("s-b".into());
         let legacy = rec(3_000, "m", "p", 0.30); // pre-attribution ledger line
+        // G3: an unknown-rate event for s-a — counted as unknown, never billed.
+        let mut unknown = rec(4_000, "m", "p", 0.0);
+        unknown.cost_usd = None;
+        unknown.session_id = Some("s-a".into());
 
         let summary = summarize_session(&[a, b.clone(), legacy.clone()], "s-a");
         assert_eq!(summary.events, 1);
         assert_eq!(summary.input_tokens, 100);
         assert_eq!(summary.output_tokens, 50);
         assert!((summary.cost_usd - 0.10).abs() < 1e-9);
+        assert_eq!(summary.unknown_rate_events, 0);
 
         let none = summarize_session(&[b, legacy], "s-a");
         assert_eq!(none.events, 0);
         assert_eq!(none.cost_usd, 0.0);
+        assert_eq!(none.unknown_rate_events, 0);
+
+        let with_unknown = summarize_session(&[unknown], "s-a");
+        assert_eq!(with_unknown.events, 1);
+        assert_eq!(with_unknown.cost_usd, 0.0);
+        assert_eq!(with_unknown.unknown_rate_events, 1);
     }
 }

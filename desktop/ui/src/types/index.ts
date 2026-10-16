@@ -1451,6 +1451,10 @@ export interface UsageStats {
   by_model: UsageBucket[]
   by_provider: UsageBucket[]
   by_day: UsageBucket[]
+  /** G3 (2026-10-15 parity review §2.3-4): ledger records in the window
+   *  whose rate was unknown (cost_usd null) — excluded from every USD sum.
+   *  Optional for tolerance of pre-G3 backends; treat absent as 0. */
+  unknown_rate_records?: number
 }
 
 // --- Usage governance (P2-1) ---

@@ -126,11 +126,33 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
           </dd>
         </div>
         <div>
-          <dt className="text-on-surface-variant">{t('goal.card.spent')}</dt>
-          <dd className="text-on-surface tabular-nums">
-            {intl.formatNumber(run.spentUsd, { style: 'currency', currency: 'USD' })}
-            {run.budgetUsd ? <span className="text-on-surface-variant"> / {intl.formatNumber(run.budgetUsd, { style: 'currency', currency: 'USD' })}</span> : null}
-          </dd>
+          <dt className="text-on-surface-variant">{t('goal.card.budgetUsage')}</dt>
+          {/* G3 (2026-10-15 parity review §2.3-3): the % is the primary
+              number (a share reads across models and price drifts); the
+              configured USD cap stays as the secondary line — the budget
+              control face keeps its currency unit. The >90% red on the bar
+              below is unchanged; the % mirrors the same tone. */}
+          {budgetFrac !== null ? (
+            <>
+              <dd
+                data-testid="goal-budget-percent"
+                className={cn(
+                  'text-body-lg font-bold tabular-nums leading-tight',
+                  budgetFrac > 0.9 ? 'text-error' : 'text-on-surface',
+                )}
+              >
+                {fmtPct(budgetFrac)}
+              </dd>
+              <dd className="text-on-surface-variant tabular-nums">
+                {intl.formatNumber(run.spentUsd, { style: 'currency', currency: 'USD' })}
+                {run.budgetUsd ? <span> / {intl.formatNumber(run.budgetUsd, { style: 'currency', currency: 'USD' })}</span> : null}
+              </dd>
+            </>
+          ) : (
+            <dd className="text-on-surface tabular-nums">
+              {intl.formatNumber(run.spentUsd, { style: 'currency', currency: 'USD' })}
+            </dd>
+          )}
         </div>
         <div>
           <dt className="text-on-surface-variant">{t('goal.card.stallStrikes')}</dt>

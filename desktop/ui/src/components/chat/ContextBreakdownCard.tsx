@@ -23,6 +23,7 @@ import { useT } from '@/i18n'
 import { cn } from '@/lib/utils'
 import * as api from '@/lib/tauri-api'
 import { SessionContext } from '@/context/SessionContext'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import type { ContextBreakdown, ContextBreakdownCategory } from '@/types'
 
 /** Theme-semantic segment color per category key (stable, distinct). */
@@ -205,7 +206,11 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
           </p>
         </div>
 
-        {/* Cache hit rate + session cost */}
+        {/* Cache hit rate (primary) — then the session cost, demoted by G3
+            (2026-10-15 parity review §2.3-2): tokens are the 口径 here, so
+            the cumulative $ drops to a muted last row carrying the unified
+            「估算」badge, and an unknown-rate count (if any) says the total
+            is a lower bound rather than letting it read complete. */}
         <div className="pt-sm border-t border-outline-variant/10 space-y-xs">
           <div className="flex justify-between text-body-sm">
             <span className="text-on-surface-variant">{t('chat.context.cacheHitRate')}</span>
@@ -218,12 +223,23 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
               <span className="text-on-surface-variant">{t('chat.context.cacheHitRate.none')}</span>
             )}
           </div>
-          <div className="flex justify-between text-body-sm">
-            <span className="text-on-surface-variant">{t('chat.context.sessionCost')}</span>
-            <span className="font-bold text-primary tabular-nums">
+          <div className="flex justify-between items-center gap-sm">
+            <span className="text-on-surface-variant/60 flex items-center gap-1 min-w-0">
+              <span className="truncate">{t('chat.context.sessionCost')}</span>
+              <EstimatedBadge />
+            </span>
+            <span className="font-mono text-label-sm text-on-surface-variant/60 tabular-nums shrink-0">
               ${(summary?.cost_usd ?? 0).toFixed(4)}
             </span>
           </div>
+          {(summary?.unknown_rate_events ?? 0) > 0 && (
+            <p
+              data-testid="context-unknown-rates"
+              className="font-label-xs text-on-surface-variant/50"
+            >
+              {t('chat.input.usage.unknownRates')}
+            </p>
+          )}
         </div>
       </div>
     </section>

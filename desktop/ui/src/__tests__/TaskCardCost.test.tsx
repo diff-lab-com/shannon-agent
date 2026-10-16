@@ -46,6 +46,14 @@ describe('TaskCard 看板金额 — ledger cost chip (批 1)', () => {
     expect(chip.getAttribute('title')).toMatch(/[Ll]edger/)
   })
 
+  it('carries the unified「估算」badge (G3: the $ is an estimate)', () => {
+    renderCard(taskFixture({ cost_usd: 0.25 }))
+    // The badge rides the cost chip (en locale: "est."); the card has no
+    // token totals to show instead — the data source joins cost only.
+    expect(screen.getByTestId('estimated-badge')).toBeInTheDocument()
+    expect(screen.getByTestId('task-card-cost')).toHaveTextContent('est.')
+  })
+
   it('renders a zero-spend session as $0.00 (Some(0.0) is real data)', () => {
     renderCard(taskFixture({ cost_usd: 0 }))
     expect(screen.getByTestId('task-card-cost')).toHaveTextContent('$0.00')
