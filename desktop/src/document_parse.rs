@@ -291,10 +291,13 @@ fn extract_ooxml(path: &Path, kind: OoxmlKind) -> Result<ExtractedDocument, Stri
             let mut slides: Vec<(u32, String)> = archive
                 .file_names()
                 .filter_map(|name| {
+                    // zip 9: file_names() yields fallible entries — skip
+                    // undecodable names (they can't be slide parts).
+                    let name = name.ok()?;
                     let rest = name.strip_prefix("ppt/slides/slide")?;
                     let num = rest.strip_suffix(".xml")?;
                     if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
-                        num.parse::<u32>().ok().map(|n| (n, name.to_string()))
+                        num.parse::<u32>().ok().map(|n| (n, name.into_owned()))
                     } else {
                         None
                     }
@@ -1064,6 +1067,16 @@ mod tests {
              </sheetData></worksheet>"
             .as_bytes();
         zip_bytes(&[
+            // Package-level rels — calamine 0.3x validates OPC structure and
+            // refuses the container without it (0.26 didn't care).
+            (
+                "_rels/.rels",
+                b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">\
+             <Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>\
+             </Relationships>"
+                    .to_vec(),
+            ),
             ("xl/workbook.xml", workbook.to_vec()),
             ("xl/_rels/workbook.xml.rels", rels.to_vec()),
             ("xl/worksheets/sheet1.xml", sheet1.to_vec()),

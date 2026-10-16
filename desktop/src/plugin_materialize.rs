@@ -580,11 +580,14 @@ pub fn summarize_archive(path: &Path) -> Result<PluginBundleSummary, String> {
     let mut agents = Vec::new();
     let mut commands = Vec::new();
     for i in 0..archive.len() {
+        // zip 9: name() is encoding-aware and fallible — undecodable entry
+        // names fail the materialization on the same error channel.
         let name = archive
             .by_index(i)
             .map_err(|e| format!("zip entry {i}: {e}"))?
             .name()
-            .to_string();
+            .map_err(|e| format!("zip entry {i}: name encoding: {e}"))?
+            .into_owned();
         let name = name.trim_end_matches('/');
         if let Some(rest) = name.strip_prefix("skills/") {
             // skills/<n>/SKILL.md — EXACTLY two segments: the skill directory
