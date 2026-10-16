@@ -16,7 +16,7 @@ import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
 import { useComposerDraftListener } from '@/lib/composerBridge'
 import { loadInputHistory } from '@/lib/inputHistory'
-import { isSlashQuery, type SlashCommand } from '@/lib/slash/commands'
+import { findSlashCommand, isSlashQuery, slashArgsToken, type SlashCommand } from '@/lib/slash/commands'
 import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEntry } from '@/lib/slash/skills'
 import {
   activeMentionQuery,
@@ -102,6 +102,19 @@ export function pathExtension(path: string): string {
  * still hit send. Hard limits should go through the Rust backend. */
 const CHAR_SHOW_AT = 2000
 const CHAR_SOFT_WARN_AT = 8000
+
+/* H2 P1-4 — pasted text at or above this length is converted into a .txt
+ * attachment instead of being inserted into the composer. Rationale: 8 KiB
+ * is where pasted content stops being a quotable snippet and becomes
+ * reference material — it sits right at the composer's own soft-warn line
+ * (CHAR_SOFT_WARN_AT = 8000, the "this will not read well as a message"
+ * signal) and amounts to roughly 2–6k tokens for a mixed CJK/Latin paste
+ * (≈1 token per 1–3 chars), i.e. the order of magnitude where one paste
+ * visibly eats the context window. Cherry Studio / Chatbox ship the same
+ * auto-attach behavior for long pastes. Below the threshold the paste is
+ * left alone — the default insertion path is untouched. Exported for the
+ * paste-conversion test. */
+export const MAX_INLINE_PASTE_CHARS = 8192
 
 /* S3-6 — pre-send cost estimate debounce. The estimate command is cheap
  * (cached context + attachment counts backend-side), but per-keystroke IPC
@@ -233,6 +246,32 @@ export default function ChatInput({
     slashQuery && !slashDismissed ? mergeSlashMenu(skills, slashQuery) : []
   const slashMatches = slashItems
   const slashOpen = slashMatches.length > 0
+
+  // H2 P1-2 — the "/cmd args" parameter state. The bare-token regex stopped
+  // matching (whitespace plus more text after it), so the menu is gone; when
+  // the FIRST token exactly hits the static table or an installed skill, a
+  // fixed hint line above the composer keeps the command's identity —
+  // 「/cmd — description · Enter sends」— instead of the context silently
+  // evaporating. Honesty contract: only a REAL hit lights it (unknown
+  // `/tokens` — usually pasted paths — render nothing). Pure UI: the send
+  // path is untouched (bare /cmd still executes locally, /cmd args and
+  // unknown tokens still go to the model as text). Computed inline on
+  // purpose — a regex plus a ≤17-row lookup, cheaper than the memo bookkeeping.
+  const slashArgs = (() => {
+    if (slashQuery || !value.startsWith('/')) return null
+    const token = slashArgsToken(value)
+    if (!token) return null
+    const command = findSlashCommand(token)
+    if (command) {
+      return { trigger: `/${command.name}`, description: t(command.descriptionKey), icon: command.icon }
+    }
+    const needle = token.toLowerCase()
+    const skill = skills.find(s => s.name.toLowerCase() === needle || s.trigger.toLowerCase() === `/${needle}`)
+    if (skill) {
+      return { trigger: skill.trigger, description: skill.description, icon: 'auto_fix' }
+    }
+    return null
+  })()
 
   // GB P2-10b — @ file reference. The candidate universe loads once per
   // working dir: the working-dir tree (backend-bounded walk) plus the
@@ -763,6 +802,59 @@ export default function ChatInput({
       }
     }
   }
+  // H2 P1-4 — latest-ref mirror for the long-text-paste Undo action. The
+  // toast outlives the render that posted it, so its undo closure must read
+  // the CURRENT attachment set (same protocol as mergePathsRef above), not
+  // the one captured at paste time.
+  const attachedFilesRef = useRef(attachedFiles)
+  useEffect(() => {
+    attachedFilesRef.current = attachedFiles
+  })
+
+  // H2 P1-4 — long-text paste → attachment. At or over
+  // MAX_INLINE_PASTE_CHARS the text is persisted as a UTF-8 .txt in the same
+  // pasted cache the image path uses (`save_pasted_text`, the sibling of
+  // save_pasted_image) and rides the regular attachment pipeline (absolute
+  // path → preflight → read at send); the textarea receives NOTHING — an
+  // 8 KiB dump is reference material, not an editable draft. The sonner
+  // toast carries an explicit「撤销」action as the inverse: put the text
+  // back into the composer and drop the chip. Below the threshold the paste
+  // is never intercepted.
+  const handlePastedLongText = async (text: string) => {
+    let savedPath: string
+    try {
+      savedPath = await api.savePastedText(text)
+    } catch (err) {
+      toastError(t('chat.input.paste.failed'), err)
+      return
+    }
+    mergePathsRef.current([savedPath])
+    const undo = () => {
+      // onAttach is REPLACE semantics (see mergePaths): hand back the
+      // current set minus the converted paste. The latest-ref read keeps a
+      // late click honest after further attaches; a click landing before
+      // the parent flushes the attach still wins — the last set replaces
+      // the pending union.
+      onAttach(attachedFilesRef.current.filter(p => p !== savedPath))
+      // Restore the text — appended after anything typed since (blank-line
+      // separated, the same shape as the composer-draft bridge), or alone
+      // when the composer is empty. Caret parked at the end.
+      const el = textareaRef.current
+      const current = el?.value ?? ''
+      const restored = current.trim() ? `${current.replace(/\s+$/, '')}\n\n${text}` : text
+      onChange(restored)
+      requestAnimationFrame(() => {
+        el?.focus()
+        el?.setSelectionRange(restored.length, restored.length)
+      })
+    }
+    // 10s: reading/deciding over an 8 KiB paste takes longer than the
+    // default toast window, and the undo affordance must outlive it.
+    toast.success(t('chat.input.paste.longText.toast'), {
+      action: { label: t('chat.input.paste.longText.undo'), onClick: undo },
+      duration: 10000,
+    })
+  }
   //
   // P2-2 — mixed image+text pastes (Excel ranges, "copy image with
   // caption") used to swallow the text: the handler preventDefault'd the
@@ -774,9 +866,22 @@ export default function ChatInput({
   // clipboard would be lost.
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = imageFilesFromClipboard(e.clipboardData)
-    if (images.length === 0) return
-    if (!clipboardHasText(e.clipboardData)) e.preventDefault()
-    void handlePastedImages(images)
+    if (images.length > 0) {
+      if (!clipboardHasText(e.clipboardData)) e.preventDefault()
+      void handlePastedImages(images)
+      return
+    }
+    // H2 P1-4 — no image on the clipboard: a very long TEXT paste converts
+    // to a .txt attachment (see handlePastedLongText) and cancels the
+    // default insertion; everything else falls through untouched — the
+    // default text insertion (and IME composition) behavior is never
+    // intercepted. (A paste carries no IME composition, so this branch
+    // stays clear of the composition guard by construction.)
+    const text = e.clipboardData.getData('text/plain')
+    if (text.length >= MAX_INLINE_PASTE_CHARS) {
+      e.preventDefault()
+      void handlePastedLongText(text)
+    }
   }
 
   // B0 P0-2 — file drag-drop via the webview's own Tauri v2 events. With
@@ -1152,6 +1257,24 @@ export default function ChatInput({
       role="region"
       aria-label={t('chat.input.ariaLabel')}
     >
+      {/* H2 P1-2 — the "/cmd args" hint line. Same slot as the slash menu
+          (the two are regex-exclusive) but deliberately lighter: one quiet
+          row, not a listbox and not a message card. No live region — it
+          re-renders per keystroke and would repeat the P2-9 announcement
+          mistake; the content is plain text read in place. */}
+      {slashArgs && (
+        <div
+          role="note"
+          data-testid="slash-args-hint"
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal flex items-center gap-sm rounded-xl border border-outline-variant/30 bg-surface-container-low px-md py-xs shadow-e3"
+        >
+          <span className="material-symbols-outlined icon-sm text-primary shrink-0">{slashArgs.icon}</span>
+          <span className="font-mono text-label-md text-on-surface shrink-0">{slashArgs.trigger}</span>
+          <span className="font-label-sm text-on-surface-variant truncate flex-1">{slashArgs.description}</span>
+          <span className="font-label-xs text-on-surface-variant whitespace-nowrap shrink-0">{t('slash.argsHint.send')}</span>
+        </div>
+      )}
+
       {slashMatches.length > 0 && (
         <div
           id={slashListboxId}

@@ -67,6 +67,24 @@ describe('mergeSlashMenu', () => {
     expect(names('/zzz')).toEqual([])
   })
 
+  it('matches skills by in-order subsequence too (H2 P1-1 parity with commands)', () => {
+    const skills = [skill('pdf-reader'), skill('jupyter-session')]
+    const names = (q: string) =>
+      mergeSlashMenu(skills, q)
+        .filter(i => i.kind === 'skill')
+        .map(i => (i.kind === 'skill' ? i.skill.name : ''))
+
+    // j…r subsequence of "jupyter-session" — no prefix/substring hit.
+    expect(names('/jr')).toEqual(['jupyter-session'])
+
+    // A fuzzy command hit (/ct → cost/context/compact via substring and
+    // subsequence) never hides the skill half of the merge: commands stay
+    // first, the subsequence-matching skill still follows.
+    const merged = mergeSlashMenu([skill('corrector')], '/ct')
+    expect(merged[0].kind).toBe('command')
+    expect(merged.some(i => i.kind === 'skill' && i.skill.name === 'corrector')).toBe(true)
+  })
+
   it('deduplicates skills by name', () => {
     const items = mergeSlashMenu([skill('dup'), skill('dup')], '')
     const skills = items.filter(i => i.kind === 'skill')

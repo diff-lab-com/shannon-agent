@@ -1,15 +1,71 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/code/CodeBlock'
 import EstimatedBadge from '@/components/ui/estimated-badge'
 import GoalStartForm from '@/components/chat/GoalStartForm'
 import { cn } from '@/lib/utils'
-import type { SlashResult } from '@/lib/slash/commands'
+import { SLASH_COMMANDS, type SlashResult } from '@/lib/slash/commands'
+import { fetchSlashSkills, type SlashSkillEntry } from '@/lib/slash/skills'
 
 interface SlashResultCardProps {
   result: SlashResult
   onDismiss: () => void
+}
+
+/**
+ * H2 P1-3 — the /help roster. Read-only: every STATIC command (name +
+ * description, straight off SLASH_COMMANDS so it can never drift) plus the
+ * INSTALLED skills, fetched best-effort via fetchSlashSkills — a failure or
+ * timeout resolves to [] and the skills section simply doesn't render. The
+ * card only ever lists what really exists (honesty contract).
+ */
+function HelpRoster() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  // null = fetch still in flight → the section is withheld rather than
+  // rendered empty; [] (error/timeout/no skills) hides it too.
+  const [skills, setSkills] = useState<SlashSkillEntry[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchSlashSkills().then(entries => {
+      if (!cancelled) setSkills(entries)
+    })
+    return () => { cancelled = true }
+  }, [])
+
+  return (
+    <div data-testid="slash-help-roster" className="flex flex-col gap-xs">
+      <div className="font-label-xs uppercase tracking-wider text-on-surface-variant">
+        {t('slash.card.help.commandsSection')}
+      </div>
+      <ul className="flex flex-col gap-xxs">
+        {SLASH_COMMANDS.map(cmd => (
+          <li key={cmd.name} className="flex items-baseline gap-sm">
+            <span className="font-mono text-label-sm text-on-surface shrink-0">/{cmd.name}</span>
+            <span className="font-label-sm text-on-surface-variant">{t(cmd.descriptionKey)}</span>
+          </li>
+        ))}
+      </ul>
+      {skills !== null && skills.length > 0 && (
+        <>
+          <div className="mt-xs font-label-xs uppercase tracking-wider text-on-surface-variant">
+            {t('slash.card.help.skillsSection')}
+          </div>
+          <ul className="flex flex-wrap gap-x-md gap-y-xxs">
+            {skills.map(skill => (
+              <li key={skill.name} className="font-mono text-label-sm text-on-surface" title={skill.description}>
+                {skill.trigger}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <p className="mt-xs border-t border-outline-variant/20 pt-xs font-label-xs text-on-surface-variant">
+        {t('slash.card.help.skillNote')}
+      </p>
+    </div>
+  )
 }
 
 /* Ephemeral output surface for composer slash commands (/context /cost
@@ -155,6 +211,8 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     }
   } else if (result.kind === 'goalForm') {
     body = <GoalStartForm sessionId={result.sessionId} onDismiss={onDismiss} />
+  } else if (result.kind === 'help') {
+    body = <HelpRoster />
   } else {
     body = <p className="font-label-sm text-on-surface">{t(result.messageKey)}</p>
   }
@@ -165,6 +223,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     : result.kind === 'diff' ? 'slash.card.diff.title'
     : result.kind === 'compact' ? 'slash.card.compact.title'
     : result.kind === 'goalForm' ? 'slash.card.goal.title'
+    : result.kind === 'help' ? 'slash.card.help.title'
     : 'slash.card.error.title'
 
   return (
@@ -180,6 +239,7 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
               : result.kind === 'diff' ? 'difference'
               : result.kind === 'compact' ? 'compress'
               : result.kind === 'goalForm' ? 'flag'
+              : result.kind === 'help' ? 'help'
               : 'error'}
           </span>
           {t(titleKey)}

@@ -78,13 +78,15 @@ function renderChatInput(props: Partial<React.ComponentProps<typeof ChatInput>> 
 
 function pasteWith(items: unknown[]) {
   const textarea = screen.getByRole('textbox', { name: 'Message' })
-  fireEvent.paste(textarea, { clipboardData: { items } })
+  // getData feeds the H2 long-text-paste branch; a short string keeps every
+  // image-path test strictly below that threshold.
+  fireEvent.paste(textarea, { clipboardData: { items, getData: () => 'short' } })
 }
 
 /** P2-2 — fires a paste whose native preventDefault is observable. */
 function pasteTracked(items: unknown[]) {
   const textarea = screen.getByRole('textbox', { name: 'Message' })
-  const event = createEvent.paste(textarea, { clipboardData: { items } })
+  const event = createEvent.paste(textarea, { clipboardData: { items, getData: () => 'short' } })
   const preventDefault = vi.spyOn(event, 'preventDefault')
   fireEvent(textarea, event)
   return preventDefault

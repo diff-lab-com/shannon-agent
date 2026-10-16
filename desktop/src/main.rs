@@ -505,6 +505,9 @@ fn main() {
             // G3b P1-6 — composer clipboard-image paste: validated bytes to
             // ~/.shannon/cache/pasted, then the normal attachment pipeline.
             commands_files::save_pasted_image,
+            // H2 P1-4 — long-text paste converts to a .txt in the same
+            // pasted cache, riding the same attachment pipeline.
+            commands_files::save_pasted_text,
             // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
             // probes and capped text reads for disk artifacts
             commands_files::path_exists,

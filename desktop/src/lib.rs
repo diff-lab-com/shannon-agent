@@ -95,10 +95,10 @@ fn is_in_pasted_image_cache(canonical: &Path) -> bool {
 /// outside the working directory. This is safe by construction, not a
 /// widened hole:
 ///   1. That directory's contents are written ONLY by the backend's
-///      `save_pasted_image` from the user's own clipboard — bytes the
-///      webview already holds — so allowing the attachment pipeline to read
-///      them back grants no access the frontend did not already have
-///      (no arbitrary-path read escalation).
+///      `save_pasted_image` / `save_pasted_text` from the user's own
+///      clipboard — bytes the webview already holds — so allowing the
+///      attachment pipeline to read them back grants no access the frontend
+///      did not already have (no arbitrary-path read escalation).
 ///   2. The check runs on the fully CANONICALIZED path (symlinks resolved):
 ///      a symlink planted in the cache pointing at `~/.ssh/id_rsa` resolves
 ///      outside and is still refused.

@@ -8,6 +8,7 @@
 
 import * as api from '@/lib/tauri-api'
 import type { SkillInfo } from '@/types'
+import { subsequenceStart } from '@/lib/fileMention'
 import { SLASH_COMMANDS, filterSlashCommands, type SlashCommand } from './commands'
 
 /** One installed skill as the slash menu renders it. `trigger` includes the
@@ -61,10 +62,13 @@ function reservedCommandNames(): Set<string> {
 
 /**
  * Merge the static command table with installed skills for the given query
- * (`/xy` shape). Commands come first (existing behavior); skills follow in
- * list order, deduplicated against static names/aliases and against each
- * other. Matching mirrors filterSlashCommands: prefix or substring on the
- * name, plus the full trigger (`/name`) against the raw query.
+ * (`/xy` shape). Commands come first (existing behavior) — filterSlashCommands
+ * now scores them fuzzy (H2 P1-1); the skill half mirrors that with the same
+ * prefix / substring / subsequence bands on the name (plus the full
+ * `/name` trigger against the raw query) so a fuzzy command hit never
+ * hides an equally relevant skill. Skills follow in list order,
+ * deduplicated against static names/aliases and against each other — they
+ * never shadow the table.
  */
 export function mergeSlashMenu(skills: SlashSkillEntry[], query: string): SlashMenuItem[] {
   const items: SlashMenuItem[] = filterSlashCommands(query).map(command => ({
@@ -85,7 +89,8 @@ export function mergeSlashMenu(skills: SlashSkillEntry[], query: string): SlashM
       !raw ||
       name.startsWith(raw) ||
       name.includes(raw) ||
-      trigger.startsWith(query.toLowerCase())
+      trigger.startsWith(query.toLowerCase()) ||
+      subsequenceStart(name, raw) !== -1
     if (!matches) continue
     seenSkills.add(skill.name)
     items.push({ kind: 'skill', skill })
