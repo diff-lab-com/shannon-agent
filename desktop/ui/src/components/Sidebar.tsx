@@ -478,11 +478,14 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
                 (market/datasources/…) must keep the row lit. */}
             <NavRow to="/extensions/featured" activeMatch="/extensions" icon="extension" labelId="nav.extensions" titleId="nav.extensions" kbd={`${mod}3`} onNavigate={handleNavClick} />
             <NavRow to="/memory" icon="psychology" labelId="nav.memory" titleId="nav.memory" kbd={`${mod}4`} onNavigate={handleNavClick} />
+            {/* G3 / review §3.2-1 (2026-10-15): the usage page is a
+                first-class nav row now — it used to hide behind dev mode and
+                was reachable only via the sidebar meter. Sits after Memory;
+                no kbd slot (the four quick-route bindings stay chat/files/
+                tasks/extensions). */}
+            <NavRow to="/usage" icon="monitoring" labelId="nav.usage" titleId="nav.usage" onNavigate={handleNavClick} />
             {mode === 'dev' && (
-              <>
-                <NavRow to="/usage" icon="monitoring" labelId="nav.usage" titleId="nav.usage" onNavigate={handleNavClick} />
-                <NavRow to="/opc" icon="auto_awesome" labelId="nav.opc" titleId="nav.opc" onNavigate={handleNavClick} />
-              </>
+              <NavRow to="/opc" icon="auto_awesome" labelId="nav.opc" titleId="nav.opc" onNavigate={handleNavClick} />
             )}
           </div>
         </ScrollArea>

@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import { cn } from '@/lib/utils'
 import type { TaskCostEstimate } from '@/types'
 
@@ -55,6 +56,11 @@ export default function CostEstimateHint({
       )}
       aria-label={intl.formatMessage({ id: 'tasks.costEstimate.aria' })}
     >
+      {/* G3 (2026-10-15 parity review §2.3-2): the historical range stays —
+          in a task-selection context it is exactly the comparison a user
+          wants — but it is an estimate by construction, so the unified
+          「估算」badge leads the line. */}
+      <EstimatedBadge />
       <span className="material-symbols-outlined icon-sm text-secondary shrink-0" aria-hidden="true">
         payments
       </span>

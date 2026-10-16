@@ -324,8 +324,9 @@ describe('MessageBubble turn meta — cost segment (R3 §4)', () => {
     expect(text.indexOf('tool calls')).toBeGreaterThan(-1)
     expect(text.indexOf('2.4 minutes')).toBeGreaterThan(text.indexOf('tool calls'))
     expect(text.indexOf('$0.087')).toBeGreaterThan(text.indexOf('2.4 minutes'))
-    // The cost joins the aria 汇总 too.
-    expect(meta).toHaveAttribute('aria-label', 'This turn: 3 tool calls · 2.4 minutes · $0.087')
+    // The cost joins the aria 汇总 too. G3 (2026-10-15 parity review): the
+    // figure is an estimate — the segment reads ≈$0.087.
+    expect(meta).toHaveAttribute('aria-label', 'This turn: 3 tool calls · 2.4 minutes · ≈$0.087')
   })
 
   it('omits the cost segment when no window overlaps the turn (反例: absent)', () => {

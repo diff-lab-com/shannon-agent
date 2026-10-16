@@ -197,11 +197,16 @@ export default function HistoryView({
                   <span className="font-label-md text-label-sm font-bold truncate flex-1">{row.task_name}</span>
                   <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{formatUnixDateTime(row.started_at)}</span>
                   <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{durationLabel(row.started_at, row.finished_at)}</span>
-                  {hasCostData && (row.cost_usd != null ? (
-                    <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
-                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>)}
                   {hasTokenData && (row.token_usage != null ? (
-                    <span className="font-label-sm text-label-xs text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
+                    // G3 (2026-10-15 parity review §2.3-2): tokens are the
+                    // primary run metric — first, full-contrast.
+                    <span className="font-label-sm text-label-xs text-on-surface font-medium tabular-nums whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
+                  ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>)}
+                  {hasCostData && (row.cost_usd != null ? (
+                    // The $ demotes to a muted secondary figure (still
+                    // visible for reconciliation — it is the only run-level
+                    // money datum; the usage page owns the estimation).
+                    <span className="font-label-sm text-label-xs text-on-surface-variant/50 whitespace-nowrap">${row.cost_usd.toFixed(4)}</span>
                   ) : <span className="font-label-sm text-label-xs text-on-surface-variant/60">—</span>)}
                   <span className={cn('material-symbols-outlined icon-sm text-on-surface-variant transition-transform', isExpanded ? 'rotate-180' : '')}>expand_more</span>
                 </Button>

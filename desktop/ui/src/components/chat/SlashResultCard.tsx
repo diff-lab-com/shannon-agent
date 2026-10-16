@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import { CodeBlock } from '@/components/code/CodeBlock'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import GoalStartForm from '@/components/chat/GoalStartForm'
 import { cn } from '@/lib/utils'
 import type { SlashResult } from '@/lib/slash/commands'
@@ -61,12 +62,20 @@ export default function SlashResultCard({ result, onDismiss }: SlashResultCardPr
     const u = result.usage
     body = (
       <div className="flex flex-col gap-xxs">
+        {/* G3 (2026-10-15 parity review §2.3): the $ total is an estimate —
+            it carries the unified「估算」badge; tokens below are the exact
+            figures. Unknown-rate events (when the backend reports a count)
+            get the same honesty note as the session-usage dialog. */}
         <div className="flex items-baseline gap-xs">
           <span className="font-label-lg font-bold text-on-surface tabular-nums">{usd(u.cost_usd)}</span>
+          <EstimatedBadge />
           <span className="font-label-sm text-on-surface-variant">
             {t('slash.card.cost.overEvents', { count: fmt.format(u.events) })}
           </span>
         </div>
+        {(u.unknown_rate_events ?? 0) > 0 && (
+          <p className="font-label-xs text-on-surface-variant/70">{t('chat.input.usage.unknownRates')}</p>
+        )}
         <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xxs font-label-sm">
           <dt className="text-on-surface-variant">{t('slash.card.cost.input')}</dt>
           <dd className="text-on-surface tabular-nums">{fmt.format(u.input_tokens)}</dd>

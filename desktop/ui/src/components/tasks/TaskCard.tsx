@@ -10,6 +10,7 @@
 
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import type { TaskItem } from '@/types'
 import { statusBadge } from './shared'
 import { cn } from '@/lib/utils'
@@ -42,8 +43,16 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
   // 看板金额 (批 1): ledger-attributed spend of the producing agent session.
   // Rendered only when the backend actually joined a cost — `None` (hand-
   // built / adhoc tasks, unseen sessions) renders NOTHING, never a "$–"
-  // placeholder (honesty contract: never an estimate). Two-decimal USD,
-  // matching the status bar's money formatting.
+  // placeholder (honesty contract: never an estimate→shown as exact). Two-
+  // decimal USD, matching the status bar's money formatting.
+  //
+  // G3 (2026-10-15 parity review §2.3-2, 取舍): the backend's task join
+  // carries ONLY cost_usd — no per-task token totals (the usage ledger joins
+  // by session, and a task's session aggregates every conversation, not this
+  // task alone), and TaskItem carries no budget to derive a 预算% from. So
+  // the token swap specified for this card is not data-feasible: the $ stays
+  // but is demoted to an estimate — the unified「估算」badge rides the chip
+  // and the tooltip names the caveat.
   const cost = task.cost_usd
   const costLabel = cost != null
     ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(cost)
@@ -109,10 +118,11 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                 </span>
               ) : null}
               {costLabel != null && (
-                // 看板金额: icon + amount, muted like the sibling meta chips.
-                // The tooltip carries the 口径注记: the number is the usage-
-                // ledger spend of the producing session, kept per ledger
-                // rotation — not a lifetime total.
+                // 看板金额: icon + amount + 「估算」badge, muted like the
+                // sibling meta chips. The tooltip carries the 口径注记: the
+                // number is the usage-ledger spend of the producing session,
+                // kept per ledger rotation — not a lifetime total, and an
+                // estimate (unknown-rate records stay out of it).
                 <span
                   data-testid="task-card-cost"
                   title={t('tasks.taskCard.costTitle')}
@@ -120,6 +130,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                 >
                   <span className="material-symbols-outlined icon-sm">payments</span>
                   {costLabel}
+                  <EstimatedBadge />
                 </span>
               )}
             </div>

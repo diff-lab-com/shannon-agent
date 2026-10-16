@@ -21,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Modal, ModalBody } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Spinner } from '@/components/ui/loading-state'
+import EstimatedBadge from '@/components/ui/estimated-badge'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
@@ -399,16 +400,20 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
               {(run.baseCommit || totalSpent > 0) && (
                 <span
                   data-testid="batch-compare-header-meta"
-                  className="font-label-sm text-label-sm text-on-surface-variant tabular-nums shrink-0 max-w-full"
+                  className="font-label-sm text-label-sm text-on-surface-variant tabular-nums shrink-0 max-w-full inline-flex items-center gap-xs"
                 >
-                  {run.baseCommit
-                    ? t('batch.compare.baseAndTotal', {
-                        commit: run.baseCommit.slice(0, 7),
-                        cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
-                      })
-                    : t('batch.compare.totalOnly', {
-                        cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
-                      })}
+                  <span className="truncate">
+                    {run.baseCommit
+                      ? t('batch.compare.baseAndTotal', {
+                          commit: run.baseCommit.slice(0, 7),
+                          cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
+                        })
+                      : t('batch.compare.totalOnly', {
+                          cost: intl.formatNumber(totalSpent, { style: 'currency', currency: 'USD' }),
+                        })}
+                  </span>
+                  {/* G3: the combined spend is an estimate — same unified badge. */}
+                  <EstimatedBadge />
                 </span>
               )}
               {run.branches.map(branch => {

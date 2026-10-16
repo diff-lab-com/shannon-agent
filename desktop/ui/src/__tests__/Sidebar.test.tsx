@@ -681,9 +681,11 @@ describe('Sidebar — flat nav (2026-09 ZCode-style simplification)', () => {
     expect(screen.queryByRole('button', { name: /Experiments/ })).not.toBeInTheDocument()
   })
 
-  it('Usage and Mission Control are dev-only extras', () => {
+  it('Usage is a regular nav row; Mission Control stays dev-only (G3 §3.2-1)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Usage')).not.toBeInTheDocument()
+    // G3 (2026-10-15 parity review §3.2-1): the usage page left the dev
+    // gate — the stats page is a first-class sidebar entry now.
+    expect(screen.getByText('Usage')).toBeInTheDocument()
     expect(screen.queryByText('Mission Control')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     expect(screen.getByText('Usage')).toBeInTheDocument()

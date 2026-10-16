@@ -624,11 +624,11 @@ export default function ChatInput({
     return Math.min(100, Math.round((total / max) * 100))
   })()
 
-  // S3-6 — pre-send cost estimate. The backend counts with the SAME
-  // estimator the engine/billing stack uses (同源 DoD) and prices through the
-  // billing chain; this side only renders. Advisory by contract: a failed
-  // call silently hides the row (never a toast, never a send gate), an
-  // empty composer hides it too. Debounced — see ESTIMATE_DEBOUNCE_MS.
+  // S3-6 — pre-send estimate. The backend counts with the SAME
+  // estimator the engine/billing stack uses (同源 DoD); this side only
+  // renders. Advisory by contract: a failed call silently hides the row
+  // (never a toast, never a send gate), an empty composer hides it too.
+  // Debounced — see ESTIMATE_DEBOUNCE_MS.
   const [costEstimate, setCostEstimate] = useState<SendCostEstimate | null>(null)
   const attachmentsKey = attachedFiles.join('\n')
   useEffect(() => {
@@ -654,8 +654,8 @@ export default function ChatInput({
   }, [value, attachmentsKey, sessionId])
   // Budget linkage: the projected high end against the session cap. The
   // BudgetBanner keeps owning banner duty — this only tints the estimate row.
-  // Unknown pricing (costHigh null) leaves the projection hidden — no
-  // fabricated figure feeds the tint.
+  // Unknown pricing (costHigh null) leaves the tint off — no fabricated
+  // figure feeds it (G3: the row itself no longer shows $ at all).
   const estimateBudgetRatio =
     costEstimate && costEstimate.costHigh != null && costEstimate.budgetUsd && costEstimate.budgetUsd > 0
       ? (costEstimate.spentUsd + costEstimate.costHigh) / costEstimate.budgetUsd
@@ -1453,14 +1453,18 @@ export default function ChatInput({
           />
         </div>
 
-        {/* S3-6 — pre-send cost estimate (display-only, never a send gate).
-            One quiet line under the draft: projected input tokens + the
-            cost range (floor → max-output ceiling). At ≥80% of the session
-            budget the row turns warning-toned and names the share — copy
-            linkage only; BudgetBanner remains the single banner. Purely
-            visual (no aria-live): per-keystroke announcements would repeat
-            the P2-9 mistake. */}
-        {costEstimate && costEstimate.costLow != null && costEstimate.costHigh != null && (
+        {/* S3-6 / G3 (2026-10-15 parity review §2.3-2) — pre-send estimate
+            (display-only, never a send gate). One quiet line under the draft:
+            「≈ N tokens」— the projected INPUT the user can actually sanity-
+            check before sending (the Chatbox-validated form). The $ range is
+            gone from this row: cost belongs to the audit surfaces, a token
+            count needs no rate table and stays honest for unknown-rate
+            models. At ≥80% of the session budget the row still turns
+            warning-toned and names the share — copy linkage only;
+            BudgetBanner remains the single banner. Purely visual (no
+            aria-live): per-keystroke announcements would repeat the P2-9
+            mistake. */}
+        {costEstimate && (
           <div
             data-testid="send-cost-estimate"
             title={t('chat.input.cost.aria')}
@@ -1469,20 +1473,10 @@ export default function ChatInput({
               estimateBudgetNearing ? 'text-warning' : 'text-on-surface-variant/70',
             )}
           >
-            <span className="material-symbols-outlined icon-sm" aria-hidden="true">payments</span>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">token</span>
             <span>
-              {intl.formatMessage({ id: 'chat.input.cost.range' }, {
-                tokens: new Intl.NumberFormat(intl.locale).format(costEstimate.inputTokens),
-                low: new Intl.NumberFormat(intl.locale, {
-                  style: 'currency',
-                  currency: 'USD',
-                  maximumFractionDigits: costEstimate.costLow < 1 ? 4 : 2,
-                }).format(costEstimate.costLow),
-                high: new Intl.NumberFormat(intl.locale, {
-                  style: 'currency',
-                  currency: 'USD',
-                  maximumFractionDigits: costEstimate.costHigh < 1 ? 4 : 2,
-                }).format(costEstimate.costHigh),
+              {intl.formatMessage({ id: 'chat.input.estimate.tokens' }, {
+                count: new Intl.NumberFormat(intl.locale).format(costEstimate.inputTokens),
               })}
             </span>
             {estimateBudgetNearing && estimateBudgetRatio !== null && (
