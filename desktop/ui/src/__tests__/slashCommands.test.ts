@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   SLASH_COMMANDS,
   filterSlashCommands,
+  findSlashCommand,
   isSlashQuery,
   parseSlashInput,
+  slashArgsToken,
   type SlashCommandContext,
 } from '@/lib/slash/commands'
 import * as api from '@/lib/tauri-api'
@@ -42,10 +44,28 @@ describe('slash registry', () => {
     for (const n of ['context', 'cost', 'diff', 'export', 'new', 'compact']) expect(names).toContain(n)
   })
 
-  it('filterSlashCommands matches prefixes and substrings', () => {
+  it('filterSlashCommands ranks prefix hits above fuzzy hits (H2 P1-1)', () => {
     expect(filterSlashCommands('').map(c => c.name)).toEqual(SLASH_COMMANDS.map(c => c.name))
-    expect(filterSlashCommands('/co').map(c => c.name)).toEqual(['context', 'cost', 'compact'])
-    expect(filterSlashCommands('/task').map(c => c.name)).toEqual(['tasks'])
+    // Prefix band first, shorter names winning ties inside it: cost(4) beats
+    // compact/context(7), and compact < context alphabetically.
+    expect(filterSlashCommands('/co').map(c => c.name)).toEqual(['cost', 'compact', 'context'])
+    expect(filterSlashCommands('/task')).toHaveLength(1)
+    expect(filterSlashCommands('/task')[0].name).toBe('tasks')
+  })
+
+  it('filterSlashCommands falls through to substring and subsequence fuzzy hits', () => {
+    // /cs matches nothing by prefix or substring — the subsequence band
+    // surfaces /cost (c…s, earliest hit) and nothing else with c…s ordered.
+    const cs = filterSlashCommands('/cs').map(c => c.name)
+    expect(cs[0]).toBe('cost')
+    // Fuzzy never invents matches.
+    expect(filterSlashCommands('/zzzzqq')).toEqual([])
+  })
+
+  it('filterSlashCommands resolves aliases with the same scoring', () => {
+    expect(filterSlashCommands('/save').map(c => c.name)).toEqual(['export'])
+    expect(filterSlashCommands('/agents').map(c => c.name)).toEqual(['extensions'])
+    expect(filterSlashCommands('/clear').map(c => c.name)).toEqual(['new'])
   })
 
   it('isSlashQuery is single-token only', () => {
@@ -55,6 +75,26 @@ describe('slash registry', () => {
     expect(isSlashQuery('/context now')).toBe(false)
     expect(isSlashQuery('hello /world')).toBe(false)
     expect(isSlashQuery('')).toBe(false)
+  })
+
+  it('slashArgsToken extracts the command token only from real args state', () => {
+    // Bare /name (even with a trailing space) is still the MENU's state.
+    expect(slashArgsToken('/cost')).toBeNull()
+    expect(slashArgsToken('/cost ')).toBeNull()
+    // Whitespace plus more text → the hint state.
+    expect(slashArgsToken('/cost now')).toBe('cost')
+    expect(slashArgsToken('/context\nsummarize this')).toBe('context')
+    // Pasted paths and plain prompts never trip it.
+    expect(slashArgsToken('/usr/local/bin')).toBeNull()
+    expect(slashArgsToken('plain question')).toBeNull()
+    expect(slashArgsToken('')).toBeNull()
+  })
+
+  it('findSlashCommand matches names and aliases case-insensitively', () => {
+    expect(findSlashCommand('cost')?.name).toBe('cost')
+    expect(findSlashCommand('DIFF')?.name).toBe('diff')
+    expect(findSlashCommand('save')?.name).toBe('export')
+    expect(findSlashCommand('nope')).toBeNull()
   })
 
   it('parseSlashInput resolves bare known commands and aliases', () => {
@@ -112,6 +152,23 @@ describe('slash command execution', () => {
     await parseSlashInput('/memory')!.run(ctx)
     expect(ctx.navigate).toHaveBeenNthCalledWith(1, '/tasks')
     expect(ctx.navigate).toHaveBeenNthCalledWith(2, '/memory')
+  })
+})
+
+describe('/help (H2 P1-3)', () => {
+  it('registers a local-only help command resolvable from bare /name input', () => {
+    expect(parseSlashInput('/help')?.name).toBe('help')
+    expect(parseSlashInput('/help me')).toBeNull()
+    // Autocomplete surfaces it like any static command.
+    expect(filterSlashCommands('/hel').map(c => c.name)).toContain('help')
+  })
+
+  it('runs locally and renders the roster card (never reaches the model)', async () => {
+    const cmd = parseSlashInput('/help')!
+    const ctx = makeCtx()
+    await cmd.run(ctx)
+    expect(ctx.showResult).toHaveBeenCalledWith({ kind: 'help' })
+    expect(api.runDreamPass).not.toHaveBeenCalled()
   })
 })
 

@@ -156,6 +156,16 @@ export async function savePastedImage(dataBase64: string, ext: string): Promise<
   return invoke('save_pasted_image', { dataBase64, ext })
 }
 
+/**
+ * H2 P1-4 — persist a long-text composer paste as a UTF-8 `.txt` in the
+ * SAME pasted-cache directory as `savePastedImage` and return its absolute
+ * path, so the converted paste rides the regular attachment pipeline
+ * (preflight included) instead of being dropped into the composer verbatim.
+ */
+export async function savePastedText(content: string): Promise<string> {
+  return invoke('save_pasted_text', { content })
+}
+
 export async function getConversation(): Promise<ChatMessage[]> {
   return invoke('get_conversation')
 }
