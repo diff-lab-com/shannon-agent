@@ -446,7 +446,11 @@ export default function Tasks() {
                   // G7: text-link — selected accent tab must clear AA on every
                   // theme (bare text-primary fails 4.5:1 on light surfaces in
                   // gruvbox-light / solarized-light / solarized).
-                  selected ? 'border-primary text-link' : 'border-transparent text-on-surface-variant hover:text-on-surface',
+                  // W4 视觉收敛 (design .tab.on::after): the active indicator
+                  // is the aurora gradient underline (aurora-tab utility), not
+                  // a border-primary box — border-color on the base button
+                  // used to leak to all four sides and read as an outline.
+                  selected ? 'border-transparent text-link aurora-tab' : 'border-transparent text-on-surface-variant hover:text-on-surface',
                 )}
               >
                 {t(`tasks.tab.${tabId}`)}

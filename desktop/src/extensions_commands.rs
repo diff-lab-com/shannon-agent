@@ -648,6 +648,82 @@ pub async fn reauthenticate_mcp_server(
     ))
 }
 
+/// De-authenticate an installed remote MCP entry (07-connectors 去认证,
+/// design-parity R3 §4): revoke the authorization's local footprint — the
+/// keyring token block plus the in-file plaintext material — and stop any
+/// pool connection running under it, so the row is back to the
+/// un-authenticated, not-connected state. The entry itself (endpoint,
+/// enabled flag) is preserved; "Re-authenticate" is the way back in.
+///
+/// Error style mirrors `reauthenticate_mcp_server`: an unknown name is
+/// `Server not found: {name}` and a non-remote (stdio) row is refused.
+/// Revoking an entry that holds no credential anymore is an idempotent
+/// success — the end state the user asked for already holds (same
+/// semantics as the keyring delete and the uninstall cleanup).
+#[tauri::command]
+pub async fn deauthenticate_mcp_server(
+    state: tauri::State<'_, crate::commands::AppState>,
+    name: String,
+) -> Result<crate::commands_mcp::McpServerInfo, String> {
+    // Revoke first, reconcile second: a half-failed revoke must never leave
+    // a live connection serving under an (attempted-to-be-)revoked token.
+    deauthenticate_mcp_server_in(None, crate::secret_store::global().as_deref(), &name)?;
+
+    // The credential is gone — stop the handle started under it. Not
+    // running is fine (same tolerance as the disable path).
+    let pool = state.mcp_pool.clone();
+    let _ = pool.stop_server(&name).await;
+
+    let fresh = crate::config::load_mcp_servers()?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| format!("Server vanished after de-authentication: {name}"))?;
+    // Not connected by definition — the connection's credential was just
+    // revoked — and no failure to classify: a stopped row has no pool error
+    // (the old uptime/error belong to the revoked session, not this row).
+    Ok(crate::commands_mcp::mcp_server_info(
+        &fresh, false, None, None,
+    ))
+}
+
+/// Store/path-injected core of [`deauthenticate_mcp_server`] — the load →
+/// validate → revoke chain, testable without a Tauri `AppState`, the user's
+/// HOME, or the real keyring (same seam as `install_mcp_stdio_in`).
+/// Production passes `None` (resolve `~/.shannon/settings.json` + the
+/// process-global secret store). Returns the freshly loaded post-revoke
+/// config row.
+pub(crate) fn deauthenticate_mcp_server_in(
+    settings_path: Option<&std::path::Path>,
+    store: Option<&dyn crate::secret_store::SecretStore>,
+    name: &str,
+) -> Result<crate::config::McpServerConfig, String> {
+    use crate::config;
+
+    let load = |path: Option<&std::path::Path>| -> Result<Vec<config::McpServerConfig>, String> {
+        match path {
+            Some(p) => config::load_mcp_servers_with_store(p, store),
+            None => config::load_mcp_servers(),
+        }
+    };
+    let existing = load(settings_path)?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| format!("Server not found: {name}"))?;
+    if existing.url.is_none() {
+        return Err(format!("'{name}' is not a remote MCP server"));
+    }
+
+    let _cleared = match settings_path {
+        Some(p) => config::clear_mcp_server_credentials_with_store(p, name, store)?,
+        None => config::clear_mcp_server_credentials(name)?,
+    };
+
+    load(settings_path)?
+        .into_iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| format!("Server vanished after de-authentication: {name}"))
+}
+
 /// Remove an installed MCP server entry.
 #[tauri::command]
 pub async fn uninstall_mcp_server(server_name: String) -> Result<(), String> {
@@ -1682,5 +1758,81 @@ mod tests {
             ]
         );
         assert_eq!(json["risk"], "dangerous");
+    }
+
+    // -------------------------------------------------------------------
+    // 去认证 (07-connectors, design-parity R3 §4): deauthenticate_mcp_server
+    // -------------------------------------------------------------------
+
+    use crate::secret_store::{MockSecretStore, SecretStore};
+
+    /// A settings.json with a hub-style OAuth remote row (token block in the
+    /// file — the pre-migration shape) plus a stdio row for the refusal path.
+    fn deauth_settings(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mcpServers":{
+                "linear-oauth":{"type":"http","url":"https://mcp.linear.app/sse","enabled":true,
+                          "headers":{"Authorization":"Bearer legacy"},
+                          "shannonOAuth":{"client_id":"cid","token_url":"https://t/token","refresh_token":"rt","access_token":"at"}},
+                "fs":{"command":"npx","args":[],"env":{},"enabled":true}
+            }}"#,
+        )
+        .unwrap();
+        path
+    }
+
+    /// The honest error style of `reauthenticate_mcp_server` carries over:
+    /// an unknown name is "Server not found", a stdio row is refused (there
+    /// is no authorization to revoke on a process spawn).
+    #[test]
+    fn deauth_errors_for_unknown_and_non_remote_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = deauth_settings(dir.path());
+
+        let err = deauthenticate_mcp_server_in(Some(&path), None, "ghost").unwrap_err();
+        assert_eq!(err, "Server not found: ghost");
+
+        let err = deauthenticate_mcp_server_in(Some(&path), None, "fs").unwrap_err();
+        assert_eq!(err, "'fs' is not a remote MCP server");
+    }
+
+    /// Acceptance: the revoke strips the file's plaintext material AND the
+    /// keyring block, keeps the endpoint/enabled blob, and the returned row
+    /// is the freshly loaded, credential-less state. A second call is an
+    /// idempotent success (the requested end state already holds).
+    #[test]
+    fn deauth_revokes_credentials_and_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = deauth_settings(dir.path());
+        let store = MockSecretStore::new();
+        store
+            .put(
+                &crate::secret_store::mcp_oauth_key("linear-oauth"),
+                r#"{"client_id":"cid","access_token":"keyring-token"}"#,
+            )
+            .unwrap();
+
+        let fresh = deauthenticate_mcp_server_in(Some(&path), Some(&store), "linear-oauth")
+            .expect("de-authentication must succeed");
+        assert!(!fresh.has_auth_headers, "row is no longer an OAuth entry");
+        assert!(fresh.oauth.is_none(), "no credential left to connect with");
+        assert_eq!(fresh.url.as_deref(), Some("https://mcp.linear.app/sse"));
+        assert!(fresh.enabled, "the revoke never flips the user's toggle");
+
+        // Both credential locations are clean.
+        assert!(!store.contains(&crate::secret_store::mcp_oauth_key("linear-oauth")));
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let entry = &root["mcpServers"]["linear-oauth"];
+        assert!(entry.get("shannonOAuth").is_none(), "{entry}");
+        assert!(entry["headers"].get("Authorization").is_none(), "{entry}");
+
+        // Idempotent: revoking again is an Ok, same end state.
+        let again = deauthenticate_mcp_server_in(Some(&path), Some(&store), "linear-oauth")
+            .expect("a second revoke is an idempotent success");
+        assert!(!again.has_auth_headers);
+        assert_eq!(again.url.as_deref(), Some("https://mcp.linear.app/sse"));
     }
 }

@@ -1,6 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '@fontsource-variable/inter';
+// W2 视觉收敛: the design's var(--mono) leads with JetBrains Mono —
+// self-hosted variable font consumed by the --font-mono token in index.css.
+import '@fontsource-variable/jetbrains-mono';
 import '@fontsource-variable/material-symbols-outlined/full.css';
 import { setupMockMode } from '@/lib/mock/setup';
 import { initDensity } from '@/lib/density';

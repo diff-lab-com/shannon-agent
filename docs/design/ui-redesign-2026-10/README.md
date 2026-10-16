@@ -126,7 +126,7 @@
 1. **术语一处一词**(侧栏=页头=面包屑=键位提示):任务/收件箱/连接/指挥台/多方案对比;状态枚举永不直出数据库值。
 2. **侧栏状态徽章体系**:收件箱=待处理数(珊瑚);任务=失败/阻塞(琥珀点);用量=月预算消耗(≥80% 琥珀)。
 3. **导航分区规则(裁决 F-6 = A′)**:侧栏导航区 7 项 —— 对话/文件/任务/收件箱/连接/记忆 + **指挥台(开发模式第 7 项,全站常驻)**;简单模式隐藏指挥台,任务页顶部提供入口卡。指挥台内部的任务容器以副标题「任务在这里并行执行」消歧(裁决 F-15 = 保留「任务」一词)。
-4. **响应式降级(裁决 F-9)**:<1360px 右停靠自动折叠;<1200px 执行模式四档折叠为「当前档 chip」。三要素恒可达,只变形态。
+4. **响应式降级(裁决 F-9;02c D3 二次修正后口径,R2 §7-C2 同句回改)**:<1360px 右停靠自动折叠(图标呼出);composer 控件**各宽度同一形态**——分段控件与 1200px 断点折叠已随 02c D3 移除,<1200px 仅 effort gauge 四点收缩为 icon+档位词。三要素恒可达,只变形态。
 5. **诚实化模式**:不支持/未启用的能力用琥珀虚线徽章明说,禁止「看起来可用」的死入口(R2-P0 家族防复发)。
 6. **性能硬约束**:同屏 backdrop-filter ≤ 4;**弹层打开时右停靠降级为实体色**(`.dock.solid`);玻璃层 `contain: paint`;`@supports not (backdrop-filter)` 降级 95% 实体色;12 套主题只换表面色,材质公式不动。
 7. **可访问性**:文字三阶过 AA(t3 #7E839A ≈4.6:1,t3 仅用于 ≥12px);`:focus-visible` 品牌紫焦点环;reduced-motion 降级保留。
@@ -179,3 +179,55 @@
 3. **顺带② · 06-usage 页头「导出 CSV」核对**:稿内已有(`06-usage.html:146`,与实现 `Usage.tsx` M5a / `usage.export.csv` 一致),未改动。
 
 **截图(收口批)**:02-chat / 03-chat-review / 12-settings / 12-settings-security / 12-settings-general 已重新出图覆盖同名 PNG(06-usage 未改动故不出图)。
+
+---
+
+## 7. 2026-10-15 重绘收口批(设计稿向已落地实现对账)
+
+> 依据 [视觉收敛 R4](../../reviews/2026-10-15-visual-convergence-r4.md) §RD:PR #411(视觉收敛批,2026-10-16 合入,CI 20 checks green)把 W1-W3/T1/T2 与历轮裁决落进了实现;本批把**已在实现里成立的形态**对账回 14 页设计稿——原则不变:**实现是事实标准,设计稿向实现对齐**。逐项对账表见 R4 §RD。
+
+1. **02 / 03 · composer 02c D1-D5 折叠**:主对话页与评审页的 composer 从「权限四档分段 + 推理 chip + @ chip」旧形制,折叠为 02c 提案 ② 的收敛形态——`+` 菜单(附件/临时会话角标)、权限当前档 chip(下拉四档见 02c S4)、用量 38% chip(数字入弹框,02c S3)、模型 chip、effort 可点 gauge chip;`@` 引用经 placeholder 教学,不占常驻位。规格标注句按 02c D3「各宽度同一形态」口径回改(解除 R2 §7-C2 的 F-9 句式张力;<1200px 仅 gauge 四点收缩)。
+2. **02 · 状态条 D5 瘦身**:移除 上下文 38% / 缓存命中 92% / 本会话 $0.087 / 预算余 $19.91 四段数字——02c 裁决 D5 有意移入 SessionUsageDialog(r4 W4 已登记「非缺口」),状态条仅留 目录 + 分支。
+3. **02 · 用户气泡按 R3 §4 收口**(shannon-ui.css `.msg-user`):实体亮紫底 `#e9ddff` / 深紫字 `#23005c`(主题无关 fixed token),`rounded-2xl rounded-tr-none`(16px、右上直角),去描边——与 `MessageBubble.tsx:690` 一致;原「半透明紫底+描边、右下 4px」旧形制撤销。
+4. **02 · 思考头分态补齐**:完成态「已思考 6 秒」维持(T1,时长可推导才显示,缺席 → 素「已思考」);进行中「正在整理升级注意事项…」→「思考中…」(`chat.streaming.thinking`,R3 §4 分态裁决)。
+5. **02c · S3 用量弹框 T2 形态**:「窗口峰值 96k」→「会话峰值 9.6万 / 20万(48%)」(`chat.input.usage.sessionPeak.pct`,peak_used+窗口预算同在才渲染百分比,皆缺整行隐藏);预算行改「$0.087 / $19.91 预算余」+「设置会话预算…」入口(花费/预算余口径,W7)。
+6. **06 · 上下文峰值 KPI 对齐 T2**:值 = 峰值已用 token(跨会话取最大,「7.6万」),副行 = 「{持有会话}({峰值/窗口}%)」;原「61% · 200k 窗口」旧口径撤销——绝不拿窗口当用量。
+7. **11 · B1/B2 注记与文案**:双栏预览卡与提取徽章此前已在稿内;补「≥1280px 双栏(1fr + 320px 预览卡,格内操作回撤进卡)· <1280px 降级单栏」规格注记(`FilesPage.tsx:69` WIDE_QUERY);丢失徽章文案对齐 `office.files.missing`「原文件已移动或删除」。
+8. **12-appearance · tokyo-night 色板紫化(W3)**:主题卡 swatch accent `#7aa2f7` → `#8b7cf7`(主色族已紫化,`themes.css:80`);`#7aa2f7` 仅存于 xterm ANSI 终端蓝,不代表主题 accent。
+9. **13 · companion 文案微差收口(R3 §4 遗留)**:「发到主窗口」→「发送」;底部契约句 →「只写入主窗口草稿,不自动发送」(`companion.footer.hint`);置顶图标钮 →「窗口置顶」勾选项;原「# 会话」目标 chip 实现不存在,删除,改为行内状态「已发送到主窗口」(回执/错误/空 至多一条)。
+10. **shannon-ui.css · 顺笔注记**:`.ambient` 加注 W1 已落地与浅色主题 50% alpha 属应用侧细节;`--mono`(JetBrains Mono)与品牌紫 `#8b7cf7` 核对不变。
+
+**刻意不改**(登记不回改):03 主区整宽评审形态与「已丢失卡整卡虚线」稿内已画(app 侧仍挂账 R3 §4,见 R4 §RD);11 提取徽章按已落地形态只画在预览卡(格行不带徽章);05 stat 大卡 / 06 KPI 横纵解剖 / 10 瀑布结构 / 12-models 供应商卡等 r4 W4 已登记的呈现层差异维持设计稿原样;07 卡足安全话术措辞、安全白皮书按钮注记、06「每日成本」首屏口径三项 R3 顺笔项不在本批批准清单,留待下批。
+
+**截图**:02-chat / 03-chat-review / 02c-chat-composer-tidy / 06-usage / 11-files / 12-settings-appearance / 13-companion 已用 `assets/shot.mjs`(1440×900 @2x,playwright 取自 desktop/ui)重新出图;其中 02c 的改动(S3 弹框)位于首屏折叠线以下,视口截图像素不变,文件字节一致故 git 无 diff。
+
+---
+
+## 8. 2026-10-15 收尾顺笔批(R3 §4 设计稿侧三项 + r4 §E.3 观察)
+
+> 依据 [R3 §4「设计稿侧(下次重绘顺笔)」清单](../../reviews/2026-10-15-design-parity-r3.md)与 [r4 §RD.2 留待下批](../../reviews/2026-10-15-visual-convergence-r4.md)的挂账项;出站防线实时读态已由 PR #413 落地(r4 §E.0),本批把设计稿对齐已落地的诚实语义。原则不变:**实现是事实标准,设计稿向实现对齐**。
+
+1. **07 · 卡足措辞诚实化**:8 张目录卡足「注入扫描 ✓ 已签名 ✓」→「安装时扫描 · 发布者自声明」(= `extensions.featured.securityBadge`,`Featured.tsx` SecurityBadge:图标 ok 色 + 正文 t2)——扫描是安装期对目录/README 的建议性静态扫描(securityBadgeScanHelp)、「已签名」是清单自声明非密码学校验(securityBadgePublisherHelp),静态双勾暗示运行时防护,双重失真。底部安全横幅文案同步对齐 `extensions.hub.securityBanner`「目录内所有条目安装前执行本机提示注入扫描;凭据只写入本机,永不出机。」(批次 2 诚实化已把「签名校验」从横幅撤下;凭据句对齐「密钥永不出机」叙事)。
+2. **07 · 「去授权」文案**:Slack / Claude 远程连接两张市场卡主操作「去授权」→「添加」(= `Featured.tsx` F-11 诚实契约:后端无 connected/needs-auth API,市场卡不画认证态;未安装 OAuth 厂商只画「添加」——安装即授权,已装 → 「管理」);D2/D8 页内注记同步改写(F-11 表述由「添加/去授权」订正为「只画添加」)。去认证/重新认证仍只在「已安装 · 管理行」。
+3. **07 · 安全白皮书按钮注记**:横幅按钮为设计先行元素,实现刻意不做——无白皮书可指(`Extensions.tsx` M1 注记 "intentionally absent — there is no whitepaper to point at");稿内保留按钮作安全叙事视觉锚,页内注记在案,白皮书产出后再接线(届时稿随落地同步)。
+4. **06 · 「每日成本」首屏口径**:图表卡对齐已落地首屏形态——标题「每日 token · 近 7 天」+ 卡头 Token/成本切换段控(`usage.chart.mode.tokens/cost`;`Usage.tsx:335` 默认 tokens,柱状堆叠输入/输出);成本为切换口径(`by_day cost_usd` 单系列,切换后标题「每日成本」= `usage.chart.byDay.costTitle`);旧「每日成本」单口径标题撤销。
+5. **02 · 侧栏「开发模式」mode-pill 移除**(r4 §E.3 观察顺笔):应用侧栏模型行无模式指示物(`Sidebar.tsx` 模型徽章 = 模型名 + 大写 provider),词汇亦非权限命名 v2;用量 meter(`SidebarUsageMeter`)与模型徽章均真实在位,保留。
+6. **F-9 同族规格句补齐(R2 §7-C2 收尾)**:C2 点名的「README §3-4 同句」按 02c D3「各宽度同一形态」口径回改(§3-4)。页面侧逐一核实:F-9 两款行为在 app 侧仅 /chat 挂载(<1360px 右停靠折叠 = `RightDock.tsx:73` `F9_COLLAPSE_BREAKPOINT_PX`,仅 `Chat.tsx` 挂 RightDock;composer 折叠 = `ChatInput`,仅 /chat 使用)——02/03 已持规格句;01 的 hero 输入卡是独立简形提交(草稿转入 /chat),非 ChatInput;09/10 的稿内 dock 为登记的呈现差异(E.1),app 侧无 RightDock;11 已持 ≥1280 WIDE_QUERY 句。**无其余合资格页面,不画未落地行为。**
+
+**刻意不改**(登记):02 之外 18 页侧栏同款「开发模式」mode-pill(03/04/04b/05/06/07/08/09/10/11/12×7)——R3/r4 记录仅点名 02,同族清批须整批重出截图,留待下批顺笔;07 卡 1「已连接」状态章(GitHub)属 F-11 同族呈现问题但无登记记录,不顺笔;11「已丢失卡整卡虚线」为 R3 §4.1 挂账的 app 侧待办、稿内已画目标形态(RD.1-8 / §7 已登记刻意不改),核实实现仍为灰态+opacity(FilesPage `data-missing` 行 opacity-50 + 琥珀虚线徽章),设计不动。12-settings-security「出站防线」卡稿仍画模式 seg/开关——与 r4 §S1 裁决 B 及 E.0 读态实现均不符,属新发现残留,超本批授权,登记待下批(需按 E.0 四态诚实渲染重画:模式徽章 + Findings 计数 + 「安装时校验 · 自声明语义」注记,无开关)。
+
+**截图**:02-chat / 06-usage / 07-connectors 已用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。
+
+---
+
+## 9. 2026-10-15 backlog 顺笔批(侧栏 mode-pill 同族清批 + 出站防线读态重绘 + GitHub「已连接」章撤除)
+
+> 落实 §8「刻意不改」登记的三项挂账:同族 mode-pill 清批(r4 §E.3 观察登记)、07 GitHub「已连接」章(F-11 同族)、12-settings-security「出站防线」卡(r4 §S1 裁决 B + PR #413 §E.0 shipped 读态)。原则不变:**实现是事实标准,设计稿向实现对齐**。
+
+1. **A2 · 侧栏「开发模式」mode-pill 同族清批(17 页 17 枚)**:`grep -ln "mode-pill"` 精确枚举后,陈旧 pill 实为 17 页——03 / 04 / 04b / 05 / 06 / 07 / 08 / 09 / 10 / 11 / 12-settings ×7(§8 记「18 页」系把 02-chat 计入;其匹配仅为 T2 批留下的页内注记文字,pill 已于该批移除;02c 两处匹配为 `approval-mode-pill`(composer 权限档 chip,testid/IPC 真实在位)文案,均不动)。逐页删除侧栏模型行 `<span class="mode-pill">开发模式</span>`,用量 meter(`SidebarUsageMeter`)与模型徽章真实在位照旧保留;rationale 注记落在首触页 03-chat-review(同 02-chat 先例,引 r4 §E.3)。
+2. **A3 · 12-settings-security「出站防线」卡按 shipped 读态重绘(PR #413 / r4 §E.0)**:撤除全部虚构控件——「审计/改写/关闭」模式段控与两枚 switch(应用侧无任何模式 toggle,S1 裁决 B 刻意不做;E.0 刻意不做项同),改画只读读态行:出站密钥扫描 = 实心徽章「改写中 · 本次运行发现:4」、提示注入扫描 =「审计中 · 本次运行发现:2」(shannon-ui `.st.vio`;计数为 findings 非 blocked,自进程启动起累计),签名校验行 = 中性能力注记「安装时校验 · 自声明语义」(静态,非 pending 非实时),卡头加幽灵刷新钮(title「刷新防线状态」),卡首 desc 与卡尾 statusLive 脚注逐字镜像 `settings.permissions.outbound.desc` / `.statusLive`(zh-CN;auditHits 冒号按源串保留半角)。琥珀虚线「读取中…/状态未知」与「未启用」中性态为应用侧真实形态(PermissionsSettings.tsx `renderGuardBadge` 四态),静态帧取默认点亮快照(redact/4 + audit/2,同 E.0 mock 口径),在途/失败态不画入 still——由卡头注记登记。页内 rationale 注记在案。
+3. **A4 · 07 GitHub「已连接」章撤除(F-11 对账)**:应用核实——市场卡唯一逐卡状态位 = 已安装与否:`Featured.tsx:43-46/314-321` F-11 注记「后端无 connected/needs-auth API,卡面从不声称 已连接/去认证」,未装 → 「添加」、已装 → 「管理」;`extensions.featured.connected`「已连接」仅作安装/连接成功后的 toast 文案,非卡面常驻章;数据源目录卡(`DataSources.tsx` AdapterCard)亦只画 已验证/查询即将上线,无连接态。裁定:**市场卡无连接态 → 撤章**(「管理」按钮保留 = 已安装态唯一合法展示,与 Notion/PostgreSQL 未装卡「添加」对照);卡上 D2「已授权态示范:已连接 · 管理」旧注一并改写(D2 形态已被 D8 + R3 §4 取代)。
+
+**刻意不改**(登记):07 Slack / Claude 远程连接 两张市场卡「未连接」mute 章(另 code-reviewer「已安装」、本地 Ollama「未运行」章同属市场卡自绘状态,app 侧 Featured 卡无此物)——同 F-11 族(app 侧未装市场卡不画任何状态章),本批授权仅点名 GitHub 卡,留待下批顺笔;07「已安装 · 管理行」Slack 行状态章「已连接」——该区 app 侧真实存在状态章(`McpServers.tsx` statusBadge:`srv.connected` → `extensions.mcp.statusOnline`「在线」、needs_auth →「登录已过期」、已停用/不可达/服务器错误各态),稿内画状态章方向正确,仅措辞「已连接」与 shipped「在线」有差,超本批授权留待顺笔;其余未动。
+
+**截图**:本批改动 17 页(§9-1 的 17 页含 07 与 12-settings-security)全部用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。

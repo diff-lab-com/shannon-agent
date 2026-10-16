@@ -22,7 +22,9 @@ export default function StatCard({ label, value, icon, hint, ...rest }: StatCard
     >
       <span className="material-symbols-outlined text-primary icon-lg">{icon}</span>
       <div className="min-w-0">
-        <div className="font-headline-md text-headline-sm font-bold text-on-surface leading-none">{value}</div>
+        {/* W4 视觉收敛 (design `.stat .v`): tabular numerals on stat values —
+            the KPI band aligns digit columns across cards. */}
+        <div className="font-headline-md text-headline-sm font-bold text-on-surface leading-none tabular-nums">{value}</div>
         <div className="font-label-xs text-on-surface-variant mt-[2px]">{label}</div>
       </div>
       {hint && (

@@ -85,7 +85,12 @@ pub fn extract_mcpb(
         let mut entry = archive
             .by_index(i)
             .map_err(|e| InstallError::Format(format!("zip entry {i}: {e}")))?;
-        let entry_name = entry.name().to_string();
+        // zip 9: name() is encoding-aware and fallible — undecodable entry
+        // names reject the bundle on the same Format channel as by_index.
+        let entry_name = entry
+            .name()
+            .map_err(|e| InstallError::Format(format!("zip entry {i}: name encoding: {e}")))?
+            .into_owned();
 
         // Defense against path traversal — entry names like `../../etc/passwd`.
         let safe_path = sanitize_zip_path(&entry_name, &server_root)?;
@@ -118,7 +123,11 @@ fn parse_manifest_from_zip(bytes: &[u8]) -> Result<McpbManifest, InstallError> {
         let entry = archive
             .by_index(i)
             .map_err(|e| InstallError::Format(format!("zip entry {i}: {e}")))?;
-        let name = entry.name();
+        // zip 9: fallible name() — an undecodable entry simply can't be the
+        // manifest, so skip it rather than failing the whole scan.
+        let Ok(name) = entry.name() else {
+            continue;
+        };
         if name == "manifest.json" || name.ends_with("/manifest.json") {
             manifest_idx = Some(i);
             break;
@@ -169,7 +178,8 @@ fn read_readme_from_zip(bytes: &[u8]) -> Option<String> {
     let mut archive = zip::ZipArchive::new(cursor).ok()?;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).ok()?;
-        let name = entry.name();
+        // zip 9: fallible name() — aborts the lookup like by_index above.
+        let name = entry.name().ok()?;
         if name.ends_with('/') {
             continue; // directory entry
         }

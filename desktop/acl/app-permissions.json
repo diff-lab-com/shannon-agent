@@ -803,6 +803,15 @@
       }
     },
     {
+      "identifier": "allow-get-outbound-defense-status",
+      "description": "Enables the get_outbound_defense_status command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "get_outbound_defense_status"
+        ]
+      }
+    },
+    {
       "identifier": "allow-get-power-capabilities",
       "description": "Enables the get_power_capabilities command without any pre-configured scope.",
       "commands": {
@@ -2099,6 +2108,15 @@
       }
     },
     {
+      "identifier": "allow-deauthenticate-mcp-server",
+      "description": "Enables the deauthenticate_mcp_server command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "deauthenticate_mcp_server"
+        ]
+      }
+    },
+    {
       "identifier": "allow-record-agent-message",
       "description": "Enables the record_agent_message command without any pre-configured scope.",
       "commands": {
@@ -3120,6 +3138,7 @@
         "allow-fetch-provider-models",
         "allow-get-config",
         "allow-get-launch-on-login",
+        "allow-get-outbound-defense-status",
         "allow-get-provider-status",
         "allow-list-provider-keys",
         "allow-list-provider-profiles",
@@ -3337,6 +3356,7 @@
         "allow-read-data-source-config",
         "allow-remove-mcp-server",
         "allow-reauthenticate-mcp-server",
+        "allow-deauthenticate-mcp-server",
         "allow-report-catalog-entry",
         "allow-restart-mcp-server",
         "allow-scan-prompt-injection",

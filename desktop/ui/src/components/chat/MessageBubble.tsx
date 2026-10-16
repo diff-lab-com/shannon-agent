@@ -70,6 +70,14 @@ interface MessageBubbleProps {
    *  trace timeline — the authoritative durations for historical messages
    *  (live tool calls carry their own client-measured duration_ms). */
   durationLookup?: Map<string, number>
+  /** R3 §4 遗留项: per-turn cost windows from the SAME trace-timeline read
+   *  as durationLookup (MessageArea derives both from one IPC). Absent in
+   *  isolated renders — the cost segment then simply never renders. */
+  costWindows?: TurnCostWindow[]
+  /** T1 (R3 §4.1 Reasoning 时长): per-turn reasoning spans from the same
+   *  trace-timeline read as costWindows. Absent in isolated renders — the
+   *  committed thinking header then keeps the duration-less 「已思考」. */
+  reasoningWindows?: TurnReasoningWindow[]
   /** B1 §4-7: present only on the LAST assistant message of the session —
    *  its presence is the regenerate button's visibility condition. */
   regenerate?: RegeneratePayload | null
@@ -98,8 +106,8 @@ function isImagePath(path: string): boolean {
  * after the header timestamp on assistant bubbles — the design's
  * 「… · 12 个工具调用 · 2.4 分钟」tail. Every field is DERIVED from data the
  * bubble already holds; the renderer drops any field that could not be
- * derived (honesty contract: never a 0, never a placeholder). Turn-level
- * cost is deliberately absent — see the turnMeta derivation comment.
+ * derived (honesty contract: never a 0, never a placeholder). Cost rides in
+ * via the R3 §4 遗留项 cost-window lookup — see TurnCostWindow.
  */
 export interface TurnMeta {
   /** Tool calls across the WHOLE turn (summed over the turn's messages). */
@@ -107,6 +115,136 @@ export interface TurnMeta {
   /** lastTs − firstTs across the turn's messages (ms); null when the
    *  timestamps don't yield a positive, finite span. */
   durationMs: number | null
+  /** R3 §4 遗留项: the turn's TimelineTurn.cost_usd, matched by timestamp
+   *  window against the session's trace timeline (MessageArea's lookup).
+   *  null when no window overlaps this turn — the segment then does not
+   *  render (absent/0 costs never produce a window upstream). */
+  costUsd: number | null
+  /** T1 (R3 §4.1 Reasoning 时长): the turn's TimelineTurn
+   *  .reasoning_duration_ms, matched by the same timestamp-window overlap as
+   *  costUsd. Feeds the committed thinking block's 「已思考 N 秒」 header
+   *  (NOT this header's meta tail); null when no reasoning window overlaps —
+   *  the chip then keeps the duration-less 「已思考」 (honesty contract). */
+  reasoningMs: number | null
+}
+
+/**
+ * R3 §4 遗留项: one turn's spendable window from the trace timeline —
+ * TimelineTurn.start/end_ts_ns (epoch NS) narrowed to epoch MS so it can be
+ * matched against ChatMessage timestamps directly. Built ONLY for turns whose
+ * cost_usd is present and > 0: a missing or zero cost produces NO window, so
+ * the bubble can never render a fabricated "$0.000" segment.
+ */
+export interface TurnCostWindow {
+  startMs: number
+  endMs: number
+  costUsd: number
+}
+
+/**
+ * Match a turn's message window [firstTs, lastTs] (ms) against the timeline's
+ * cost windows. OVERLAP — not containment — is the test on purpose: the
+ * optimistic user message and the backend's turn/start event are written a
+ * few ms apart, so a strict containment would silently drop real matches.
+ * Why windows instead of turn NUMBERS: the engine's envelope turn counter
+ * (session_log/writer.rs) is monotonic across /rewind — after truncating the
+ * L0 log the next send gets a number ABOVE the pre-rewind count while the
+ * conversation only holds fewer user turns, so "conversation index + 1" would
+ * mis-attribute another turn's spend. Timestamps cannot lie across a rewind.
+ * First overlap wins (timeline turns are sequential, non-overlapping).
+ */
+export function matchTurnCost(windows: TurnCostWindow[] | undefined | null, firstTs: number, lastTs: number): number | null {
+  if (!Array.isArray(windows)) return null
+  for (const w of windows) {
+    if (w.startMs <= lastTs && w.endMs >= firstTs) return w.costUsd
+  }
+  return null
+}
+
+/**
+ * T1 (R3 §4.1 Reasoning 时长): one turn's projected reasoning span from the
+ * SAME trace-timeline read as TurnCostWindow — TimelineTurn
+ * .reasoning_duration_ms (first→last thinking-flagged `assistant/chunk` ts,
+ * backend-folded). Built ONLY for turns where the backend projected a value:
+ * a turn with no thinking events carries NO window, so the bubble's
+ * committed 「已思考」 header can never invent a duration (honesty contract).
+ */
+export interface TurnReasoningWindow {
+  startMs: number
+  endMs: number
+  reasoningMs: number
+}
+
+/**
+ * T1: the same overlap (not containment) match matchTurnCost uses — first
+ * window wins (timeline turns are sequential, non-overlapping).
+ */
+export function matchTurnReasoning(windows: TurnReasoningWindow[] | undefined | null, firstTs: number, lastTs: number): number | null {
+  if (!Array.isArray(windows)) return null
+  for (const w of windows) {
+    if (w.startMs <= lastTs && w.endMs >= firstTs) return w.reasoningMs
+  }
+  return null
+}
+
+/** Turn cost → the design's 「$0.087」 shape. Sub-cent and non-finite inputs
+ *  yield null — OMITTED, never shown as $0.000 (honesty contract). Under a
+ *  dollar the design's three decimals are kept (cents carry the signal at
+ *  turn granularity); at or above, the usual currency rendering. The locale
+ *  is pinned to en-US on purpose: the design figure is a literal "$0.087",
+ *  and a locale-default formatter renders "US$…"/"0,08 …" elsewhere — the
+ *  segment is a design constant, not a localized sentence. */
+const COST_SUB_DOLLAR_FORMAT = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 3,
+  maximumFractionDigits: 3,
+})
+const COST_FORMAT = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+export function turnCostValue(usd: number): string | null {
+  if (!Number.isFinite(usd) || usd <= 0) return null
+  return (usd < 1 ? COST_SUB_DOLLAR_FORMAT : COST_FORMAT).format(usd)
+}
+
+/**
+ * R3 §4 遗留项: reasoning-duration derivation for a COMPLETED thinking block
+ * — 「已思考 N 秒」 from the reasoning block's own start/end timestamps.
+ * DATA-SOURCE STATUS (2026-10-15): the L0 log DOES timestamp every thinking
+ * delta (assistant/chunk events carry ts_ns + a thinking flag,
+ * shannon-types/session_event.rs), but no per-block wire field reaches this
+ * bubble — ChatMessage.thinking is a bare string (types/index.ts:160) and
+ * the live QUERY_THINKING payload carries query_id + content only
+ * (types/index.ts:41). With no inputs the helper returns null and the header
+ * falls back to the duration-less 「已思考」 (chat.streaming.thought) — never
+ * an invented 0.
+ *
+ * T1 (same day): the TURN-LEVEL projection DID land —
+ * TimelineTurn.reasoning_duration_ms (the backend fold of the turn's
+ * thinking-chunk ts span) rides the trace-timeline IPC as TurnReasoningWindows.
+ * reasoningDurationFromMs consumes it below; this helper stays for a future
+ * per-block field (the seconds math is shared).
+ */
+export function reasoningDurationValue(startMs?: number | null, endMs?: number | null): { seconds: number } | null {
+  if (startMs == null || endMs == null) return null
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null
+  const sec = Math.round((endMs - startMs) / 1000)
+  if (sec < 1) return null
+  return { seconds: sec }
+}
+
+/**
+ * T1 (R3 §4.1): the landed projection field's consumer — a turn's
+ * reasoning_duration_ms → 「已思考 N 秒」. Same displayed-granularity
+ * discipline as reasoningDurationValue: absent/invalid/non-positive ms and
+ * sub-second spans (rounding below 1s) yield null — the header falls back
+ * to the duration-less 「已思考」, never shows a 0.
+ */
+export function reasoningDurationFromMs(ms?: number | null): { seconds: number } | null {
+  if (ms == null || !Number.isFinite(ms) || ms <= 0) return null
+  const sec = Math.round(ms / 1000)
+  if (sec < 1) return null
+  return { seconds: sec }
 }
 
 /** Turn duration → the design's 「N 秒 / N 分钟」 granularity. Sub-second
@@ -125,6 +263,7 @@ function MessageHeader({
   timestamp,
   isBranch,
   turnMeta,
+  done,
 }: {
   role: 'user' | 'assistant' | 'tool'
   timestamp?: number
@@ -132,6 +271,15 @@ function MessageHeader({
   /** 补1: aggregate meta for assistant turns — null/undefined renders no
    *  meta segments (user/tool headers never receive one). */
   turnMeta?: TurnMeta | null
+  /** R3 §4 遗留项: a SUCCESSFULLY completed assistant turn (never
+   *  interrupted). Renders the design's neutral 「完成」 chip at the head of
+   *  the meta tail (02 页 msg-meta 首段 `st ok 完成`, 读作中性而非绿色 —
+   *  同款克制见 ToolCallDisplay W10). Failed/stopped turns keep their
+   *  bespoke bubble-foot markers and get NO chip here (不重复叠加). Lives
+   *  OUTSIDE the turn-meta group on purpose: a bare successful turn with no
+   *  derivable tools/duration/cost still earns the verdict chip, while the
+   *  group keeps its own all-or-nothing honesty contract. */
+  done?: boolean
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, number | string>) => intl.formatMessage({ id }, values)
@@ -144,7 +292,10 @@ function MessageHeader({
   // segment renders only when its value was actually derived; with neither
   // derivable the whole tail (and its separator) stays unrendered. Placement
   // note: this line lives in the header row, the ActionToolbar is a separate
-  // flow row at the bubble's foot — one can never cover the other.
+  // flow row at the bubble's foot — one can never cover the other. flex-wrap
+  // keeps a long tail (chip + tools + cost + duration) inside the bubble
+  // column on narrow panes instead of squeezing the row.
+  const showDone = role === 'assistant' && done === true
   const toolsText = turnMeta != null && turnMeta.toolCount > 0
     ? t('chat.message.turnMeta.toolCalls', { count: turnMeta.toolCount })
     : null
@@ -154,11 +305,18 @@ function MessageHeader({
     : 'seconds' in duration
       ? t('chat.message.turnMeta.durationSec', { seconds: duration.seconds })
       : t('chat.message.turnMeta.durationMin', { minutes: duration.minutes })
+  // R3 §4 遗留项: the cost segment rides AFTER the duration (追加语义);
+  // turnCostValue drops absent/0/non-finite costs upstream.
+  const costValue = turnMeta?.costUsd != null ? turnCostValue(turnMeta.costUsd) : null
+  const costText = costValue != null ? t('chat.message.turnMeta.cost', { cost: costValue }) : null
+  const hasGroup = toolsText != null || durationText != null || costText != null
   // P2-17 (B1): the whole header used to be aria-hidden, leaving screen
   // readers unable to tell who spoke or when. The role label and <time> are
   // real content now; only the decorative separators and icon stay hidden.
+  // The 完成 chip is likewise real content (its own text reads fine to AT);
+  // the group's aria-label stays the numeric aggregate.
   return (
-    <div className="flex items-center gap-xs text-label-xs text-on-surface-variant mb-xs">
+    <div className="flex flex-wrap items-center gap-xs text-label-xs text-on-surface-variant mb-xs">
       <span className="font-label-xs uppercase tracking-wide font-medium">{label}</span>
       {isBranch && (
         <>
@@ -173,22 +331,39 @@ function MessageHeader({
           <time dateTime={new Date(timestamp!).toISOString()} className="font-mono">{time}</time>
         </>
       )}
-      {(toolsText != null || durationText != null) && (
+      {(showDone || hasGroup) && (
         <>
           <span aria-hidden="true">·</span>
-          {/* a11y: the visual fragments are decorative; AT gets ONE coherent
-              sentence via the group's aria-label (汇总), not two bare
-              fragments ("2.4 分钟" alone has no antecedent). */}
-          <span
-            role="group"
-            aria-label={t('chat.message.turnMeta.aria', { detail: [toolsText, durationText].filter(Boolean).join(' · ') })}
-            data-testid="turn-meta"
-            className="flex items-center gap-xs text-on-surface-variant"
-          >
-            {toolsText != null && <span aria-hidden="true">{toolsText}</span>}
-            {toolsText != null && durationText != null && <span aria-hidden="true">·</span>}
-            {durationText != null && <span aria-hidden="true" className="tabular-nums">{durationText}</span>}
-          </span>
+          {showDone && (
+            // a11y: the icon is decorative; the 完成 text is the content.
+            <span
+              data-testid="turn-meta-done"
+              className="flex items-center gap-[2px] shrink-0 px-xs py-[1px] rounded-sm bg-surface-container-high text-on-surface-variant font-label-xs"
+            >
+              <span className="material-symbols-outlined icon-xs" aria-hidden="true">check_circle</span>
+              {t('chat.message.turnMeta.done')}
+            </span>
+          )}
+          {hasGroup && (
+            <>
+              {showDone && <span aria-hidden="true">·</span>}
+              {/* a11y: the visual fragments are decorative; AT gets ONE coherent
+                  sentence via the group's aria-label (汇总), not two bare
+                  fragments ("2.4 分钟" alone has no antecedent). */}
+              <span
+                role="group"
+                aria-label={t('chat.message.turnMeta.aria', { detail: [toolsText, durationText, costText].filter(Boolean).join(' · ') })}
+                data-testid="turn-meta"
+                className="flex items-center gap-xs text-on-surface-variant min-w-0"
+              >
+                {toolsText != null && <span aria-hidden="true">{toolsText}</span>}
+                {toolsText != null && durationText != null && <span aria-hidden="true">·</span>}
+                {durationText != null && <span aria-hidden="true" className="tabular-nums">{durationText}</span>}
+                {durationText != null && costText != null && <span aria-hidden="true">·</span>}
+                {costText != null && <span aria-hidden="true" className="font-mono tabular-nums">{costText}</span>}
+              </span>
+            </>
+          )}
         </>
       )}
     </div>
@@ -325,7 +500,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti, rewindTurnIndex, onRewind, durationLookup, costWindows, reasoningWindows, regenerate, onEditMessage, searchFlash, isFirstAssistantOfTurn }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
@@ -447,14 +622,17 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   // (no/invalid timestamps, zero-width span, zero calls) is simply absent
   // from TurnMeta — never a 0, never a placeholder.
   //
-  // Cost is intentionally NOT part of this aggregate: the only turn-level
-  // cost on the wire is TimelineTurn.cost_usd (trace_timeline IPC), which is
-  // projected into the bubbles as tool durations only (MessageArea's
-  // durationLookup). Neither ChatMessage nor the context's usage readout
-  // (a live, per-frame composer-footer payload) attributes cost to a
-  // committed turn — surfacing the design's "$0.087" segment would need a
-  // new per-bubble IPC or a MessageArea-side lookup extension, both out of
-  // scope here. Absent data, the segment does not render.
+  // R3 §4 遗留项 — turn cost IS now part of the aggregate: MessageArea
+  // projects TimelineTurn.cost_usd (trace_timeline IPC, the same read as the
+  // tool-duration lookup) into TurnCostWindows keyed by TIME, and this memo
+  // matches its turn window against them (matchTurnCost — timestamp overlap,
+  // rewind-proof; the engine's envelope turn numbers are NOT usable after a
+  // rewind). Absent/0 costs never produce a window upstream, so a turn
+  // without spend data matches nothing and the segment stays unrendered.
+  // Degradation note: reloaded history carries load-time stamps
+  // (commands_sessions.rs chrono_timestamp per message), so its zero-width
+  // windows match nothing — the same honest degradation the duration segment
+  // already shows on reloaded history.
   const turnMeta = useMemo<TurnMeta | null>(() => {
     if (isUser || message.role === 'tool') return null
     // Only trust the context list when this bubble IS that list's row
@@ -482,9 +660,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       if (typeof m.timestamp === 'number' && Number.isFinite(m.timestamp) && m.timestamp > lastTs) lastTs = m.timestamp
     }
     const durationMs = firstTs != null && lastTs > firstTs ? lastTs - firstTs : null
-    if (toolCount === 0 && durationMs == null) return null
-    return { toolCount, durationMs }
-  }, [isUser, message, messageIndex, listMessages])
+    const costUsd = firstTs != null
+      ? matchTurnCost(costWindows, firstTs, Math.max(lastTs, firstTs))
+      : null
+    // T1 (R3 §4.1 Reasoning 时长): the SAME window match as the cost leg,
+    // against reasoningWindows from the same timeline read. Feeds the
+    // committed thinking block's header, not this header's meta tail — the
+    // field rides on TurnMeta purely so both derivations share one span scan.
+    const reasoningMs = firstTs != null
+      ? matchTurnReasoning(reasoningWindows, firstTs, Math.max(lastTs, firstTs))
+      : null
+    if (toolCount === 0 && durationMs == null && costUsd == null && reasoningMs == null) return null
+    return { toolCount, durationMs, costUsd, reasoningMs }
+  }, [isUser, message, messageIndex, listMessages, costWindows, reasoningWindows])
 
   if (isUser) {
     return (
@@ -597,11 +785,26 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     isFirstAssistantOfTurn === true,
   )
 
+  // R3 §4 遗留项 (Reasoning 头分态): a COMMITTED block belongs to a settled
+  // turn, so the live 「思考中…」 label (chat.streaming.thinking —
+  // StreamingResponse only) would lie here. Completed header: 「已思考 N 秒」
+  // when the turn's reasoning duration is derivable, 「已思考」 otherwise
+  // (never an invented duration).
+  // T1 (2026-10-15): the turn-level projection DID land —
+  // TimelineTurn.reasoning_duration_ms rides the trace-timeline IPC into
+  // turnMeta.reasoningMs (timestamp-window match, the same one as the cost
+  // leg); reasoningDurationFromMs refuses absent/sub-second values so the
+  // header shows the duration ONLY when the backend projected one.
+  const reasoningDur = reasoningDurationFromMs(turnMeta?.reasoningMs) ?? reasoningDurationValue()
+  const reasoningHeader = reasoningDur != null
+    ? intl.formatMessage({ id: 'chat.streaming.thoughtSeconds' }, { seconds: reasoningDur.seconds })
+    : intl.formatMessage({ id: 'chat.streaming.thought' })
+
   return (
     <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
       <MessageContent className="space-y-md flex-1">
-        <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} turnMeta={isTool ? null : turnMeta} />
+        <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} turnMeta={isTool ? null : turnMeta} done={isTool ? undefined : message.interrupted !== true} />
         {/* W3-4: citation chips for the memories this turn's prompt carried —
             hidden entirely for a bypass / zero-injection turn (empty list). */}
         {!isTool && <MemoryCitationChips memories={message.injected_memories} />}
@@ -609,7 +812,10 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             live stream's placement (StreamingResponse renders it as the
             first block of the content column). */}
         {showThinking && (
-          <Reasoning header={t('chat.streaming.thinking')} defaultOpen={false}>
+          // R3 §4 遗留项 (Reasoning 头分态): committed header is the COMPLETED
+          // state — see reasoningHeader above; the live 「思考中…」 stays in
+          // StreamingResponse.
+          <Reasoning header={reasoningHeader} defaultOpen={false}>
             <p className="whitespace-pre-wrap">{message.thinking}</p>
           </Reasoning>
         )}

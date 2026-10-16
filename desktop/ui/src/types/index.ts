@@ -307,6 +307,12 @@ export interface SessionInfo {
    *  show the window a reopened session peaked at. Absent when no logged
    *  turn knew its window — the UI hides the chip (honesty contract). */
   max_context_tokens?: number
+  /** 峰值已用 (R3 §4.1 T2): the session's peak context USED tokens — the
+   *  L0 session-index running max of `input + cache_read + output` per
+   *  `turn/end`. The real numerator for the 「峰值 X / 预算 Y（Z%）」 form.
+   *  Absent when no logged turn carried a non-zero figure — the UI keeps
+   *  its absolute/hidden peak forms (honesty contract: never a 0). */
+  peak_context_used_tokens?: number
 }
 
 /** Session archive (卡A): one archived session as the sidebar's 已归档
@@ -1075,6 +1081,14 @@ export interface FileIndexEntry {
    *  or not yet reconciled — callers must render no badge (honesty
    *  contract, same discipline as `session_id`). */
   extracted_segments?: number
+  /** R2 final sweep (design 11 预览卡可读标题): readable display title of
+   *  the source session, joined READ-side by `list_file_index` from the
+   *  same rail `list_sessions` serves. Never persisted — absent when the
+   *  row has no `session_id`, the session left the rail, or its title is
+   *  still the `Session <uuid-prefix>` placeholder; callers must fall back
+   *  to the generic source-jump label (honest absence, same discipline as
+   *  `session_id` / `extracted_segments`). */
+  session_title?: string
 }
 
 // --- MCP Types ---
@@ -1789,6 +1803,34 @@ export interface ProfilesList {
   custom: CustomProfileInfo[]
 }
 
+// --- S1.6 outbound-defense read-only status (`get_outbound_defense_status`)
+
+/** One live guard: the latched mode plus process-lifetime audit findings. */
+export interface OutboundGuardStatus {
+  /** `redact` | `audit` (secret guard) / `audit` | `off` (injection scan). */
+  mode: string
+  audit_hits: number
+}
+
+/** The signature-check entry is a capability note, not runtime state. */
+export interface OutboundSignatureCheckStatus {
+  install_time_only: boolean
+  /** Always `"self-declared"` — parsed, never cryptographically verified. */
+  semantics: string
+}
+
+/// Wire contract of `get_outbound_defense_status` (commands_security.rs):
+/// snake_case keys, lowercase modes, and an important distinction — `null`
+/// guard = never installed in this process, while `audit_hits: 0` on a
+/// present guard = armed with no findings yet. Consumers must never map null
+/// to 0 or render the counts as "blocked" (in audit mode the values were
+/// forwarded verbatim).
+export interface OutboundDefenseStatus {
+  key_redaction: OutboundGuardStatus | null
+  injection_scan: OutboundGuardStatus | null
+  signature_check: OutboundSignatureCheckStatus
+}
+
 /// DTO mirroring Rust `TaskWorktreeDto`.
 export interface TaskWorktreeDto {
   task_id: string
@@ -2129,6 +2171,11 @@ export interface TimelineTurn {
   cache_creation_tokens: number
   cache_read_tokens: number
   cost_usd?: number | null
+  /** Reasoning 时长 (R3 §4.1 T1): the span of this turn's thinking-flagged
+   *  `assistant/chunk` events, last ts − first ts in ms (rounded). Absent
+   *  when the turn logged no thinking events — the bubble then keeps the
+   *  duration-less 「已思考」 header (never an invented duration). */
+  reasoning_duration_ms?: number | null
   tools: TimelineToolEntry[]
 }
 

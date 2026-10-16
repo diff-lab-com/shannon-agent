@@ -7,6 +7,11 @@ declare module '@fontsource-variable/inter' {
   export default css
 }
 
+declare module '@fontsource-variable/jetbrains-mono' {
+  const css: string
+  export default css
+}
+
 declare module '@fontsource-variable/material-symbols-outlined/full.css' {
   const css: string
   export default css

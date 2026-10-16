@@ -93,6 +93,7 @@ import type {
   ProfilesList,
   ActiveProfileStatus,
   CustomProfileInfo,
+  OutboundDefenseStatus,
   OpcMetrics,
   TaskEvaluation,
   EvaluationResult,
@@ -1535,6 +1536,14 @@ export async function reauthenticateMcpServer(name: string): Promise<McpServerIn
   return invoke('reauthenticate_mcp_server', { name })
 }
 
+// 去认证 (07-connectors, design-parity R3 §4): revoke an installed remote
+// entry's stored OAuth credential — deletes the local keyring token block,
+// strips the plaintext fallback, and stops the pool handle — leaving the row
+// installed but not connected until the next re-authentication.
+export async function deauthenticateMcpServer(name: string): Promise<McpServerInfo> {
+  return invoke('deauthenticate_mcp_server', { name })
+}
+
 export async function getMcpServerConfig(name: string): Promise<McpServerConfig> {
   return invoke('get_mcp_server_config', { name })
 }
@@ -2495,6 +2504,14 @@ export async function listHookEvents(): Promise<HookEventInfo[]> {
 
 export async function listPermissionProfiles(): Promise<ProfilesList> {
   return invoke('list_permission_profiles')
+}
+
+// S1.6 — outbound-defense read-only status (Settings 出站防线 card). The
+// DTOs live in @/types (OutboundDefenseStatus); see the honesty contract
+// documented there: null guard = never installed, 0 hits = armed with no
+// findings, counts are findings — never "blocked".
+export async function getOutboundDefenseStatus(): Promise<OutboundDefenseStatus> {
+  return invoke('get_outbound_defense_status')
 }
 
 /**

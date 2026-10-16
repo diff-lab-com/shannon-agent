@@ -244,13 +244,15 @@ export default function MemoryPanel({
         </p>
 
         {/* 注入预览横幅 (design 08:146-156) — injection state + the
-            per-session bypass switch. NOT aurora-line: the memory page is
-            not one of the four aurora surfaces. The 「将携带 N 条」 count is
-            the real pre-read (缓期项 #6); it degrades to the honest amber
-            placeholder when no memory store backs this deployment. */}
+            per-session bypass switch. W4 视觉收敛: carries the aurora-line
+            top edge — design 08 draws `.glasscard aurora-line` on exactly
+            this banner (the earlier "not one of the four aurora surfaces"
+            ruling predates the W4 design-drawn mandate). The 「将携带 N 条」
+            count is the real pre-read (缓期项 #6); it degrades to the honest
+            amber placeholder when no memory store backs this deployment. */}
         <div
           data-testid="memory-injection-banner"
-          className="flex flex-wrap items-center gap-sm px-md py-sm rounded-2xl bg-surface-container-lowest/80 border border-outline-variant/30 shadow-e1 mb-xl"
+          className="aurora-line flex flex-wrap items-center gap-sm px-md py-sm rounded-2xl bg-surface-container-lowest/80 border border-outline-variant/30 shadow-e1 mb-xl"
         >
           <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">visibility</span>
           <div className="min-w-0">

@@ -4,23 +4,30 @@
 # contributor can see ahead of push whether their branch is going to go red.
 #
 # Usage:
-#   scripts/ci-local.sh         # default: fmt + clippy + nextest + deny
-#   scripts/ci-local.sh --doc   # also run the doc gate
-#   scripts/ci-local.sh --audit # also run rustsec-audit (requires cargo-audit)
+#   scripts/ci-local.sh            # default: fmt + clippy + nextest + deny + doc + wire-types
+#   scripts/ci-local.sh --no-doc   # skip the doc gate
+#   scripts/ci-local.sh --audit    # also run rustsec-audit (requires cargo-audit)
+#
+# The doc gate is ON by default: since the R4 merge (2026-10-01) `cargo doc
+# --workspace --no-deps` with RUSTDOCFLAGS=-D warnings is a HARD gate — it
+# runs as the "Build docs" step inside CI's `clippy` job, not as a separate
+# advisory job. PR #413's first CI round went red on exactly this step
+# (private intra-doc link) while every local default gate was green.
 #
 # Exit code: 0 iff every gate is green; 1 if any gate fails. Echoes a
 # green/red summary identical to the GitHub Actions UI table.
 
 set -u
 
-WITH_DOC=0
+WITH_DOC=1
 WITH_AUDIT=0
 for arg in "$@"; do
     case "$arg" in
-        --doc)   WITH_DOC=1 ;;
+        --doc)   WITH_DOC=1 ;;   # accepted for habit compatibility; doc is already the default
+        --no-doc) WITH_DOC=0 ;;
         --audit) WITH_AUDIT=1 ;;
         --help|-h)
-            sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -59,7 +66,7 @@ clippy_cmd=(cargo clippy --workspace --
 test_cmd=(cargo nextest run --workspace --config-file .config/nextest.toml)
 # 4) Dependency audit (matches `audit` job)
 deny_cmd=(cargo deny check --hide-inclusion-graph)
-# 5) Doc (matches `doc` job; gated by --doc)
+# 5) Doc (matches the clippy job's "Build docs" step; on by default, skip with --no-doc)
 doc_cmd=(cargo doc --workspace --no-deps)
 # 6) RustSec audit (matches `rustsec-audit` job; gated by --audit)
 audit_cmd=(cargo audit --deny warnings)

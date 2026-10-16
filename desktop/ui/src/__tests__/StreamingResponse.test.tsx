@@ -43,9 +43,12 @@ describe('StreamingResponse', () => {
       />,
     )
     // Reasoning is a collapsible. The header is always visible; the
-    // body is collapsed by default. Use the header label localized
-    // value via the "Thinking" alias that the intl mock supplies.
-    expect(screen.getByText('Thinking')).toBeInTheDocument()
+    // body is collapsed by default. R3 §4 (Reasoning 头分态): the live
+    // stream only mounts mid-run, so its header carries the IN-PROGRESS
+    // 「思考中…」 state — the ellipsis is part of the en copy.
+    expect(screen.getByText('Thinking…')).toBeInTheDocument()
+    // The completed-state header belongs to committed bubbles, never here.
+    expect(screen.queryByText('Thought')).not.toBeInTheDocument()
   })
 
   it('omits thinking block when thinkingText is empty', () => {

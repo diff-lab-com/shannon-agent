@@ -66,6 +66,13 @@ pub struct ConversationProjection {
     /// fabricated value). Mirrors the session-index accumulator so the
     /// rebuild path answers identically to the incremental one.
     pub max_context_tokens: Option<u64>,
+    /// Peak context USED (峰值已用, R3 §4.1 T2): the running max over
+    /// `turn/end` usage payloads of `input + cache_read + output` tokens —
+    /// the same numerator the frontend's context-occupancy arithmetic reads
+    /// (ContextBreakdownCard's 口径). `None` until a usage payload carries a
+    /// non-zero figure (never a fabricated 0); additive and optional like
+    /// [`Self::max_context_tokens`].
+    pub peak_context_used_tokens: Option<u64>,
     /// Number of `tool/call` events.
     pub tool_call_count: usize,
     /// Number of `tool/result` events flagged as errors.
@@ -86,6 +93,7 @@ impl Default for ConversationProjection {
             total_cache_read_tokens: 0,
             total_cost_usd: None,
             max_context_tokens: None,
+            peak_context_used_tokens: None,
             tool_call_count: 0,
             tool_error_count: 0,
         }
@@ -109,6 +117,20 @@ impl ConversationProjection {
             (Some(a), None) | (None, Some(a)) => Some(a),
             (None, None) => None,
         };
+        // 峰值已用: peak (not sum) of the per-turn context footprint —
+        // input + cache_read + output, the frontend's occupancy 口径. A
+        // zero-footprint payload records nothing (0 is "no data" here, not
+        // a measurement worth keeping).
+        let used = usage
+            .input_tokens
+            .saturating_add(usage.cache_read_tokens)
+            .saturating_add(usage.output_tokens);
+        if used > 0 {
+            self.peak_context_used_tokens = Some(
+                self.peak_context_used_tokens
+                    .map_or(used, |peak| peak.max(used)),
+            );
+        }
     }
 }
 
@@ -363,6 +385,14 @@ pub struct TimelineTurn {
     pub cache_read_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Reasoning 时长 (R3 §4.1 T1): the span of the turn's thinking-flagged
+    /// `assistant/chunk` events — last thinking ts minus first, in ms
+    /// (rounded). `None` when the turn logged no thinking events; the UI
+    /// hides the duration chip rather than rendering a 0 (honesty rule).
+    /// Additive + optional: timelines serialized before the field keep
+    /// deserializing (and re-serializing) without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_duration_ms: Option<u64>,
     /// Tool executions in call order.
     pub tools: Vec<TimelineToolEntry>,
 }
@@ -418,6 +448,11 @@ struct TimelineTurnAcc {
     cache_creation_tokens: u64,
     cache_read_tokens: u64,
     cost_usd: Option<f64>,
+    /// First / last ts of thinking-flagged `assistant/chunk` events seen in
+    /// this turn — the reasoning 时长 inputs (`finish` folds them into
+    /// `reasoning_duration_ms`). `None` until a thinking event arrives.
+    thinking_first_ts_ns: Option<u64>,
+    thinking_last_ts_ns: Option<u64>,
     /// Tool rows in call order.
     tools: Vec<TimelineToolAcc>,
 }
@@ -440,6 +475,15 @@ impl TimelineTurnAcc {
     }
 
     fn finish(self, turn: u64) -> TimelineTurn {
+        // Reasoning 时长: (last − first thinking ts) in ms, rounded. Absent
+        // unless BOTH bounds exist (a turn with no thinking events stays
+        // None — never a fabricated 0).
+        let reasoning_duration_ms = match (self.thinking_first_ts_ns, self.thinking_last_ts_ns) {
+            (Some(first), Some(last)) if last >= first => {
+                Some(((last - first) + 500_000) / 1_000_000)
+            }
+            _ => None,
+        };
         TimelineTurn {
             turn,
             start_ts_ns: self.start_ts_ns,
@@ -451,6 +495,7 @@ impl TimelineTurnAcc {
             cache_creation_tokens: self.cache_creation_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cost_usd: self.cost_usd,
+            reasoning_duration_ms,
             tools: self
                 .tools
                 .into_iter()
@@ -585,6 +630,20 @@ pub fn project_turn_timeline(events: &[SessionEvent]) -> TurnTimeline {
                     output_tokens_total: curve_output_total,
                     cost_total_usd: curve_cost_total,
                 });
+            }
+            // T1 (R3 §4.1 Reasoning 时长): thinking-flagged chunk deltas are
+            // timestamped like every L0 row; their first…last span within the
+            // turn IS the reasoning duration. Still anchors the turn slot —
+            // a turn that only thought still owns a window.
+            SessionEventBody::AssistantChunk(p) if p.thinking => {
+                let acc = timeline_slot(&mut accs, event.turn, event.ts_ns);
+                if acc.thinking_first_ts_ns.is_none() {
+                    acc.thinking_first_ts_ns = Some(event.ts_ns);
+                }
+                acc.thinking_last_ts_ns = Some(
+                    acc.thinking_last_ts_ns
+                        .map_or(event.ts_ns, |last| last.max(event.ts_ns)),
+                );
             }
             // Every other durable content kind anchors/keeps its turn row so
             // windows reflect reality even when `turn/start` predates the
@@ -1139,6 +1198,117 @@ mod tests {
                 error: None,
             }),
         )
+    }
+
+    fn tthink(seq: u64, turn: u64, delta: &str) -> SessionEvent {
+        tev(
+            seq,
+            turn,
+            SessionEventBody::AssistantChunk(AssistantChunkPayload {
+                delta: delta.into(),
+                thinking: true,
+            }),
+        )
+    }
+
+    // -- T1: Reasoning 时长 (reasoning_duration_ms on the timeline turn) ----
+
+    #[test]
+    fn timeline_turn_projects_reasoning_duration_from_thinking_span() {
+        // One turn: prompt → two thinking deltas 1s apart → text → end.
+        // (last − first) = 1_500_000_000 − 500_000_000 = 1e9 ns → 1_000ms.
+        let mut first = tthink(1, 1, "hmm");
+        first.ts_ns = 500_000_000;
+        let mut last = tthink(2, 1, "well");
+        last.ts_ns = 1_500_000_000;
+        let events = vec![
+            user(0, "hi"),
+            first,
+            last,
+            chunk(3, "answer"),
+            tcurve_end(4, 1, 10, None),
+        ];
+        let tl = project_turn_timeline(&events);
+        assert_eq!(tl.turns.len(), 1);
+        assert_eq!(tl.turns[0].reasoning_duration_ms, Some(1_000));
+    }
+
+    #[test]
+    fn timeline_turn_reasoning_duration_rounds_to_nearest_ms() {
+        // Span of 1_000_500_500ns − 0 rounds to 1_001ms (the +500_000 bias).
+        let mut first = tthink(1, 1, "?");
+        first.ts_ns = 0;
+        let mut last = tthink(2, 1, "!");
+        last.ts_ns = 1_000_500_500;
+        let events = vec![user(0, "q"), first, last, tcurve_end(3, 1, 1, None)];
+        let tl = project_turn_timeline(&events);
+        assert_eq!(tl.turns[0].reasoning_duration_ms, Some(1_001));
+    }
+
+    #[test]
+    fn timeline_turn_without_thinking_keeps_reasoning_absent() {
+        // No thinking chunks at all → None (never a 0).
+        let events = vec![
+            user(0, "hi"),
+            chunk(1, "plain text"),
+            tcurve_end(2, 1, 5, None),
+        ];
+        let tl = project_turn_timeline(&events);
+        assert_eq!(tl.turns.len(), 1);
+        assert_eq!(tl.turns[0].reasoning_duration_ms, None);
+    }
+
+    #[test]
+    fn timeline_reasoning_stays_scoped_to_its_turn() {
+        // A lone thinking event (zero span) still records the turn measured
+        // it (0ms — real, sub-second, the UI hides it), while the turn with
+        // no thinking at all stays None.
+        let events = vec![
+            user(0, "q1"),
+            tthink(1, 1, "t1"),
+            tcurve_end(2, 1, 5, None),
+            user(3, "q2"),
+            chunk(4, "no thinking here"),
+            tcurve_end(5, 2, 5, None),
+        ];
+        let tl = project_turn_timeline(&events);
+        assert_eq!(tl.turns.len(), 2);
+        assert_eq!(tl.turns[0].reasoning_duration_ms, Some(0));
+        assert_eq!(tl.turns[1].reasoning_duration_ms, None);
+    }
+
+    #[test]
+    fn timeline_turn_reasoning_survives_json_round_trip_absent() {
+        // Schema compatibility: a timeline serialized before the field
+        // deserializes with reasoning_duration_ms = None (serde(default))
+        // and re-serializes without the key (skip_serializing_if keeps old
+        // wire bytes valid in both directions).
+        let old_json = serde_json::json!({
+            "session_id": "sess-proj",
+            "turns": [{
+                "turn": 1,
+                "start_ts_ns": 1_000,
+                "end_ts_ns": 2_000,
+                "input_tokens": 5,
+                "output_tokens": 5,
+                "cache_creation_tokens": 0,
+                "cache_read_tokens": 0,
+                "tools": []
+            }],
+            "cumulative": []
+        });
+        let parsed: TurnTimeline = serde_json::from_value(old_json).expect("old timeline parses");
+        assert_eq!(parsed.turns[0].reasoning_duration_ms, None);
+
+        let events = vec![user(0, "q"), tcurve_end(1, 1, 5, None)];
+        let fresh = project_turn_timeline(&events);
+        let fresh_json = serde_json::to_value(&fresh).unwrap();
+        assert!(
+            fresh_json["turns"][0]
+                .get("reasoning_duration_ms")
+                .is_none(),
+            "absent reasoning stays off the wire (no 0)"
+        );
     }
 
     #[test]

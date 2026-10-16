@@ -76,6 +76,10 @@ export default function StreamingResponse({
         </div>
         <div className="space-y-md flex-1">
           {showThinking && thinkingText && (
+            // R3 §4 遗留项 (Reasoning 头分态): this component only mounts
+            // while a run is IN FLIGHT, so 「思考中…」 (chat.streaming.thinking)
+            // is always the honest label here. The COMPLETED state
+            // (「已思考 [N 秒]」) lives in MessageBubble's committed block.
             <Reasoning header={t('chat.streaming.thinking')} defaultOpen={false}>
               <p className="whitespace-pre-wrap">{thinkingText}</p>
             </Reasoning>

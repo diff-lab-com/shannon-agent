@@ -65,7 +65,9 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
-/* 页面环境光:极光余晖,极低强度,只出现在窗口上缘 */
+/* 页面环境光:极光余晖,极低强度,只出现在窗口上缘
+   (W1 已落地:实现 aurora-ambient 与本稿逐值一致,index.css:451;
+    浅色主题实现侧把两枚 alpha 减半 —— .05/.035,属应用侧细节,稿不改) */
 .ambient { position: fixed; inset: 0; pointer-events: none; z-index: 0;
   background:
     radial-gradient(1100px 340px at 22% -8%, rgba(139,124,247,.10), transparent 60%),
@@ -224,6 +226,15 @@ input, textarea { font: inherit; color: var(--t1); background: none; border: 0; 
 .chip .cv { color: var(--t1); }
 .chip.acc { border-color: rgba(139,124,247,.4); background: var(--vio-dim); color: var(--vio-2); }
 .chip.acc .cv { color: var(--vio-2); }
+/* 2026-10-16 收尾裁决(r4 §E.4): 权限当前档 chip 用实现的风险阶梯色调
+   (lib/approvalModes.ts tone: readonly/plan 绿 → ask/auto-edit 琥珀 → full-auto/bypass 红),
+   稿随落地;`.chip.acc` 紫保留给非权限的强调 chip(任务名/模型名等) */
+.chip.ok   { border-color: rgba(61,220,151,.35);  color: var(--ok); }
+.chip.ok .cv   { color: var(--ok); }
+.chip.warn { border-color: rgba(245,184,61,.4);   color: var(--warn); }
+.chip.warn .cv { color: var(--warn); }
+.chip.bad  { border-color: rgba(251,113,133,.35); color: var(--bad); }
+.chip.bad .cv  { color: var(--bad); }
 .chip .caret { width: 12px; height: 12px; opacity: .6; }
 .chip .sw { width: 7px; height: 7px; border-radius: 99px; }
 
@@ -360,8 +371,13 @@ input, textarea { font: inherit; color: var(--t1); background: none; border: 0; 
 
 /* ---------- 消息流(对话页) ---------- */
 .stream { max-width: 792px; margin: 0 auto; padding: 26px 24px 30px; display: flex; flex-direction: column; gap: 22px; }
-.msg-user { align-self: flex-end; max-width: 78%; background: var(--vio-dim); border: 1px solid rgba(139,124,247,.28);
-  border-radius: 16px 16px 4px 16px; padding: 10px 14px; font-size: 13.5px; color: var(--t1); }
+/* 用户气泡(2026-10-15 重绘收口:R3 §4「用户气泡圆角/头像形态」按已落地形态回改 ——
+   MessageBubble.tsx:690 bg-primary-fixed + text-on-primary-fixed + rounded-2xl rounded-tr-none:
+   实体亮紫底 #e9ddff / 深紫字 #23005c(主题无关 fixed token),无描边,右上角直角,其余 16px) */
+.msg-user { align-self: flex-end; max-width: 78%; background: #e9ddff; color: #23005c;
+  border-radius: 16px 0 16px 16px; padding: 10px 14px; font-size: 13.5px; font-weight: 500;
+  box-shadow: var(--sh-1); }
+.msg-user b { font-weight: 650; }
 .msg-ai { display: flex; gap: 11px; }
 .msg-ai .avatar { width: 26px; height: 26px; border-radius: 8px; flex: none; margin-top: 2px;
   background: var(--grad-aurora); display: grid; place-items: center; color: #fff; box-shadow: 0 3px 12px rgba(139,124,247,.3); }

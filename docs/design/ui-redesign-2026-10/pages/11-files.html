@@ -115,7 +115,6 @@
       </div>
       <div class="model-row">
         <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
-        <span class="mode-pill">开发模式</span>
       </div>
     </div>
   </aside>
@@ -190,7 +189,8 @@
               <div class="thumb"><svg class="ic" style="color:var(--warn)"><use href="#i-image"/></svg></div>
               <div class="fn">old-logo.ai</div>
               <div class="fm">1.2 MB · 08-11</div>
-              <span class="honest"><svg class="ic" style="width:11px;height:11px"><use href="#i-alert"/></svg>原文件已移动</span>
+              <!-- 文案对齐实现 office.files.missing(「原文件已移动或删除」) -->
+              <span class="honest"><svg class="ic" style="width:11px;height:11px"><use href="#i-alert"/></svg>原文件已移动或删除</span>
             </div>
             <div class="filecell">
               <div class="thumb"><svg class="ic"><use href="#i-play"/></svg></div>
@@ -227,6 +227,14 @@
             </div>
           </div>
 
+        </div>
+
+        <!-- 2026-10-15 收口注记:B1 预览面板已落地 —— ≥1280px = 本稿双栏
+             (1fr + 320px 预览卡,格内 打开/显示/来源回跳/收藏 全部回撤进卡);
+             <1280px 降级单栏(FilesPage.tsx:69 WIDE_QUERY)。提取徽章画在预览卡
+             (extracted_segments 门控,缺席不显示),网格格行不带徽章 —— 与实现一致。 -->
+        <div style="text-align:center;font-size:10.5px;color:var(--t3);border:1px dashed var(--hair);border-radius:8px;padding:4px 10px">
+          响应式:≥1280px 双栏(网格 + 320px 预览卡,格内临时操作回撤进卡) · &lt;1280px 降级单栏
         </div>
       </div>
     </div>

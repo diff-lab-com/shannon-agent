@@ -7,7 +7,11 @@
 //     tab, so several files can be open side-by-side and switched freely;
 //   * utility tabs (上下文 / 计划 / 预览) host the metrics, the plan doc and
 //     the live dev-server preview;
-//   * a "Diff" click opens a single-file review tab.
+//   * a "Diff" click starts a review session: since T7 (03 页 review-wrap,
+//     R3 §4.1) the review WORKBENCH renders as the MAIN-AREA full-width
+//     workspace (Chat swaps it in for the transcript), while this dock's
+//     Diff tab keeps the design's summary surface — checkpoint rewind chips
+//     + the changed-file list.
 //
 // Tabs auto-activate: entering plan mode docks the plan, a detected
 // artifact docks it as a new tab, a "Diff" button docks the review.
@@ -43,9 +47,8 @@ import { openDiskArtifact } from '@/components/artifact/ArtifactLinkHost'
 import { registerLinkPanelRouter } from '@/lib/openLink'
 import { onPaletteVisibility } from '@/lib/paletteVisibility'
 import { projectOf } from '@/components/SidebarSessions'
-import DiffReviewBody from '@/components/diff/DiffReviewBody'
-import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
-import type { FileDiff, ToolCall, UsagePayload } from '@/types'
+import ReviewFileList from '@/components/diff/ReviewFileList'
+import type { ToolCall, UsagePayload } from '@/types'
 import type { CheckpointInfo } from '@/lib/tauri-api'
 import type { HunkDecision } from '@/lib/diff-merge'
 import { initialRunProcess, type RunProcessState } from '@/lib/runProcess'
@@ -57,6 +60,9 @@ import { LivePreview } from '@/components/artifact/LivePreview'
 type UtilityTab = 'context' | 'plan' | 'run' | 'live' | 'diff'
 /** Utility tabs use bare keys; artifact tabs are `a:<artifactId>`. */
 type DockTab = UtilityTab | `a:${string}`
+
+/** T7: hosts that don't track review decisions (tests) get the empty map. */
+const EMPTY_FILE_DECISIONS: Map<string, Map<string, HunkDecision>> = new Map()
 
 const TAB_KEY = 'shannon.dock.tab'
 const WIDTH_KEY = 'shannon.dock.width'
@@ -138,20 +144,26 @@ interface RightDockProps {
   workingDir: string | null
   /** Composer plan-mode chip state — entering plan mode docks the plan tab. */
   planModeActive: boolean
-  /** Single-file diff review target; null closes the diff tab. */
+  /** The current review target — highlights its row in the file-list
+   *  summary and (with changedPaths) keeps the Diff tab reachable. The
+   *  review BODY for this path renders in the main-area workspace (T7). */
   diffPath: string | null
-  onCloseDiff: () => void
   /** Aurora 2026-10 diff-review loop (03 页): the session's changed-file
-   *  paths (completed file-mutating tool calls) — when non-empty, the diff
-   *  tab hosts the FileDiffList sidebar beside the review body. */
+   *  paths (completed file-mutating tool calls) — they make the Diff tab
+   *  reachable and feed its file-list summary. */
   changedPaths?: string[]
-  /** Picks a file from the diff sidebar (Chat owns setDiffPath). */
+  /** Picks a file from the diff sidebar (Chat owns setDiffPath — picking
+   *  swaps the main region to the review workspace, T7). */
   onSelectDiffPath?: (path: string) => void
   /** Session checkpoints (ChatContext) — rendered as rewind chips atop the
    *  diff tab; the data was already fetched, only the UI was missing. */
   checkpoints?: CheckpointInfo[]
   /** Requests a rewind to a checkpoint's turn (Chat owns the confirm + IPC). */
   onRewindCheckpoint?: (turnIndex: number) => void
+  /** T7 (03 review-wrap): the review body lives in the main-area
+   *  ReviewWorkspace now; Chat lifts its per-file hunk decisions into this
+   *  map so the file list's status badges stay live with the a/r/u toggles. */
+  decisionsByPath?: Map<string, Map<string, HunkDecision>>
   /** GB P2-3: the visible session's run aggregation — its non-idle status
    *  is what makes the 运行 tab appear; content survives until the next send.
    *  Optional: hosts that don't track runs (tests) get the idle default. */
@@ -167,11 +179,11 @@ export default function RightDock({
   workingDir,
   planModeActive,
   diffPath,
-  onCloseDiff,
   changedPaths,
   onSelectDiffPath,
   checkpoints,
   onRewindCheckpoint,
+  decisionsByPath,
   runProcess = initialRunProcess(),
 }: RightDockProps) {
   const t = useT()
@@ -410,7 +422,8 @@ export default function RightDock({
     prevPlanMode.current = planModeActive
   }, [planModeActive, onOpen])
 
-  // A "Diff" click docks the single-file review instead of a modal.
+  // A "Diff" click starts a review session: the review body swaps into the
+  // main-area workspace (T7) while the dock reveals its Diff summary tab.
   const prevDiffPath = useRef(diffPath)
   useEffect(() => {
     if (diffPath && diffPath !== prevDiffPath.current) {
@@ -420,24 +433,6 @@ export default function RightDock({
     }
     prevDiffPath.current = diffPath
   }, [diffPath, onOpen])
-
-  // Aurora 2026-10 diff-review loop: DiffReviewBody owns its per-file hunk
-  // decisions; the dock lifts them into a path→decisions map so the
-  // FileDiffList sidebar's status badges (accepted/partial) stay live. The
-  // ref mirror keeps the callback identity stable — a fresh closure per
-  // render would re-fire DiffReviewBody's publish effect forever.
-  const diffPathRef = useRef(diffPath)
-  diffPathRef.current = diffPath
-  const [dockDecisions, setDockDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
-  const handleDockDecisionsChange = useCallback((decisions: Map<string, HunkDecision>) => {
-    const path = diffPathRef.current
-    if (!path) return
-    setDockDecisions(prev => {
-      const next = new Map(prev)
-      next.set(path, decisions)
-      return next
-    })
-  }, [])
 
   // Batch F3, reworked in the 2026-09-25 open pipeline (§4 P1-D): the 「+」
   // opens any local file as a dock tab — documents/artifacts inline, images
@@ -689,51 +684,27 @@ export default function RightDock({
             )}
             {tab === 'live' && <LivePreview />}
             {tab === 'diff' && (
-              diffPath ? (
-                // Aurora 2026-10 diff-review workbench (03 页, 数据全部现成):
-                // checkpoint rewind chips on top, the FileDiffList sidebar
-                // beside the single-file review body — the review surface
-                // stays side-by-side with the conversation instead of
-                // blocking it behind a modal.
+              diffReachable ? (
+                // T7 (03 页 review-wrap): the full review workbench renders as
+                // the MAIN-AREA ReviewWorkspace (Chat swaps it in for the
+                // transcript while a review is active). This tab stays the
+                // design's dock form — the summary surface: checkpoint rewind
+                // chips + the changed-file list whose picks swap the main
+                // region to the workspace.
                 <div className="-m-lg flex flex-col min-h-0 h-full">
                   {checkpoints != null && checkpoints.length > 0 && onRewindCheckpoint && (
                     <CheckpointChips checkpoints={checkpoints} onRewind={onRewindCheckpoint} />
                   )}
                   <div className="flex flex-1 min-h-0">
                     {changedPaths != null && changedPaths.length > 0 && (
-                      <DockDiffSidebar
+                      <ReviewFileList
                         files={changedPaths}
                         currentPath={diffPath}
-                        decisionsByPath={dockDecisions}
+                        decisionsByPath={decisionsByPath ?? EMPTY_FILE_DECISIONS}
                         onSelectPath={onSelectDiffPath}
+                        className="w-72 max-w-full"
                       />
                     )}
-                    <DiffReviewBody
-                      filePath={diffPath}
-                      onClose={onCloseDiff}
-                      active={open}
-                      onDecisionsChange={handleDockDecisionsChange}
-                    />
-                  </div>
-                </div>
-              ) : changedPaths != null && changedPaths.length > 0 ? (
-                // R2 审查 G9 companion: the diff tab is now reachable before
-                // any single file is selected (the conditional default and
-                // the M8a badge both lead here) — the sidebar alone lists the
-                // session's changed files; picking one docks the review body.
-                // The default never yanks the dock open on its own.
-                <div className="-m-lg flex flex-col min-h-0 h-full">
-                  {checkpoints != null && checkpoints.length > 0 && onRewindCheckpoint && (
-                    <CheckpointChips checkpoints={checkpoints} onRewind={onRewindCheckpoint} />
-                  )}
-                  <div className="flex flex-1 min-h-0">
-                    <DockDiffSidebar
-                      files={changedPaths}
-                      currentPath={diffPath}
-                      decisionsByPath={dockDecisions}
-                      onSelectPath={onSelectDiffPath}
-                      className="w-72 max-w-full"
-                    />
                   </div>
                 </div>
               ) : (
@@ -1021,53 +992,6 @@ function CheckpointChips({ checkpoints, onRewind }: {
         })}
       </div>
     </div>
-  )
-}
-
-/** Aurora 2026-10 (03 页 P1): the dock's embedded review workbench sidebar —
- *  the session's changed-file list (FileDiffList) beside the review body, so
- *  multi-file review no longer requires the fullscreen modal. Fetches each
- *  FileDiff once per path (failures degrade that row to stats-less); the
- *  per-file decisions lift (decisionsByPath) keeps the status badges live
- *  with the review body's a/r/u toggles. */
-function DockDiffSidebar({ files, currentPath, decisionsByPath, onSelectPath, className }: {
-  files: string[]
-  currentPath: string | null
-  decisionsByPath: Map<string, Map<string, HunkDecision>>
-  onSelectPath?: (path: string) => void
-  /** G9: the sidebar-only branch (no review body beside it) goes wider. */
-  className?: string
-}) {
-  const [diffs, setDiffs] = useState<Map<string, FileDiff>>(new Map())
-  const [filter, setFilter] = useState<FileFilter>('all')
-  const fetchedRef = useRef<Set<string>>(new Set())
-
-  useEffect(() => {
-    let cancelled = false
-    for (const path of files) {
-      if (fetchedRef.current.has(path)) continue
-      fetchedRef.current.add(path)
-      api.getFileDiff(path)
-        .then(d => { if (!cancelled) setDiffs(prev => new Map(prev).set(path, d)) })
-        .catch(() => {
-          // Diff unavailable (binary / deleted / demo mode): the row still
-          // renders, just without +/− counts.
-        })
-    }
-    return () => { cancelled = true }
-  }, [files])
-
-  return (
-    <FileDiffList
-      files={files}
-      diffs={diffs}
-      decisions={decisionsByPath}
-      currentPath={currentPath}
-      filter={filter}
-      onSelectPath={path => onSelectPath?.(path)}
-      onFilterChange={setFilter}
-      className={className ?? 'w-44'}
-    />
   )
 }
 

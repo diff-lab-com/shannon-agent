@@ -115,7 +115,6 @@
       </div>
       <div class="model-row">
         <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
-        <span class="mode-pill">开发模式</span>
       </div>
     </div>
   </aside>
@@ -166,17 +165,29 @@
             <div class="v">92<small>%</small></div>
             <div class="d"><span class="up">为你在本月省下 <span class="money">$6.71</span></span></div>
           </div>
+          <!-- 上下文峰值(2026-10-15 重绘收口,T2 已落地形态):值 = 峰值已用 token
+               (peak_context_used_tokens 跨会话取最大,Usage.tsx:747),副行 =
+               「{持有会话}（{峰值/窗口}%）」(usage.stat.contextPeak.pct);无数据 →
+               「—」+「暂无会话峰值」,绝不拿窗口 200k 当用量。 -->
           <div class="stat glass">
             <div class="k"><svg class="ic"><use href="#i-target"/></svg>上下文峰值</div>
-            <div class="v">61<small>%</small></div>
-            <div class="d"><span class="mono">200k</span> 窗口 · 修复 billing 会话</div>
+            <div class="v money">7.6万</div>
+            <div class="d">修复 billing webhook 签名校验（38%）</div>
           </div>
         </div>
 
         <!-- 图表行 -->
         <div class="grid2">
+          <!-- 每日图表口径(2026-10-15 R3 §4「每日成本」首屏口径顺笔):首屏口径 = Token ——
+               标题「每日 token」(usage.chart.byDay.title),柱状堆叠输入(底)/输出(顶)(byDay.subtitle);
+               「成本」是卡头切换的第二口径(by_day cost_usd 单系列,切换后标题「每日成本」= byDay.costTitle)。
+               卡头 Token/成本 切换 = usage.chart.mode.tokens / mode.cost(Usage.tsx:335 默认 tokens)。
+               旧「每日成本」单口径标题撤销 —— 稿随落地。 -->
           <div class="card pad">
-            <div style="font-size:12.5px;font-weight:650;margin-bottom:12px">每日成本 · 近 7 天</div>
+            <div class="row" style="justify-content:space-between;margin-bottom:12px">
+              <div style="font-size:12.5px;font-weight:650">每日 token · 近 7 天</div>
+              <div class="seg"><button class="on">Token</button><button>成本</button></div>
+            </div>
             <div class="bars">
               <i style="height:42%"></i><i style="height:58%"></i><i style="height:35%"></i>
               <i style="height:49%"></i><i class="hi" style="height:88%"></i><i style="height:31%"></i><i style="height:64%"></i>

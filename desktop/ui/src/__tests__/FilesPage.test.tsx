@@ -1,5 +1,10 @@
 // office Wave 2 B9' — FilesPage tests: mock-data rendering, favorite toggle
-// hitting the wrapper, missing-file greying, favorites lens, empty state.
+// hitting the wrapper, missing-file lost-card form, favorites lens, empty
+// state.
+// R3 §4.1 (design 11:189 整卡琥珀虚线): the lost card is asserted in its new
+// form — whole-cell dashed amber border + amber badge + copy, NO opacity
+// dimming — including the selected+missing variant that re-tints the same
+// dashed outline.
 // R2 Wave C′: renders inside MemoryRouter (the page now owns a 来源会话
 // jump via useNavigate) and covers the session-stamped jump button.
 // R2 Wave B1: the 320px preview panel — wide-mode selection renders the
@@ -7,6 +12,10 @@
 // honest absences (no session_id → no jump, no extracted_segments → no
 // badge), the three ways to deselect (re-click, close, Esc), and the
 // <1280px fallback that keeps the inline cell actions.
+// R2 final sweep: the pagehead subtitle (design 11:138), the search box
+// (11:141-144 — name/path filtering, pill-count linkage, lens stacking,
+// Esc-to-clear) and the readable source-session title on the jump
+// (session_title present → title; absent → generic label fallback).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
@@ -114,12 +123,27 @@ describe('FilesPage', () => {
     expect(rows[0]).not.toHaveTextContent('Original file moved or deleted')
   })
 
-  it('greys out a missing row and disables its open/reveal actions', async () => {
+  it('renders a missing row as the amber dashed lost card and disables its open/reveal actions', async () => {
     renderFilesPage()
     const rows = await screen.findAllByTestId('files-row')
     const missingRow = rows.find(r => r.textContent?.includes('gone.md'))!
     expect(missingRow.getAttribute('data-missing')).toBe('true')
-    expect(missingRow.className).toMatch(/opacity-50/)
+    // R3 §4.1 (design 11:189): the WHOLE cell carries the dashed amber
+    // border (border-warning/50 ≈ rgba(245,184,61,.5)) — no opacity
+    // dimming; the content stays readable.
+    expect(missingRow.className).toMatch(/border-warning\/50/)
+    expect(missingRow.className).toMatch(/border-dashed/)
+    expect(missingRow.className).not.toMatch(/opacity-50/)
+    // Healthy rows keep the plain hairline form (no dashed amber).
+    const healthyRow = rows.find(r => r.textContent?.includes('notes.md'))!
+    expect(healthyRow.className).not.toMatch(/border-dashed/)
+    expect(healthyRow.className).not.toMatch(/border-warning\/50/)
+    // The amber badge rides on the cell with the honest copy (i18n
+    // office.files.missing).
+    const badge = within(missingRow).getByTestId('files-row-missing')
+    expect(badge).toHaveTextContent('Original file moved or deleted')
+    expect(badge.className).toMatch(/border-warning\/50/)
+    expect(badge.className).toMatch(/border-dashed/)
     // Open/reveal are inert for a file that is not there.
     const openBtn = missingRow.querySelector('button[aria-label="Open attachment"]') as HTMLButtonElement
     const revealBtn = missingRow.querySelector('button[aria-label="Show in folder"]') as HTMLButtonElement
@@ -290,6 +314,10 @@ describe('FilesPage — preview panel (R2 B1)', () => {
 
     fireEvent.click(within(rows[2]).getByTestId('files-row-select')) // gone.md
     expect(screen.getByTestId('files-preview-missing')).toBeInTheDocument()
+    // Selected + missing: the dashed amber identity survives selection —
+    // re-tinted (warning/70), not replaced by the primary selected form.
+    expect(rows[2].className).toMatch(/border-warning\/70/)
+    expect(rows[2].className).toMatch(/border-dashed/)
     expect(screen.getByTestId('files-preview-open')).toBeDisabled()
     expect(screen.getByTestId('files-preview-reveal')).toBeDisabled()
   })
@@ -340,5 +368,120 @@ describe('FilesPage — preview panel (R2 B1)', () => {
     expect(within(rows[0]).queryByTestId('files-row-source-jump')).not.toBeInTheDocument()
     // The favorite star stays on the cell at both widths.
     expect(within(rows[0]).getByRole('button', { name: 'Remove from favorites' })).toBeInTheDocument()
+  })
+})
+
+// ---- R2 final sweep: subtitle, search, readable source-session title ----
+
+describe('FilesPage — R2 final sweep (subtitle, search, title join)', () => {
+  const TITLED_ROWS: FileIndexEntry[] = [
+    {
+      path: '/Users/demo/Documents/q3-review.pptx',
+      name: 'q3-review.pptx',
+      size_bytes: 2_483_112,
+      registered_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      favorite: false,
+      source: 'generated',
+      session_id: '0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a',
+      // Backend joined a readable rail title → the jump reads it.
+      session_title: 'Q3 roadmap brainstorm',
+    },
+    {
+      path: '/Users/demo/Downloads/notes.md',
+      name: 'notes.md',
+      size_bytes: 8_210,
+      registered_at: new Date(Date.now() - 26 * 3600_000).toISOString(),
+      favorite: false,
+      source: 'attachment',
+      // Stamped but unresolvable/off-rail (or still placeholder-titled) →
+      // no session_title → the generic label fallback.
+      session_id: '11111111-2222-3333-4444-555555555555',
+    },
+  ]
+
+  it('renders the design subtitle under the H1 (design 11:138)', async () => {
+    renderFilesPage()
+    expect(await screen.findByRole('heading', { name: 'Files' })).toBeInTheDocument()
+    expect(
+      screen.getByText('A unified index of session attachments and agent output — previewable and traceable.'),
+    ).toBeInTheDocument()
+  })
+
+  it('search filters by name or path (case-insensitive) and the pill counts ride along', async () => {
+    renderFilesPage()
+    await screen.findAllByTestId('files-row')
+    const input = screen.getByTestId('files-search') as HTMLInputElement
+
+    // Name substring narrows to notes.md; every pill count answers too.
+    fireEvent.change(input, { target: { value: 'notes' } })
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
+    expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('notes.md')
+    expect(screen.getByRole('button', { name: /All/ })).toHaveTextContent('1')
+    expect(screen.getByRole('button', { name: /Attachments/ })).toHaveTextContent('1')
+    expect(screen.getByRole('button', { name: /Agent outputs/ })).toHaveTextContent('0')
+
+    // Path substring matches too — case-insensitively.
+    fireEvent.change(input, { target: { value: 'DOCUMENTS/GONE' } })
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
+    expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('gone.md')
+
+    // No hit at all → the empty state, not a silent blank grid.
+    fireEvent.change(input, { target: { value: 'no-such-file-xyz' } })
+    await waitFor(() => expect(screen.getByText(/No files yet/)).toBeInTheDocument())
+
+    // Esc clears the query; the full list returns and the input empties.
+    fireEvent.keyDown(input, { key: 'Escape' })
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(3))
+    expect(input.value).toBe('')
+  })
+
+  it('search stacks with the lens pills (intersection, never replacement)', async () => {
+    renderFilesPage()
+    await screen.findAllByTestId('files-row')
+    const input = screen.getByTestId('files-search')
+
+    // 'review' matches only q3-review.pptx (a generated row).
+    fireEvent.change(input, { target: { value: 'review' } })
+    fireEvent.click(screen.getByRole('button', { name: /Agent outputs/ }))
+    await waitFor(() => expect(screen.getAllByTestId('files-row')).toHaveLength(1))
+    expect(screen.getAllByTestId('files-row')[0]).toHaveTextContent('q3-review.pptx')
+
+    // The same query under the Attachments lens is empty: notes.md passes
+    // the lens but not the query → the honest empty state.
+    fireEvent.click(screen.getByRole('button', { name: /Attachments/ }))
+    await waitFor(() => expect(screen.queryByTestId('files-row')).not.toBeInTheDocument())
+    expect(screen.getByText(/No files yet/)).toBeInTheDocument()
+  })
+
+  it('jump shows the joined session title and falls back to the generic label when absent', async () => {
+    vi.mocked(api.listFileIndex).mockResolvedValue(TITLED_ROWS.map(e => ({ ...e })))
+    renderFilesPage()
+    const rows = await screen.findAllByTestId('files-row')
+
+    // Titled row: the readable session title is the button's label.
+    const titledRow = rows.find(r => r.textContent?.includes('q3-review.pptx'))!
+    expect(within(titledRow).getByTestId('files-row-source-jump')).toHaveTextContent('Q3 roadmap brainstorm')
+    // Stamped-but-untitled row: the generic 「来源会话」 label fallback.
+    expect(within(rows.find(r => r.textContent?.includes('notes.md'))!).getByTestId('files-row-source-jump'))
+      .toHaveTextContent('Source session')
+  })
+
+  it('≥1280px: the preview card jump prefers the readable session title and still navigates', async () => {
+    installMatchMedia(true)
+    const switchSession = vi.fn().mockResolvedValue(undefined)
+    vi.mocked(api.listFileIndex).mockResolvedValue(TITLED_ROWS.map(e => ({ ...e })))
+    renderFilesPage(switchSession)
+    const rows = await screen.findAllByTestId('files-row')
+
+    // Select the titled deck → the panel's jump reads the session title.
+    fireEvent.click(within(rows[0]).getByTestId('files-row-select'))
+    const jump = screen.getByTestId('files-preview-source-jump')
+    expect(jump).toHaveTextContent('Q3 roadmap brainstorm')
+    expect(jump).toHaveAttribute('aria-label', 'Q3 roadmap brainstorm')
+
+    fireEvent.click(jump)
+    await waitFor(() =>
+      expect(switchSession).toHaveBeenCalledWith('0a1960aa-9c1d-4a5e-b8f0-31f2d1c4091a'),
+    )
   })
 })

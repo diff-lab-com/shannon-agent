@@ -104,6 +104,10 @@
 <span class="desk-note dn-bl">捕获仅追加到主窗口草稿</span>
 <span class="desk-note dn-br">失焦自动收起 · Esc 关闭</span>
 
+<!-- 2026-10-15 重绘收口(R3 §4 遗留「companion 文案微差」):标题/占位句不变;
+     置顶 = 「窗口置顶」勾选项(非图标钮,CompanionPage.tsx:147);发送钮 = 「发送」;
+     行内状态 = 成功回执「已发送到主窗口」(至多一条:回执/错误/空);原「# 会话」
+     目标 chip 实现不存在,删除;底部契约句对齐 companion.footer.hint。 -->
 <div class="companion-win glass-2 aurora-line">
 
   <!-- 窗头 -->
@@ -111,25 +115,18 @@
     <div class="brandmark bm"><svg><use href="#i-logo"/></svg></div>
     <span class="cw-title">快速捕获</span>
     <span class="spacer"></span>
-    <button class="iconbtn" style="width:26px;height:26px" title="置顶">
-      <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;color:var(--vio-2)">
-        <path d="M12 17v5"/>
-        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16h14v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
-      </svg>
-    </button>
+    <label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--t2);cursor:pointer">
+      <span style="width:12px;height:12px;border-radius:3px;border:1px solid rgba(139,124,247,.5);background:var(--vio-deep);display:inline-grid;place-items:center;flex:none"><svg class="ic" style="width:9px;height:9px;color:#fff;stroke-width:3"><use href="#i-check"/></svg></span>窗口置顶
+    </label>
   </div>
 
   <!-- 输入 -->
   <div class="cw-body">
     <textarea rows="3" placeholder="记一条,发给主窗口草稿…"></textarea>
     <div class="cw-row">
-      <button class="chip">
-        <span class="mono" style="font-size:11px;color:var(--t3)">#</span>
-        <span class="cv">修复 billing webhook…</span>
-        <svg class="caret"><use href="#i-chev-d"/></svg>
-      </button>
+      <span style="font-size:11.5px;color:var(--ok)">已发送到主窗口</span>
       <span class="spacer"></span>
-      <button class="btn pri sm"><svg class="ic"><use href="#i-send"/></svg>发到主窗口</button>
+      <button class="btn pri sm">发送</button>
     </div>
   </div>
 
@@ -151,8 +148,8 @@
     </div>
   </div>
 
-  <!-- 底部 hint -->
-  <div class="cw-foot">全局快捷键唤起 · 只写入草稿,不自动发送</div>
+  <!-- 底部 hint(对齐 companion.footer.hint:「只写入主窗口草稿,不自动发送」) -->
+  <div class="cw-foot">只写入主窗口草稿,不自动发送</div>
 
 </div>
 <div class="mocktag">13 · 伴随窗 · shannon v2 设计稿</div>

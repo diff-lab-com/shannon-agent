@@ -110,6 +110,59 @@ describe('SessionUsageDialog', () => {
     expect(screen.queryByTestId('session-usage-peak')).not.toBeInTheDocument()
   })
 
+  // T2 (R3 §4.1 峰值已用): with BOTH the used numerator (SessionInfo
+  // .peak_context_used_tokens) and the window budget present, the row
+  // renders the % form 峰值 X / 预算 Y（Z%） — 12345/96000 → 13%, compact
+  // tokens like the rest of the dialog ("12K / 96K (13%)").
+  it('renders the % form when peak-used AND the window budget are both present', async () => {
+    sessionCtx.sessions = [{
+      id: 'sess-1', title: 'Fix billing webhook', created_at: 0, message_count: 1,
+      max_context_tokens: 96_000, peak_context_used_tokens: 12_345,
+    }]
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    const peak = await screen.findByTestId('session-usage-peak')
+    expect(peak).toHaveTextContent('Session peak')
+    expect(peak).toHaveTextContent('12.3K / 96K (13%)')
+  })
+
+  // The % never fabricates headroom: used beyond the window clamps at 100%.
+  it('clamps the peak percentage at 100', async () => {
+    sessionCtx.sessions = [{
+      id: 'sess-1', title: 'Fix billing webhook', created_at: 0, message_count: 1,
+      max_context_tokens: 96_000, peak_context_used_tokens: 150_000,
+    }]
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    const peak = await screen.findByTestId('session-usage-peak')
+    expect(peak).toHaveTextContent('150K / 96K (100%)')
+  })
+
+  // 反例: a used numerator WITHOUT a window budget can never produce a
+  // percentage — and without the window there is no absolute form either,
+  // so the whole row hides (数字缺席即隐藏).
+  it('hides the peak row when only the used numerator exists', async () => {
+    sessionCtx.sessions = [{
+      id: 'sess-1', title: 'Fix billing webhook', created_at: 0, message_count: 1,
+      peak_context_used_tokens: 12_345,
+    }]
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    await waitFor(() => expect(screen.getByText('System prompt')).toBeInTheDocument())
+    expect(screen.queryByTestId('session-usage-peak')).not.toBeInTheDocument()
+  })
+
+  // 反例: a zero used figure is "no data" (never published by the backend
+  // fold, never rendered) — the row keeps the plain absolute window form.
+  it('keeps the absolute form when the used figure is zero', async () => {
+    sessionCtx.sessions = [{
+      id: 'sess-1', title: 'Fix billing webhook', created_at: 0, message_count: 1,
+      max_context_tokens: 96_000, peak_context_used_tokens: 0,
+    }]
+    render(<SessionUsageDialog open onClose={() => {}} />, { wrapper })
+    const peak = await screen.findByTestId('session-usage-peak')
+    expect(peak).toHaveTextContent('Session peak')
+    expect(peak).toHaveTextContent('96K')
+    expect(peak).not.toHaveTextContent('(')
+  })
+
   it('links to the full usage page and closes first', async () => {
     const onClose = vi.fn()
     render(<SessionUsageDialog open onClose={onClose} />, { wrapper })

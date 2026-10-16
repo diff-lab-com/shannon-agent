@@ -127,7 +127,6 @@
       </div>
       <div class="model-row">
         <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
-        <span class="mode-pill">开发模式</span>
       </div>
       <button class="nav-item on" style="margin-bottom:0"><svg class="ic"><use href="#i-gear"/></svg> 设置</button>
     </div>
@@ -213,29 +212,33 @@
             </div>
           </div>
 
-          <!-- d. 出站防线 -->
+          <!-- d. 出站防线 —— 2026-10-15 稿随落地重绘(同步 PR #413 S1.6 shipped 读态,r4 §E.0):
+               撤掉全部虚构控件(模式段控/switch 均为陈旧绘制——S1 裁决 B 与 shipped 实现均无任何 toggle),
+               改为只读状态行:两枚真实引擎守卫 = 实心徽章(模式词加粗 + 「本次运行发现:N」,findings 措辞
+               非 blocked);签名校验行 = 能力注记徽章「安装时校验 · 自声明语义」(静态,非 pending 非实时);
+               头部幽灵刷新钮;脚注 statusLive。文案逐字镜像 zh-CN settings.permissions.outbound.*。
+               琥珀虚线「读取中…/状态未知」两态应用侧存在(PermissionsSettings.tsx renderGuardBadge),
+               静态帧取已定格的默认点亮态(redact/4 + audit/2),不把在途/失败态画进 still;null(未启用)
+               中性徽章同理,均由本注记登记而非虚构绘制。 -->
           <div class="card pad" style="margin-top:10px">
-            <div class="cardhead"><svg class="ic"><use href="#i-up-right"/></svg>出站防线</div>
+            <div class="cardhead"><svg class="ic"><use href="#i-up-right"/></svg>出站防线<span class="spacer"></span><button class="btn ghost sm" title="刷新防线状态" aria-label="刷新防线状态" style="height:24px;width:24px;padding:0;border-radius:7px"><svg class="ic" style="width:13px;height:13px"><use href="#i-refresh"/></svg></button></div>
+            <p class="muted" style="font-size:12px;margin-bottom:7px">对出站内容的三道防线：出站请求携带的密钥先扫描再离开本机；注入内容先扫描再进入模型；技能与 MCP 更新在安装时经签名校验。</p>
             <div class="row srow">
               <span class="t">出站密钥扫描</span>
-              <span class="muted" style="font-size:11px;margin-left:6px">改写模式字节稳定,不影响提示词缓存</span>
               <span class="spacer"></span>
-              <div class="seg">
-                <button class="on">审计</button>
-                <button>改写</button>
-                <button>关闭</button>
-              </div>
+              <span class="st vio"><svg class="ic"><use href="#i-shield"/></svg><b>改写中</b><span style="color:var(--t3);font-weight:500;margin-left:2px">本次运行发现:4</span></span>
             </div>
             <div class="row srow">
               <span class="t">提示注入扫描</span>
               <span class="spacer"></span>
-              <div class="switch on"></div>
+              <span class="st vio"><svg class="ic"><use href="#i-shield"/></svg><b>审计中</b><span style="color:var(--t3);font-weight:500;margin-left:2px">本次运行发现:2</span></span>
             </div>
             <div class="row srow">
               <span class="t">技能与 MCP 签名校验</span>
               <span class="spacer"></span>
-              <div class="switch on"></div>
+              <span class="st mute"><svg class="ic"><use href="#i-check"/></svg>安装时校验 · 自声明语义</span>
             </div>
+            <p class="hintline">出站密钥扫描与提示注入扫描已在引擎内运行；徽标为实时状态，计数自本次应用启动起累计。</p>
           </div>
 
           <!-- e. 沙箱 -->

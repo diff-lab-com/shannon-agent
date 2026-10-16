@@ -79,6 +79,31 @@ function persistDemoPinned(): void {
 // demo feel live (get_config hands out a fresh clone of this).
 const demoConfig = clone(MOCK_CONFIG)
 
+// S1.6: demo twin of `get_outbound_defense_status` — the wire shape of
+// desktop/src/commands_security.rs. The lit default arms both real guards
+// (secret guard in the release-default `redact` mode with a nonzero finding
+// count, injection scanner in its `audit` default) so the card's live state
+// is demo/e2e-visible. The `shannon.demo.outboundDefense` = "unarmed"
+// localStorage variant returns both guards null (a fresh process where no
+// engine query has installed them yet) so the honest 未启用 state stays
+// testable without a chat script. Counters are findings, not blocks — the
+// audit-mode values were forwarded verbatim (commands_security.rs honesty
+// contract).
+const demoOutboundDefenseStatus = {
+  key_redaction: { mode: 'redact', audit_hits: 4 },
+  injection_scan: { mode: 'audit', audit_hits: 2 },
+  signature_check: { install_time_only: true, semantics: 'self-declared' },
+}
+function demoOutboundDefenseVariant(): 'lit' | 'unarmed' {
+  try {
+    return window.localStorage.getItem('shannon.demo.outboundDefense') === 'unarmed'
+      ? 'unarmed'
+      : 'lit'
+  } catch {
+    return 'lit'
+  }
+}
+
 // Wave-2 task 6: mutable local-voice (whisper-rs) config behind
 // get/save_voice_local_config. Starts disabled — the unarmed demo's
 // get_config gains a `voice_local` key ONLY after an explicit save, so the
@@ -209,7 +234,11 @@ let demoBudgetUsd: number | null = null
 // pre-contract rows. R2 B2: only the office deck carries
 // `extracted_segments` (the one seed the extraction pipeline could really
 // have parsed — .md never runs through it), so the 「已提取 N 段」 badge and
-// its honest absence are both demoable.
+// its honest absence are both demoable. R2 final sweep: only the deck
+// carries a joined `session_title` (mirroring the real backend's read-side
+// join off the demo rail — sess-001 is 「Q3 roadmap brainstorm」 there);
+// notes.md keeps a session but NO readable title so the generic-label
+// fallback stays demoable too.
 const demoFileIndex: FileIndexEntry[] = [
   {
     path: '/Users/demo/Documents/q3-review.pptx',
@@ -219,6 +248,7 @@ const demoFileIndex: FileIndexEntry[] = [
     favorite: true,
     source: 'generated',
     session_id: 'sess-001',
+    session_title: 'Q3 roadmap brainstorm',
     extracted_segments: 14,
   },
   {
@@ -1895,13 +1925,39 @@ export const handlers: Record<string, MockHandler> = {
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
     return srv ? { ...clone(srv), enabled: args.enabled, connected: args.enabled } : null
   },
-  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected.
+  // W3-B (A2): re-auth flips a needs_auth OAuth row back to connected. The
+  // demo twin persists the flip so the post-action refresh shows it (same
+  // state machine as the real backend's settings.json store).
   async reauthenticate_mcp_server(args: { name: string }) {
     await delay(400)
     const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
-    return srv
-      ? { ...clone(srv), connected: true, failure_kind: null, last_error: null, last_connected: Date.now() }
-      : null
+    if (!srv) return null
+    srv.enabled = true
+    srv.connected = true
+    srv.has_auth_headers = true
+    srv.failure_kind = null
+    srv.last_error = null
+    srv.last_connected = Date.now()
+    return clone(srv)
+  },
+  // 去认证 (07-connectors, design-parity R3 §4): revoke = clear the stored
+  // credential and drop the connection — the row is installed but back to
+  // the not-connected, unauthenticated state. The demo twin mutates the
+  // stored row so the post-confirm refresh shows the state change, exactly
+  // like the real backend rewriting settings.json + stopping the pool row.
+  async deauthenticate_mcp_server(args: { name: string }) {
+    await delay(300)
+    const srv = MOCK_MCP_SERVERS.find(s => s.name === args.name)
+    if (!srv) return null
+    srv.connected = false
+    srv.has_auth_headers = false
+    srv.failure_kind = null
+    srv.last_error = null
+    srv.last_connected = null
+    srv.tool_count = 0
+    srv.tools = []
+    srv.credential_storage = null
+    return clone(srv)
   },
   async get_mcp_server_config(args: { name: string }) {
     await delay()
@@ -2355,6 +2411,19 @@ export const handlers: Record<string, MockHandler> = {
   // --- Hook events + profiles ---
   async list_hook_events() { await delay(); return clone(MOCK_HOOK_EVENTS) },
   async list_permission_profiles() { await delay(); return clone(MOCK_PROFILES) },
+  // S1.6 — outbound-defense read-only status. See demoOutboundDefenseStatus
+  // above for the shape contract and the "unarmed" variant switch.
+  async get_outbound_defense_status() {
+    await delay()
+    if (demoOutboundDefenseVariant() === 'unarmed') {
+      return {
+        key_redaction: null,
+        injection_scan: null,
+        signature_check: { install_time_only: true, semantics: 'self-declared' },
+      }
+    }
+    return clone(demoOutboundDefenseStatus)
+  },
   // P1-3: frozen contract — activate_permission_profile(name: string|null).
   // 缓期批 3 (mirrors backend 8803a519d): activation changes ONLY
   // `active_permission_profile` — approval_mode is NOT written anymore (the

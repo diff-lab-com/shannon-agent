@@ -46,6 +46,7 @@
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M20.5 14.5a8.5 8.5 0 1 0-17 0"/><path d="M12 14.5l3.6-3.6"/></symbol>
   <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
   <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
@@ -124,9 +125,9 @@
         <div class="meter-row"><span>本月用量 / 预算 $20</span><b>$4.18</b></div>
         <div class="meter mt8"><i style="width:21%"></i></div>
       </div>
+      <!-- 2026-10-15 r4 §E.3 观察顺笔:移除「开发模式」mode-pill —— 应用侧栏(Sidebar.tsx)无任何模式指示物,词汇亦非权限命名 v2;用量 meter 与模型徽章真实在位,保留(同 02-chat T2 批先例,本批共清 17 页)。 -->
       <div class="model-row">
         <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
-        <span class="mode-pill">开发模式</span>
       </div>
     </div>
   </aside>
@@ -232,27 +233,25 @@
     <!-- composer 恒见(L1 玻璃 + 极光发丝线) -->
     <div class="composer-wrap">
       <div class="composer aurora-line">
-        <div class="ta"><textarea rows="2" placeholder="对改动提问,或 /review 生成评审意见…"></textarea></div>
+        <!-- 2026-10-15 重绘收口:02c 裁决 D1-D5 折叠入本页(形态注释与 02-chat 同源)。
+             占位句原为「对改动提问,或 /review 生成评审意见…」—— /review 自动评审意见
+             功能未立项(R2 §7.1-⑤ 裁决选 b),删句,实现维持不提示。 -->
+        <div class="ta"><textarea rows="2" placeholder="对改动提问…"></textarea></div>
         <div class="compose-row">
-          <!-- 2026-10-14 R2:词汇按权限命名 v2 回改(与 02c D7 同口径)——四档主词 = 询问 / 自动编辑 / 计划 / 全自动 -->
-          <div class="seg">
-            <button>询问</button>
-            <button class="on"><svg class="ic"><use href="#i-shield"/></svg>自动编辑</button>
-            <button>计划</button>
-            <button>全自动</button>
-          </div>
-          <button class="chip"><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
-          <button class="chip">推理<span class="cv">标准</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
-          <button class="chip"><svg class="ic"><use href="#i-at"/></svg><span class="cv">shannon-mono</span></button>
+          <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <button class="chip warn"><svg class="ic"><use href="#i-edit"/></svg><span class="cv">自动编辑</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+          <button class="chip" title="会话用量与上下文窗口"><svg class="ic"><use href="#i-chart"/></svg><span class="cv mono" style="font-size:11px">38%</span></button>
+          <button class="chip"><svg class="ic"><use href="#i-spark"/></svg><span class="cv">claude-sonnet-4-6</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
+          <button class="chip"><svg class="ic"><use href="#i-gauge"/></svg>推理<span style="display:inline-flex;align-items:center;gap:2.5px"><i style="width:5.5px;height:5.5px;border-radius:99px;background:rgba(255,255,255,.16)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:rgba(255,255,255,.16)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:rgba(255,255,255,.16)"></i><i style="width:5.5px;height:5.5px;border-radius:99px;background:rgba(255,255,255,.16)"></i></span><span class="cv">标准</span><svg class="caret"><use href="#i-chev-d"/></svg></button>
           <span class="spacer"></span>
-          <button class="iconbtn attach-dot"><svg class="ic"><use href="#i-clip"/></svg></button>
           <button class="iconbtn"><svg class="ic"><use href="#i-mic"/></svg></button>
           <button class="send stop"><svg class="ic"><use href="#i-stop"/></svg></button>
         </div>
       </div>
-      <!-- 规格标注(F-9 响应式降级,非 UI 元素) -->
+      <!-- 规格标注(F-9 响应式降级,非 UI 元素;2026-10-15 按 02c D3「各宽度同一形态」
+           口径回改 —— R2 §7-C2 张力解除) -->
       <div style="max-width:792px;margin:8px auto 0;text-align:center;font-size:10.5px;color:var(--t3);border:1px dashed var(--hair);border-radius:8px;padding:4px 10px">
-        响应式:&lt;1360px 右停靠自动折叠(图标呼出) · &lt;1200px 执行模式折叠为「当前档 chip」,三要素恒可达
+        响应式:&lt;1360px 右停靠自动折叠(图标呼出) · composer 控件各宽度同一形态(02c D3,无 1200px 断点折叠;&lt;1200px 仅 gauge 四点收缩为 icon+档位词)
       </div>
     </div>
   </div>

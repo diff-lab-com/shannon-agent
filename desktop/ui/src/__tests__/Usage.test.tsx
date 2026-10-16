@@ -181,6 +181,13 @@ describe('Usage page', () => {
   // M4 (设计 06 KPI 四卡之四「上下文峰值」): the session-index maximum of
   // SessionInfo.max_context_tokens, with the holding session's title as the
   // hint. No session ever logged a window → honest "—".
+  //
+  // T2 (R3 §4.1 峰值已用): when a session reports the real used numerator
+  // (SessionInfo.peak_context_used_tokens), the card switches to the peak
+  // USED with the （Z%） occupancy against that session's window in the
+  // hint — the percentage form the R3 audit deferred until the numerator
+  // landed. Sessions without the field still render the window-peak
+  // absolute form below.
   it('renders the context-peak KPI card from the session index', async () => {
     vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
     vi.mocked(api.listSessions).mockResolvedValue([
@@ -199,6 +206,50 @@ describe('Usage page', () => {
     expect(card).toHaveTextContent('Context peak')
     expect(card).toHaveTextContent('200K')
     expect(card).toHaveTextContent('Fix billing webhook')
+    // 诚实契约反例:窗口在册但无已用分子 → 保持绝对值形态,无百分比。
+    expect(card).not.toHaveTextContent('%')
+    vi.mocked(api.listSessions).mockResolvedValue([]) // 还原,避免泄漏到其他用例
+  })
+
+  it('renders the peak-used percentage form when a session reports the numerator', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    vi.mocked(api.listSessions).mockResolvedValue([
+      {
+        id: 'sess-a', title: 'Fix billing webhook', created_at: 0, message_count: 2,
+        max_context_tokens: 200000, peak_context_used_tokens: 96000,
+      },
+      {
+        id: 'sess-b', title: 'Small chat', created_at: 0, message_count: 1,
+        max_context_tokens: 96000,
+      },
+    ])
+    renderUsage()
+
+    // The used numerator wins the card (48% of its own window); the hint
+    // carries the design's （Z%） against THAT session's budget.
+    const card = await screen.findByTestId('usage-stat-context-peak')
+    expect(card).toHaveTextContent('Context peak')
+    expect(card).toHaveTextContent('96K')
+    expect(card).toHaveTextContent('Fix billing webhook · 48%')
+    vi.mocked(api.listSessions).mockResolvedValue([]) // 还原,避免泄漏到其他用例
+  })
+
+  it('falls back to the plain title hint when the winning session has no window', async () => {
+    vi.mocked(api.getUsageStats).mockResolvedValue(fixture)
+    vi.mocked(api.listSessions).mockResolvedValue([
+      {
+        id: 'sess-a', title: 'Fix billing webhook', created_at: 0, message_count: 2,
+        peak_context_used_tokens: 96000,
+      },
+    ])
+    renderUsage()
+
+    // Used numerator without a window budget: the value is real, the
+    // percentage is not derivable — no fabricated %.
+    const card = await screen.findByTestId('usage-stat-context-peak')
+    expect(card).toHaveTextContent('96K')
+    expect(card).toHaveTextContent('Fix billing webhook')
+    expect(card).not.toHaveTextContent('%')
     vi.mocked(api.listSessions).mockResolvedValue([]) // 还原,避免泄漏到其他用例
   })
 

@@ -96,7 +96,11 @@ const LIGHT_FLOOR: Omit<CmThemeColors, 'mode'> = {
 const DARK_FLOOR: Omit<CmThemeColors, 'mode'> = {
   background: '#1a1b26',
   foreground: '#a9b1d6',
-  cursor: '#7aa2f7',
+  // W4 视觉收敛: the floor rotates with the tokyo-night primary family
+  // (violet #8b7cf7, the W3 re-tone) instead of the legacy ANSI blue — the
+  // same value `readVar('--color-primary')` resolves on the live theme, so
+  // the jsdom/SSR floor no longer predicts a color the real theme dropped.
+  cursor: '#8b7cf7',
   selection: '#33467c',
   selectionDim: '#24283b',
   gutterBackground: '#1a1b26',
@@ -106,23 +110,25 @@ const DARK_FLOOR: Omit<CmThemeColors, 'mode'> = {
 
 /**
  * Dark-scheme syntax-token floor, for when the live theme tokens can't be
- * read (jsdom, SSR). Values follow Tokyo Night (the registry's dark floor
- * theme, same source as DARK_FLOOR) and every one reaches WCAG AA (≥ 4.5:1)
- * against DARK_FLOOR's background `#1a1b26` — ratios computed with the
- * WCAG 2.x relative-luminance formula:
+ * read (jsdom, SSR). Values follow the registry's dark floor theme's
+ * surface (same source as DARK_FLOOR) and every one reaches WCAG AA
+ * (≥ 4.5:1) against DARK_FLOOR's background `#1a1b26` — ratios computed
+ * with the WCAG 2.x relative-luminance formula:
  *   string    #e0af68  8.55:1
  *   comment   #a9b1d6  8.10:1   (+ heading #a9b1d6, bolded)
- *   keyword   #7aa2f7  6.79:1   (+ attribute, same primary family)
+ *   keyword   #8b7cf7  5.15:1   (+ attribute, same primary family — W4
+ *                               视觉收敛 rotated the floor off the legacy
+ *                               ANSI blue onto the W3 violet primary)
  *   tag       #f7768e  6.46:1
  *   constant  #9d7cd8  5.13:1
  */
 const DARK_SYNTAX_FLOOR: CmSyntaxPalette = {
-  keyword: '#7aa2f7',
+  keyword: '#8b7cf7',
   string: '#e0af68',
   comment: '#a9b1d6',
   constant: '#9d7cd8',
   tag: '#f7768e',
-  attribute: '#7aa2f7',
+  attribute: '#8b7cf7',
   heading: '#a9b1d6',
 };
 

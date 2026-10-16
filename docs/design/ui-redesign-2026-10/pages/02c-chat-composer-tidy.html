@@ -353,7 +353,7 @@
 
       <div class="statebox">
         <div class="sb-h">S3 · 会话用量弹框(D4 裁决)<span class="kbd">点击模型旁 38% 图标</span></div>
-        <div class="sb-d">上下文 / 缓存 / 花费 / 预算数字全部收进弹框;状态条只留目录与分支,不再显示数字与金额。</div>
+        <div class="sb-d">上下文 / 缓存 / 会话峰值 / 花费 / 预算数字全部收进弹框(峰值行为 T2 百分比形态);状态条只留目录与分支,不再显示数字与金额。</div>
         <div class="sb-stage" style="height:330px">
           <div class="cpop" style="left:50%;transform:translateX(-50%);bottom:126px;width:252px">
             <div class="csec">会话用量</div>
@@ -363,8 +363,12 @@
             </div>
             <div class="cdiv" style="margin-top:7px"></div>
             <div class="kv" style="padding:4px 12px"><span style="font-size:11px">缓存命中</span><b class="mono" style="color:var(--ok);font-size:11px">92%</b></div>
-            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">窗口峰值</span><b class="mono" style="font-size:11px">96k</b></div>
-            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">本会话花费 / 预算余</span><b class="mono" style="font-size:11px">$0.087 / $19.91</b></div>
+            <!-- T2(视觉收敛批已落地):峰值行 = 「会话峰值 X / 预算 Y(Z%)」 —— peak_used +
+                 窗口预算同在时渲染百分比形态(chat.input.usage.sessionPeak.pct),仅窗口时
+                 绝对值,两者皆缺 → 整行隐藏;绝不拿窗口当用量编百分比(SessionUsageDialog.tsx:66) -->
+            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">会话峰值</span><b class="mono" style="font-size:11px">9.6万 / 20万（48%）</b></div>
+            <!-- 预算行口径 = 「花费 / 预算余」(余 = 上限 − 已花,可超支为负)+ 设置入口 -->
+            <div class="kv" style="padding:4px 12px"><span style="font-size:11px">$0.087 / $19.91 预算余</span><span class="chip" style="height:20px;font-size:10px;padding:0 8px"><svg class="ic" style="width:11px;height:11px"><use href="#i-chart"/></svg>设置会话预算…</span></div>
             <div class="cnote">数字缺席即隐藏(诚实契约);发送前预估行(草稿下方)不受影响。</div>
           </div>
           <div class="composer mini" style="bottom:44px">

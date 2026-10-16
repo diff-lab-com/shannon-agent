@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
+import ReviewWorkspace from '@/components/diff/ReviewWorkspace'
+import type { HunkDecision } from '@/lib/diff-merge'
 import { useChat } from '@/context/ChatContext'
 import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
@@ -88,6 +90,9 @@ export default function Chat() {
   const [input, setInput] = useState('')
   const [attachedFiles, setAttachedFiles] = useState<string[]>([])
   const [diffPath, setDiffPath] = useState<string | null>(null)
+  // T7 (03 页 review-wrap): a set review target makes the review session
+  // active — the main region swaps the transcript for the review workspace.
+  const reviewActive = diffPath != null
   const [diffPaths, setDiffPaths] = useState<string[] | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -281,16 +286,19 @@ export default function Chat() {
   // Ctrl/Cmd+F owns the shortcut everywhere on the chat page — the desktop
   // webview has no native find dialog to fall back to. preventDefault even
   // inside editable targets so the composer can't shadow it.
+  // T7: while the review workspace owns the main region the transcript is
+  // not mounted — a search would have no scroll container to drive.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return
       if (e.key !== 'f' && e.key !== 'F') return
+      if (reviewActive) return
       e.preventDefault()
       setSearchOpen(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [reviewActive])
   const closeSearch = useCallback(() => setSearchOpen(false), [])
 
 
@@ -708,9 +716,10 @@ export default function Chat() {
 
   // ── Aurora 2026-10 diff-review loop (03 页, 数据全部现成) ──────────────
   // The session's changed files (completed file-mutating tool calls) feed
-  // the RightDock's embedded FileDiffList sidebar; checkpoints render as
-  // rewind chips atop the diff tab. Same extraction rules as the in-bubble
-  // FileChangesCard (lib/fileRefs is the single source of truth).
+  // the review file list (workspace sidebar + dock Diff summary tab);
+  // checkpoints render as rewind chips atop the dock's Diff tab. Same
+  // extraction rules as the in-bubble FileChangesCard (lib/fileRefs is the
+  // single source of truth).
   const changedPaths = useMemo(() => {
     const out: string[] = []
     for (const m of messages) {
@@ -722,6 +731,21 @@ export default function Chat() {
     }
     return out
   }, [messages])
+
+  // ── T7 (03 页 review-wrap, R3 §4.1): the main-area review workspace ────
+  // While a review target is set the workbench's per-hunk decisions publish
+  // into this lifted map so the dock Diff tab's file list keeps its live
+  // status badges (the body itself no longer lives in the dock). The ref
+  // mirror keeps the callback identity stable — a fresh closure per render
+  // would re-fire the body's publish effect forever.
+  const [reviewDecisions, setReviewDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
+  const reviewPathRef = useRef(diffPath)
+  reviewPathRef.current = diffPath
+  const handleReviewDecisionsChange = useCallback((decisions: Map<string, HunkDecision>) => {
+    const path = reviewPathRef.current
+    if (!path) return
+    setReviewDecisions(prev => new Map(prev).set(path, decisions))
+  }, [])
 
   // Checkpoint rewind from the dock's chips — same IPC the message-level
   // rewind uses; the confirm dialog below guards the destructive step.
@@ -747,9 +771,10 @@ export default function Chat() {
 
   // ── Layout (2026-09 review) ────────────────────────────────────────────
   //
-  // The chat page is one full-width conversation plus the RightDock
-  // (documents / diffs / live preview / context) and the terminal drawer
-  // with its own toggle (Ctrl+`).
+  // The chat page is one full-width conversation — swapped for the main-area
+  // review workspace while a diff review is active (T7, 03 页 review-wrap) —
+  // plus the RightDock (documents / review summary / live preview / context)
+  // and the terminal drawer with its own toggle (Ctrl+`).
 
   const workingDir = sessions.find(s => s.id === currentSessionId)?.working_dir
     ?? config?.working_dir
@@ -814,7 +839,7 @@ export default function Chat() {
               sessionId={currentSessionId}
             />
 
-            {searchOpen && (
+            {!reviewActive && searchOpen && (
               <ChatSearchBar
                 messages={messages}
                 virtualized={messages.length > VIRTUALIZE_THRESHOLD}
@@ -825,15 +850,31 @@ export default function Chat() {
               />
             )}
 
-            <MessageArea
-              scrollParentRef={scrollParentRef}
-              messagesEndRef={messagesEndRef}
-              virtualizer={virtualizer}
-              setDiffPath={setDiffPath}
-              setDiffPaths={setDiffPaths}
-              searchFlashIndex={searchFlashIndex}
-              onEditMessage={startEdit}
-            />
+            {/* T7 (03 页 review-wrap): while a diff review session is active
+                the main region IS the review workspace — the design renders
+                the workbench full-width in the main area; the transcript
+                returns when the review closes. The composer below stays
+                constant-visible (03 页: composer 恒见). */}
+            {reviewActive ? (
+              <ReviewWorkspace
+                filePath={diffPath}
+                changedPaths={changedPaths}
+                decisionsByPath={reviewDecisions}
+                onDecisionsChange={handleReviewDecisionsChange}
+                onSelectPath={setDiffPath}
+                onClose={() => setDiffPath(null)}
+              />
+            ) : (
+              <MessageArea
+                scrollParentRef={scrollParentRef}
+                messagesEndRef={messagesEndRef}
+                virtualizer={virtualizer}
+                setDiffPath={setDiffPath}
+                setDiffPaths={setDiffPaths}
+                searchFlashIndex={searchFlashIndex}
+                onEditMessage={startEdit}
+              />
+            )}
             <ComposerPanel
               setQuickFixOpen={setQuickFixOpen}
               setEditorOpen={setEditorOpen}
@@ -878,11 +919,11 @@ export default function Chat() {
             workingDir={workingDir}
             planModeActive={config?.approval_mode === 'plan'}
             diffPath={diffPath}
-            onCloseDiff={() => setDiffPath(null)}
             changedPaths={changedPaths}
             onSelectDiffPath={setDiffPath}
             checkpoints={checkpoints}
             onRewindCheckpoint={setPendingCheckpointRewind}
+            decisionsByPath={reviewDecisions}
             runProcess={runProcess}
           />
           <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />

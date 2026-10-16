@@ -157,9 +157,16 @@ test.describe('scripted chat backend — dock-interactions (journey #20)', () =>
       .toMatchObject({ content: expect.stringContaining('- [x] Draft the OAuth gallery spec') })
 
     // Auto-dock source 2: the seeded write_file FileCard's "Review changes"
-    // docks the single-file diff review on the Diff tab.
+    // starts a review session — T7 (03 页 review-wrap): the workbench renders
+    // as the MAIN-AREA full-width workspace while the dock reveals its Diff
+    // summary tab.
     await page.getByTestId('file-card-review-diff').click()
     await expect(page.getByRole('tab', { name: 'Diff' })).toHaveAttribute('aria-selected', 'true', { timeout: 10_000 })
+    await expect(page.getByTestId('review-workspace')).toBeVisible({ timeout: 10_000 })
+    // Closing the review returns the transcript (the main region swaps back)
+    // before the transcript-level artifact chip below is exercised.
+    await page.getByRole('button', { name: 'Close review' }).click()
+    await expect(page.getByTestId('review-workspace')).toHaveCount(0)
 
     // The chat-fence html artifact chip docks its own tab; the interactive
     // registration fails in demo (no scripting host) → the honest static
