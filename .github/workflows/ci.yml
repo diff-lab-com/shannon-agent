@@ -992,6 +992,21 @@ jobs:
     #    stays excluded: it is a Tauri binary whose rustdoc needs GTK/WebKit system
     #    deps this job does not install, and its public API is not consumed
     #    externally (application crate, not a library).
+    #
+    # TEMPORARILY ADVISORY (continue-on-error, 2026-10-16, PR #414): crates.io
+    # mass-yanked the zip 2.x/3.x/8.x lines (only 9.0.x survives), and three
+    # pinned ecosystem deps — calamine 0.36.1 (zip ^8.6), rust_xlsxwriter
+    # 0.99.x (zip ^8.3), utoipa-swagger-ui 10.x (zip ^8.6) — have no release on
+    # a live zip line. cargo-semver-checks resolves baselines and per-crate
+    # placeholders FRESH (`cargo add` + `cargo update` reject yanked versions),
+    # so this job cannot pass for ANY revision of this repo — including dev
+    # itself — until those upstreams ship zip-9-compatible releases. Our own
+    # manifests already migrated to zip "9" (PR #414); the audit side carries a
+    # scoped `[yanked]` ignore in .cargo/audit.toml instead. RE-ENABLE hard
+    # gating when the three upstreams publish zip-9-compatible releases and the
+    # baseline tag is moved past this point. (ci-gates.md §1 already records
+    # this job as pre-1.0-advisory.)
+    continue-on-error: true
     env:
       # Interim fix (2026-09-09): v0.10.0 predates shannon-browser /
       # shannon-remote, and cargo-semver-checks cannot build a baseline

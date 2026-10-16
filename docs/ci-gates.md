@@ -19,7 +19,7 @@
 | `metrics` | `scripts/gen-metrics.sh` | yes (downstream) | yes (downstream) | Aggregator: depends on `test`, `clippy`, `audit`, `rustsec-audit` |
 | `cross-platform` (Cross-platform Check) | `cargo check --workspace --exclude shannon-desktop` | **yes (new)** | **yes (new)** | Target-conditional code drift on `ubuntu` + `macos` + `windows` |
 | `check-linux-musl` (Linux musl Check) | `cargo check --workspace --exclude shannon-desktop --target x86_64-unknown-linux-musl` | no (`continue-on-error`) | no (`continue-on-error`) | Statically-linked Linux regression. Blocked upstream on musl-portable webkit/gtk. |
-| `semver-check` (Semver Check) | `cargo semver-checks` vs `v0.5.5` baseline | no (`continue-on-error`) | no (`continue-on-error`) | API-breaking changes vs the last release tag. Pre-1.0 is advisory. |
+| `semver-check` (Semver Check) | `cargo semver-checks` vs `semver-baseline-2026-09` tag — **temporarily advisory (continue-on-error) since 2026-10-16**: crates.io mass-yanked the zip 2.x/3.x/8.x lines and pinned ecosystem deps (calamine/rust_xlsxwriter/utoipa-swagger-ui) have no zip-9-compatible release, so fresh baseline/placeholder resolution fails for every revision; re-enable when upstream ships zip-9 releases | no (`continue-on-error`) | no (`continue-on-error`) | API-breaking changes vs the last release tag. Pre-1.0 is advisory. |
 | `insta` (Insta Snapshots) | nextest + reject `.snap.new` leftovers | **yes (new)** | **yes (new)** | Snapshot drift shipped without `cargo insta review` |
 
 Adjacent workflows (not in `ci.yml`, but referenced by branch protection):
