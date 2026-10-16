@@ -132,8 +132,9 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
       await expect(frontToast).toBeVisible({ timeout: 10_000 })
     }
 
-    // Dark-first default without a stored theme.
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyo-night')
+    // Dark-first default without a stored theme (verdict A 2026-10-15:
+    // the default is aurora-ink, the ui-redesign-2026-10 design base).
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'aurora-ink')
     await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
     await summonToast()
     await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'dark')
@@ -145,7 +146,10 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     // in-app navigation → click the theme card → <html> flips instantly,
     // and the Toaster follows the RESOLVED theme (G4), not a fixed value.
     await page.getByRole('link', { name: 'Settings' }).click()
-    await page.getByRole('link', { name: 'Theme' }).click()
+    // The settings nav link was renamed 'Appearance' (nav.theme, G1 parity
+    // batch) — the old 'Theme' locator never matched and the spec timed out
+    // here before reaching the assertions below.
+    await page.getByRole('link', { name: 'Appearance' }).click()
     // exact: 'Tokyo Night' must not substring-match "Tokyo Night Light".
     await page.getByRole('button', { name: 'Tokyo Night', exact: true }).waitFor({ timeout: 10_000 })
     await page.getByRole('button', { name: 'Material', exact: true }).click()

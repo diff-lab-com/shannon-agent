@@ -4,6 +4,7 @@
 // the ids as literal types so ThemeContext's compile-time drift check works.
 export const THEME_REGISTRY = [
   { id: 'material', mode: 'light' },
+  { id: 'aurora-ink', mode: 'dark' },
   { id: 'tokyo-night', mode: 'dark' },
   { id: 'tokyo-night-light', mode: 'light' },
   { id: 'catppuccin', mode: 'dark' },

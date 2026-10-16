@@ -1831,6 +1831,7 @@
   "settings.theme.usingTheme": "Currently using {theme} theme.",
   "settings.theme.name.system": "System",
   "settings.theme.name.material": "Material",
+  "settings.theme.name.auroraInk": "Aurora Ink",
   "settings.theme.name.tokyoNight": "Tokyo Night",
   "settings.theme.name.tokyoNightLight": "Tokyo Night Light",
   "settings.theme.name.catppuccin": "Catppuccin",

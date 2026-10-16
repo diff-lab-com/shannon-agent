@@ -30,22 +30,48 @@ describe('ThemeContext', () => {
     }
   })
 
-  it('defaults to the dark-first tokyo-night theme', () => {
+  // Verdict A (ui-redesign-2026-10 review §5): the dark default is
+  // 'aurora-ink' (the 2026-10-15 design base); tokyo-night stays switchable.
+  it('defaults to the dark-first aurora-ink theme', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
+  })
+
+  it('provides all 14 themes', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    expect(screen.getByTestId('theme-count')).toHaveTextContent('14')
+  })
+
+  // Verdict A follow-up: a stored 'material' is a pre-dark-default leftover
+  // (one-time migration) — it now lands on the current default aurora-ink.
+  it('migrates a stored material leftover to aurora-ink, once', () => {
+    localStorage.setItem('shannon-theme', 'material')
+    localStorage.removeItem('shannon.theme.darkDefaultMigrated')
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
+    expect(localStorage.getItem('shannon.theme.darkDefaultMigrated')).toBe('1')
+  })
+
+  it('keeps an explicit stored pick (tokyo-night) over the new default', () => {
+    localStorage.setItem('shannon-theme', 'tokyo-night')
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
     expect(screen.getByTestId('current-theme')).toHaveTextContent('tokyo-night')
-  })
-
-  it('provides all 13 themes', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    expect(screen.getByTestId('theme-count')).toHaveTextContent('13')
   })
 
   // G7 i18n (P1-8): the provider carries message ids, not strings — every
@@ -58,7 +84,7 @@ describe('ThemeContext', () => {
       </ThemeProvider>
     )
     for (const id of [
-      'system', 'material', 'tokyo-night', 'tokyo-night-light', 'catppuccin',
+      'system', 'material', 'aurora-ink', 'tokyo-night', 'tokyo-night-light', 'catppuccin',
       'nord', 'ember', 'slate', 'solarized', 'solarized-light', 'dracula',
       'gruvbox', 'gruvbox-light',
     ]) {
@@ -203,6 +229,7 @@ describe('ThemeContext — scheme registry (U9)', () => {
   // Expected scheme per theme — mirrors how each theme's tokens are authored.
   const EXPECTED: Record<string, 'light' | 'dark'> = {
     'material': 'light',
+    'aurora-ink': 'dark',
     'tokyo-night': 'dark',
     'tokyo-night-light': 'light',
     'catppuccin': 'dark',

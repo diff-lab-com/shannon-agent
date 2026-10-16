@@ -25,6 +25,26 @@ export type XtermPalette = {
 }
 
 export const XTERM_PALETTES: Record<string, XtermPalette> = {
+  'aurora-ink': {
+    background: '#0a0b10',
+    foreground: '#eceef6',
+    black: '#161923',
+    red: '#fb7185',
+    green: '#3ddc97',
+    yellow: '#f5b83d',
+    blue: '#6fa8e8',
+    magenta: '#a89cfa',
+    cyan: '#56c8dd',
+    white: '#c5cadb',
+    brightBlack: '#4a4f66',
+    brightRed: '#ff8ba0',
+    brightGreen: '#6ee7b7',
+    brightYellow: '#ffcd6b',
+    brightBlue: '#8ab8f5',
+    brightMagenta: '#bcb0fb',
+    brightCyan: '#7dd9ea',
+    brightWhite: '#ffffff',
+  },
   'tokyo-night': {
     background: '#1a1b26',
     foreground: '#a9b1d6',

@@ -8,7 +8,7 @@ interface GradientTextProps {
   /**
    * Tailwind gradient utility names without the `bg-gradient-to-r` prefix.
    * Defaults to a primary-anchored shimmer so the brand wordmark keeps the
-   * theme's primary hue in all 12 themes (the old via-tertiary/to-secondary
+   * theme's primary hue in all 13 themes (the old via-tertiary/to-secondary
    * defaults mixed in amber stops — material tertiary is var(--color-tertiary) — and the
    * small wordmark read brown).
    */
