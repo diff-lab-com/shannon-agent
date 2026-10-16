@@ -1937,7 +1937,7 @@ export default function ChatInput({
                     visual readout now; a static sr-only note about limits
                     replaces the per-key announcements. */}
                 <span
-                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
+                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant')}
                 >
                   {charCount.toLocaleString()}
                 </span>

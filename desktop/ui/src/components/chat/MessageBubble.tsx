@@ -1167,7 +1167,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
         <ul className="mt-xs space-y-[2px]" data-testid="file-changes-card-paths">
           {paths.map(p => (
             <li key={p} className="flex items-start gap-xs font-label-xs text-on-surface-variant min-w-0">
-              <span className="font-mono text-on-surface-variant/70 shrink-0" aria-hidden="true">·</span>
+              <span className="font-mono text-on-surface-variant shrink-0" aria-hidden="true">·</span>
               <span className="font-mono truncate" title={p}>{p}</span>
             </li>
           ))}
@@ -1223,7 +1223,7 @@ function RetryChainBanner({ count, reasons = [] }: { count: number; reasons?: st
         <ul className="mt-xs space-y-[2px]">
           {reasons.map((line, idx) => (
             <li key={idx} className="flex items-start gap-xs font-label-xs text-on-surface-variant">
-              <span className="font-mono text-on-surface-variant/70 shrink-0" aria-hidden="true">
+              <span className="font-mono text-on-surface-variant shrink-0" aria-hidden="true">
                 {intl.formatMessage({ id: 'chat.message.retryChain.attempt' }, { n: idx + 1 })}
               </span>
               <span className="truncate" title={line}>{line}</span>
