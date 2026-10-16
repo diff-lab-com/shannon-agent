@@ -99,6 +99,17 @@ ignore = [
     # as deny.toml (both tools flag it): yaml parsing is config-local, not
     # attacker-facing. Keep the two lists in sync per the header note.
     "RUSTSEC-2024-0449",
+    # zip 8.6.0 (transitive ONLY: calamine ^8.6 / rust_xlsxwriter ^8.3 /
+    # utoipa-swagger-ui ^8.6) — extract() privilege-escape family
+    # (SUID/SGID + symlink escapes), fixed in zip >=9.0.0. Same entry as
+    # deny.toml (both tools flag it): first-party extract() call sites run
+    # on the workspace's patched zip 9.0.x; the 8.6.0 consumers never call
+    # extract() on attacker-controlled archives. Upgrade blocked upstream
+    # (crates.io 2026-10-17: all three still pin zip ^8.x) — same trigger
+    # as the [yanked] lever below.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
 
 # ── Yanked-crate detection ─────────────────────────────────────────────
