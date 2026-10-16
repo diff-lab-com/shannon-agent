@@ -783,7 +783,10 @@ function TurnCard({
             ↻ {nf.format(turn.cache_read_tokens)}/{nf.format(turn.cache_creation_tokens)}
           </span>
           {turn.cost_usd != null && (
-            <span className="inline-flex items-center gap-xs text-on-surface-variant/50">
+            /* Full-strength on-surface-variant: the demoted-but-legible tier
+               (axe rejects alpha <1 text). Primary tier above is font-medium
+               on-surface; this stays visibly secondary without failing AA. */
+            <span className="inline-flex items-center gap-xs text-on-surface-variant">
               <Icon name="payments" size="xs" />
               {COST_FORMAT.format(turn.cost_usd)}
               <EstimatedBadge />
