@@ -1,5 +1,10 @@
 // office Wave 2 B9' — FilesPage tests: mock-data rendering, favorite toggle
-// hitting the wrapper, missing-file greying, favorites lens, empty state.
+// hitting the wrapper, missing-file lost-card form, favorites lens, empty
+// state.
+// R3 §4.1 (design 11:189 整卡琥珀虚线): the lost card is asserted in its new
+// form — whole-cell dashed amber border + amber badge + copy, NO opacity
+// dimming — including the selected+missing variant that re-tints the same
+// dashed outline.
 // R2 Wave C′: renders inside MemoryRouter (the page now owns a 来源会话
 // jump via useNavigate) and covers the session-stamped jump button.
 // R2 Wave B1: the 320px preview panel — wide-mode selection renders the
@@ -118,12 +123,27 @@ describe('FilesPage', () => {
     expect(rows[0]).not.toHaveTextContent('Original file moved or deleted')
   })
 
-  it('greys out a missing row and disables its open/reveal actions', async () => {
+  it('renders a missing row as the amber dashed lost card and disables its open/reveal actions', async () => {
     renderFilesPage()
     const rows = await screen.findAllByTestId('files-row')
     const missingRow = rows.find(r => r.textContent?.includes('gone.md'))!
     expect(missingRow.getAttribute('data-missing')).toBe('true')
-    expect(missingRow.className).toMatch(/opacity-50/)
+    // R3 §4.1 (design 11:189): the WHOLE cell carries the dashed amber
+    // border (border-warning/50 ≈ rgba(245,184,61,.5)) — no opacity
+    // dimming; the content stays readable.
+    expect(missingRow.className).toMatch(/border-warning\/50/)
+    expect(missingRow.className).toMatch(/border-dashed/)
+    expect(missingRow.className).not.toMatch(/opacity-50/)
+    // Healthy rows keep the plain hairline form (no dashed amber).
+    const healthyRow = rows.find(r => r.textContent?.includes('notes.md'))!
+    expect(healthyRow.className).not.toMatch(/border-dashed/)
+    expect(healthyRow.className).not.toMatch(/border-warning\/50/)
+    // The amber badge rides on the cell with the honest copy (i18n
+    // office.files.missing).
+    const badge = within(missingRow).getByTestId('files-row-missing')
+    expect(badge).toHaveTextContent('Original file moved or deleted')
+    expect(badge.className).toMatch(/border-warning\/50/)
+    expect(badge.className).toMatch(/border-dashed/)
     // Open/reveal are inert for a file that is not there.
     const openBtn = missingRow.querySelector('button[aria-label="Open attachment"]') as HTMLButtonElement
     const revealBtn = missingRow.querySelector('button[aria-label="Show in folder"]') as HTMLButtonElement
@@ -294,6 +314,10 @@ describe('FilesPage — preview panel (R2 B1)', () => {
 
     fireEvent.click(within(rows[2]).getByTestId('files-row-select')) // gone.md
     expect(screen.getByTestId('files-preview-missing')).toBeInTheDocument()
+    // Selected + missing: the dashed amber identity survives selection —
+    // re-tinted (warning/70), not replaced by the primary selected form.
+    expect(rows[2].className).toMatch(/border-warning\/70/)
+    expect(rows[2].className).toMatch(/border-dashed/)
     expect(screen.getByTestId('files-preview-open')).toBeDisabled()
     expect(screen.getByTestId('files-preview-reveal')).toBeDisabled()
   })
