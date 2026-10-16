@@ -99,7 +99,8 @@ describe('MemoryPanel', () => {
 
     expect(screen.getByText('Adopt React Query for server state')).toBeInTheDocument()
     expect(screen.getByText('#indent')).toBeInTheDocument()
-    expect(screen.getByText(/Used 3/)).toBeInTheDocument()
+    // G4a 记忆行解剖: the access count reads as the injection count.
+    expect(screen.getByText(/Injected 3/)).toBeInTheDocument()
   })
 
   it('opens editor when Create button clicked', async () => {
@@ -151,7 +152,9 @@ describe('MemoryPanel', () => {
       expect(screen.getByText('Delete me')).toBeInTheDocument()
     })
 
-    const deleteBtn = screen.getByRole('button', { name: 'Delete' })
+    // G4a: row actions moved into the card's … menu — open it, then delete.
+    fireEvent.click(screen.getByTestId('memory-card-menu'))
+    const deleteBtn = await screen.findByRole('menuitem', { name: 'Delete' })
     fireEvent.click(deleteBtn)
 
     const dialog = await screen.findByRole('alertdialog')
@@ -204,8 +207,10 @@ describe('MemoryPanel', () => {
       expect(screen.getByText('Use tabs not spaces')).toBeInTheDocument()
     })
 
-    // Open the editor via the card's Edit action.
-    fireEvent.click(screen.getByRole('button', { name: /edit/i }))
+    // Open the editor via the card's … menu → Edit (G4a row anatomy).
+    fireEvent.click(screen.getByTestId('memory-card-menu'))
+    const editItem = await screen.findByRole('menuitem', { name: 'Edit' })
+    fireEvent.click(editItem)
 
     // The editor pre-fills the project input with the current value.
     const projectInput = await screen.findByDisplayValue('.')
@@ -279,9 +284,11 @@ describe('MemoryPanel — dream distillation section', () => {
       expect(api.applyDreamProposal).toHaveBeenCalledTimes(1)
     })
     expect(api.applyDreamProposal).toHaveBeenCalledWith('proposal-1', ['a1', 'a3'])
-    // The review list is re-fetched after the apply.
+    // The review list is re-fetched after the apply. (Three calls total:
+    // DreamPanel's mount read + the right-rail 梦整理 summary card's one-shot
+    // mount read, then DreamPanel's post-apply refresh — G4a.)
     await waitFor(() => {
-      expect(api.listDreamProposals).toHaveBeenCalledTimes(2)
+      expect(api.listDreamProposals).toHaveBeenCalledTimes(3)
     })
   })
 })

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useLocation, useNavigate, NavLink } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { Input } from "@/components/ui/input";
 import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { usePendingSkillCandidates } from "@/hooks/usePendingSkillCandidates";
+import { listInstalledAddons } from "@/lib/tauri-api";
 
 /* 2026-09 review — the Extensions hub is rebuilt on the Codex/ZCode
  * marketplace pattern. The old seven-tab bar (精选 / MCP 服务器 / 技能 /
@@ -17,10 +18,13 @@ import { usePendingSkillCandidates } from "@/hooks/usePendingSkillCandidates";
  *     Plugins) collapse into one 管理 dropdown for power users — the routes
  *     are unchanged, only the chrome is simplified. */
 
+// G4a (设计 07): the primary tabs render as text underline-tabs — the icon
+// field G1's chip strip carried is dropped (the design's tabs are text +
+// count only).
 const primaryTabs = [
-  { to: '/extensions/featured', icon: 'auto_awesome', labelKey: 'extensions.featured' },
-  { to: '/extensions/installed', icon: 'download', labelKey: 'extensions.installed' },
-  { to: '/extensions/pending', icon: 'pending_actions', labelKey: 'extensions.pending', badge: true },
+  { to: '/extensions/featured', labelKey: 'extensions.featured' },
+  { to: '/extensions/installed', labelKey: 'extensions.installed' },
+  { to: '/extensions/pending', labelKey: 'extensions.pending', badge: true },
 ] as const
 
 const manageEntries = [
@@ -39,10 +43,22 @@ export default function Extensions() {
   const path = location.pathname;
   const [search, setSearch] = useState("");
   const [manageOpen, setManageOpen] = useState(false);
+  // G4a (design 07 下划线 tab 计数): the 已安装 tab's count pill — same
+  // aggregator Featured matches installs against. A failed/absent read (demo
+  // mode) renders no number rather than a fake zero.
+  const [installedCount, setInstalledCount] = useState<number | null>(null);
   // IA X1: 待处理 badge — same source of truth as the header bell and the
   // degraded toast (pending skill candidates; MCP errors join later).
   const { candidates } = usePendingSkillCandidates();
   const pendingCount = candidates.length;
+
+  useEffect(() => {
+    let cancelled = false;
+    listInstalledAddons()
+      .then((rows) => { if (!cancelled) setInstalledCount(Array.isArray(rows) ? rows.length : null) })
+      .catch(() => { if (!cancelled) setInstalledCount(null) });
+    return () => { cancelled = true };
+  }, []);
 
   let searchPlaceholderKey = "extensions.search.placeholder";
 
@@ -98,50 +114,53 @@ export default function Extensions() {
             />
           </div>
         </div>
-        <div className="flex items-center gap-xs flex-wrap min-w-0">
-          {/* G1-B S1 (设计 07): the primary destinations are chips — shared
-              `.chip` geometry + call-site hairline border, active = violet
-              dim; the count badge rides violet dim too instead of a solid
-              primary pill. */}
-          <nav aria-label={t('extensions.tabs.aria')} className="flex items-center gap-xs flex-wrap min-w-0">
+        <div className="flex items-end justify-between gap-md flex-wrap min-w-0">
+          {/* G4a (设计 07): the primary destinations are UNDERLINE tabs —
+              text tab + the 2px aurora gradient underline (.aurora-tab) +
+              a small grey count pill — the upgraded form of G1's chip strip.
+              The bottom hairline seats the underline (same grammar as the
+              Tasks tab row). */}
+          <nav
+            aria-label={t('extensions.tabs.aria')}
+            className="flex items-center gap-md border-b border-outline-variant/30 min-w-0"
+          >
             {primaryTabs.map(tab => {
               // IA X1: the 待处理 tab's accessible name carries the badge
-              // count (a bare chip number would read as "Pending 3").
+              // count (a bare pill number would read as "Pending 3").
               const badged = 'badge' in tab && tab.badge && pendingCount > 0
+              // G4a count pill: Installed (live aggregator read) / Pending
+              // (skill candidates). No data → no pill, never a fake zero.
+              const count = tab.to.endsWith('/installed')
+                ? installedCount
+                : 'badge' in tab && tab.badge
+                  ? pendingCount
+                  : null
               return (
               <NavLink
                 key={tab.to}
                 to={tab.to}
                 aria-label={badged ? intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount }) : undefined}
                 className={({ isActive }) =>
-                  `chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
+                  `relative flex items-center gap-xs px-md py-sm -mb-px text-label-md cursor-pointer whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
                     isActive
-                      ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
-                      : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface'
+                      ? 'text-on-surface font-semibold aurora-tab'
+                      : 'text-on-surface-variant hover:text-on-surface'
                   }`
                 }
               >
-                {({ isActive }) => (
-                  <>
-                    <span
-                      className="material-symbols-outlined"
-                      style={{ fontSize: 13, fontVariationSettings: isActive ? "'FILL' 1" : undefined }}
-                      aria-hidden="true"
-                    >
-                      {tab.icon}
-                    </span>
-                    <span>{t(tab.labelKey)}</span>
-                    {badged && (
-                      <span
-                        aria-hidden="true"
-                        title={intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount })}
-                        className="px-[6px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold tabular-nums leading-none"
-                      >
-                        {pendingCount}
-                      </span>
-                    )}
-                  </>
+              <>
+                <span>{t(tab.labelKey)}</span>
+                {count != null && count > 0 && (
+                  <span
+                    aria-hidden="true"
+                    title={badged ? intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount }) : undefined}
+                    data-testid={`extensions-tab-count-${tab.to.split('/').pop()}`}
+                    className="px-[6px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-on-surface-variant/10 text-on-surface-variant text-label-2xs font-bold tabular-nums leading-none"
+                  >
+                    {count}
+                  </span>
                 )}
+              </>
               </NavLink>
               )
             })}

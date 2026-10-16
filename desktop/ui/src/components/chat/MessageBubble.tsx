@@ -43,8 +43,9 @@ import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import { FileRefChip } from '@/components/shared/FileRefChip'
 import { basenameOf, extractToolInputPath, FILE_MUTATING_TOOLS } from '@/lib/fileRefs'
 import { FileCard } from '@/components/chat/FileCard'
-import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
+import type { ChatMessage, ToolCall, FileAttachment, TimelineTurn } from '@/types'
 import type { InjectedMemory } from '@/lib/tauri-api'
+import { useTurnUsage } from '@/hooks/useTurnUsage'
 import { cn } from '@/lib/utils'
 
 /** B1 §4-7: payload for a TRUE regenerate — rewind to the checkpoint before
@@ -126,6 +127,13 @@ export interface TurnMeta {
    *  (NOT this header's meta tail); null when no reasoning window overlaps —
    *  the chip then keeps the duration-less 「已思考」 (honesty contract). */
   reasoningMs: number | null
+  /** G4b (2026-10-15 parity review §5-G4b): the turn's token usage projected
+   *  from the trace timeline (matchTurnUsage over useTurnUsage's rows) —
+   *  feeds the hover detail strip, NOT the header meta tail. null when no
+   *  timeline turn overlaps this message's window (reloaded history's
+   *  load-time stamps match nothing — the strip then never renders, the same
+   *  honest degradation the cost segment shows). */
+  usage: TurnUsageStats | null
 }
 
 /**
@@ -185,6 +193,78 @@ export function matchTurnReasoning(windows: TurnReasoningWindow[] | undefined | 
     if (w.startMs <= lastTs && w.endMs >= firstTs) return w.reasoningMs
   }
   return null
+}
+
+/* ─────── G4b (2026-10-15 parity review §5-G4b) — hover usage details ─────── */
+
+/**
+ * G4b: one turn's usage projection — the numbers the hover detail strip
+ * shows under an assistant bubble. GRANULARITY RULING (2026-10-15 recon):
+ * message-level usage does not exist on any wire the UI reads — the session
+ * log folds every LLM request frame of a user-visible turn into ONE
+ * TimelineTurn, and the live `query:usage` payload drops the absolute cache
+ * counts (it carries a hit-rate only). The strip therefore always renders
+ * TURN-granularity figures and titles itself 「本轮」 (chat.message.usageTurn
+ * .title) — the honesty contract applied at the wording level.
+ */
+export interface TurnUsageStats {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  /** Turn wall-clock span (TimelineTurn end − start, ms). Includes the
+   *  turn's tool executions. null on a zero-width window — the duration and
+   *  tok/s segments then stay hidden (never a 0, never a fabricated span). */
+  durationMs: number | null
+  /** output_tokens ÷ (durationMs ÷ 1000) — turn-AVERAGE throughput. The
+   *  denominator is the wall-clock span, so tool-heavy turns read low; it is
+   *  presented under the same turn-level title, not as a generation-speed
+   *  measurement. null unless output > 0 and the span reaches 1s (below the
+   *  displayed duration granularity the figure is noise). */
+  tokensPerSecond: number | null
+}
+
+/**
+ * First timeline turn whose window overlaps [firstTs, lastTs] (epoch ms) —
+ * the SAME overlap (not containment) rule as matchTurnCost (optimistic user
+ * message vs. turn/start drift); timeline turns are sequential and
+ * non-overlapping, so first hit wins.
+ */
+export function matchTurnUsage(turns: TimelineTurn[] | undefined | null, firstTs: number, lastTs: number): TimelineTurn | null {
+  if (!Array.isArray(turns)) return null
+  for (const turn of turns) {
+    const startMs = turn.start_ts_ns / 1e6
+    const endMs = turn.end_ts_ns / 1e6
+    if (startMs <= lastTs && endMs >= firstTs) return turn
+  }
+  return null
+}
+
+/**
+ * tok/s derivation with the honesty gates inline: no output, no span, a
+ * sub-second span or a non-finite result all yield null — the segment is
+ * OMITTED, never shown as 0 or ∞.
+ */
+export function turnTokensPerSecond(outputTokens: number, durationMs: number | null): number | null {
+  if (outputTokens <= 0 || durationMs == null || !Number.isFinite(durationMs) || durationMs < 1000) return null
+  const tps = outputTokens / (durationMs / 1000)
+  if (!Number.isFinite(tps) || tps <= 0) return null
+  return tps >= 100 ? Math.round(tps) : Math.round(tps * 10) / 10
+}
+
+/** TimelineTurn → the strip's stats (span math + tok/s derivation). */
+export function turnUsageStats(turn: TimelineTurn): TurnUsageStats {
+  const durationMs = Number.isFinite(turn.start_ts_ns) && Number.isFinite(turn.end_ts_ns) && turn.end_ts_ns > turn.start_ts_ns
+    ? Math.round((turn.end_ts_ns - turn.start_ts_ns) / 1e6)
+    : null
+  return {
+    inputTokens: turn.input_tokens,
+    outputTokens: turn.output_tokens,
+    cacheReadTokens: turn.cache_read_tokens,
+    cacheCreationTokens: turn.cache_creation_tokens,
+    durationMs,
+    tokensPerSecond: turnTokensPerSecond(turn.output_tokens, durationMs),
+  }
 }
 
 /** Turn cost → the design's 「$0.087」 shape. Sub-cent and non-finite inputs
@@ -427,6 +507,78 @@ function MemoryCitationChips({ memories }: { memories?: InjectedMemory[] }) {
   )
 }
 
+/**
+ * G4b (2026-10-15 parity review §5-G4b · 竞品 LobeChat 生成明细 / Chatbox
+ * token 标注 / Cherry Studio tok/s): the assistant bubble's hover detail
+ * strip — ↓in · ↑out · ↻cache(读/写) · 耗时 · tok/s · ≈$ — pinned to the
+ * bubble's bottom edge, revealed on hover or when focus enters the bubble
+ * (keyboard / mobile focus-within; the same trigger contract as the
+ * ActionToolbar). Renders NOTHING without a matched timeline turn's usage
+ * (absent = hidden): reloaded history whose load-time stamps match no turn
+ * window stays clean. Turn-granularity by wire shape — the title says
+ * 「本轮」. Presentation discipline: bare mono text row, no card chrome, no
+ * shadow; every figure full-contrast (text-on-surface-variant / text-success
+ * at full value — the axe color-contrast lesson), fragments aria-hidden with
+ * ONE coherent group label, mirroring the header turn-meta grammar.
+ * The cost segment reuses the G3 estimate convention (「≈{cost}」) and only
+ * renders when the turn's cost is present and > 0 (unknown rate = no
+ * figure); a LOCAL session adds the success-toned 「本地模型 · $0」 segment
+ * (free by construction) — never instead of real usage, always on top of it.
+ */
+function MessageUsageStrip({ usage, costUsd, isLocal }: { usage: TurnUsageStats; costUsd: number | null; isLocal: boolean }) {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, number | string>) => intl.formatMessage({ id }, values)
+  const nf = useMemo(() => new Intl.NumberFormat(intl.locale), [intl.locale])
+  const hasCache = usage.cacheReadTokens + usage.cacheCreationTokens > 0
+  // The strip exists only on real token traffic — a matched turn with all
+  // zero counts renders nothing (nothing to audit).
+  if (usage.inputTokens <= 0 && usage.outputTokens <= 0 && !hasCache) return null
+  const duration = usage.durationMs != null ? turnDurationValue(usage.durationMs) : null
+  const durationText = duration == null
+    ? null
+    : 'seconds' in duration
+      ? t('chat.message.turnMeta.durationSec', { seconds: duration.seconds })
+      : t('chat.message.turnMeta.durationMin', { minutes: duration.minutes })
+  // G3 estimate convention: 「≈$0.0214」 only when a real cost exists.
+  const costValue = costUsd != null ? turnCostValue(costUsd) : null
+  const costText = costValue != null ? t('chat.message.turnMeta.cost', { cost: costValue }) : null
+  const speedText = usage.tokensPerSecond != null ? `${usage.tokensPerSecond} tok/s` : null
+  const localText = isLocal ? t('chat.message.usageTurn.localFree') : null
+  const detail = [
+    t('timeline.stat.tokens.aria', { input: nf.format(usage.inputTokens), output: nf.format(usage.outputTokens) }),
+    hasCache ? `${t('usage.stat.cache')} ${nf.format(usage.cacheReadTokens)}/${nf.format(usage.cacheCreationTokens)}` : null,
+    durationText,
+    speedText,
+    costText,
+    localText,
+  ].filter(Boolean).join(' · ')
+  return (
+    <div
+      data-testid="message-usage-strip"
+      role="group"
+      aria-label={t('chat.message.turnMeta.aria', { detail })}
+      title={t('chat.message.usageTurn.title')}
+      className="absolute left-0 top-full mt-[2px] z-10 flex max-w-full items-center gap-xs overflow-hidden whitespace-nowrap rounded-sm bg-surface-container-lowest px-xs py-[1px] font-mono text-label-xs tabular-nums text-on-surface-variant opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100"
+    >
+      <span aria-hidden="true" title={t('chat.context.inputTokens')}>↓ {nf.format(usage.inputTokens)}</span>
+      <span aria-hidden="true">·</span>
+      <span aria-hidden="true" title={t('chat.context.outputTokens')}>↑ {nf.format(usage.outputTokens)}</span>
+      {hasCache && (
+        <>
+          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" title={t('usage.stat.cache')}>↻ {nf.format(usage.cacheReadTokens)}/{nf.format(usage.cacheCreationTokens)}</span>
+        </>
+      )}
+      {durationText != null && <span aria-hidden="true" className="shrink-0">· {durationText}</span>}
+      {speedText != null && <span aria-hidden="true" className="shrink-0">· {speedText}</span>}
+      {costText != null && <span aria-hidden="true" className="shrink-0">· {costText}</span>}
+      {localText != null && (
+        <span aria-hidden="true" className="shrink-0 text-success">· {localText}</span>
+      )}
+    </div>
+  )
+}
+
 function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -510,6 +662,10 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const [reportOpen, setReportOpen] = useState(false)
   const { sendMessage, feedback, recordFeedback, isQuerying, messages: listMessages } = useChat()
   const { currentSessionId, switchSession, refreshSessions } = useSessions()
+  // G4b: the session's per-turn usage rows (trace_timeline, module-cached —
+  // one IPC per session across every bubble on screen, busted when the run
+  // settles). isLocal feeds the 「本地模型 · $0」 strip segment.
+  const usageInfo = useTurnUsage(currentSessionId ?? null, isQuerying)
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -610,6 +766,9 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     [isUser, message.content],
   )
 
+  // G4b: the strip consumes the matched turn's tokens; keeping the rows in a
+  // local lets the memo depend on the array identity, not the wrapper object.
+  const usageTurns = usageInfo.turns
   // 补1 (R2 审查 §7.1 · 02-chat msg-meta): assistant-turn aggregate — the
   // tool-call count and the wall-clock span of the conversation turn this
   // message belongs to. Turn math matches the list parents' convention
@@ -670,9 +829,16 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     const reasoningMs = firstTs != null
       ? matchTurnReasoning(reasoningWindows, firstTs, Math.max(lastTs, firstTs))
       : null
-    if (toolCount === 0 && durationMs == null && costUsd == null && reasoningMs == null) return null
-    return { toolCount, durationMs, costUsd, reasoningMs }
-  }, [isUser, message, messageIndex, listMessages, costWindows, reasoningWindows])
+    // G4b: the turn's token usage — same overlap match, against the hook's
+    // timeline rows. Feeds the hover strip only (the header tail stays
+    // tools/duration/cost; the strip owns tokens + duration + tok/s).
+    const usageTurn = firstTs != null
+      ? matchTurnUsage(usageTurns, firstTs, Math.max(lastTs, firstTs))
+      : null
+    const usage = usageTurn != null ? turnUsageStats(usageTurn) : null
+    if (toolCount === 0 && durationMs == null && costUsd == null && reasoningMs == null && usage == null) return null
+    return { toolCount, durationMs, costUsd, reasoningMs, usage }
+  }, [isUser, message, messageIndex, listMessages, costWindows, reasoningWindows, usageTurns])
 
   if (isUser) {
     return (
@@ -803,7 +969,9 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   return (
     <Message from={isTool ? 'system' : 'assistant'} className={cn('flex gap-md max-w-4xl group', searchFlash && 'search-flash rounded-2xl')}>
       <MessageAvatar from="assistant" icon={isTool ? 'build' : 'smart_toy'} />
-      <MessageContent className="space-y-md flex-1">
+      {/* relative anchors the G4b hover usage strip (top-full = the bubble's
+          bottom edge); it renders only on assistant answers. */}
+      <MessageContent className="space-y-md flex-1 relative">
         <MessageHeader role={isTool ? 'tool' : 'assistant'} timestamp={message.timestamp} turnMeta={isTool ? null : turnMeta} done={isTool ? undefined : message.interrupted !== true} />
         {/* W3-4: citation chips for the memories this turn's prompt carried —
             hidden entirely for a bypass / zero-injection turn (empty list). */}
@@ -1045,6 +1213,12 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
             open={reportOpen}
             onClose={() => setReportOpen(false)}
           />
+        )}
+        {/* G4b: hover/focus usage detail — pinned below the bubble's bottom
+            edge (absolute, zero layout footprint). Only assistant answers;
+            only when a timeline turn's usage actually matched. */}
+        {!isTool && turnMeta?.usage != null && (
+          <MessageUsageStrip usage={turnMeta.usage} costUsd={turnMeta.costUsd} isLocal={usageInfo.isLocal} />
         )}
       </MessageContent>
     </Message>

@@ -70,6 +70,10 @@ type FilesFilter = 'all' | 'attachments' | 'generated' | 'favorites' | 'missing'
 /** ≥1280px = the design's two-column breakpoint (grid + 320px preview). */
 const WIDE_QUERY = '(min-width: 1280px)'
 
+/** G4a pagehead meta: the home-dir prefix that gets ~-tilded in the display
+ *  path (POSIX + Windows-POSIX-ish forms). */
+const HOME_DIR_RE = /^\/(?:home|Users|mnt\/c\/Users)\/[^/]+/
+
 /** Coarse extension groups (design 11: 文档/表格/图片/代码/归档/…) driving
  *  both the cell glyph and the preview card's type label. */
 type FileKind =
@@ -294,6 +298,31 @@ export default function FilesPage() {
     [entries, selectedPath],
   )
   const selectedMissing = selectedEntry != null && missing[selectedEntry.path] === true
+
+  // G4a pagehead meta (design 11 顶栏 「~/work/shannon · 18 个文件」): the
+  // entries' longest common directory prefix, POSIX-form and ~-tilded for
+  // the home dir when every indexed file shares one root; empty when they
+  // span multiple roots (then the count alone shows — honest absence).
+  const commonRoot = useMemo(() => {
+    const rows = entries ?? []
+    if (rows.length === 0) return ''
+    const dirs = rows.map(r => {
+      const parts = r.path.split('/')
+      parts.pop()
+      return parts
+    })
+    let common = dirs[0]
+    for (const d of dirs.slice(1)) {
+      let i = 0
+      while (i < common.length && i < d.length && common[i] === d[i]) i++
+      common = common.slice(0, i)
+      if (common.length === 0) return ''
+    }
+    if (common.length === 0) return ''
+    // ~-tilt the home prefix for the design's 「~/work/shannon」 form.
+    const joined = common.join('/').replace(HOME_DIR_RE, '~')
+    return joined || '/'
+  }, [entries])
   const toggleSelection = (entry: FileIndexEntry) =>
     setSelectedPath(cur => (cur === entry.path ? null : entry.path))
 
@@ -310,11 +339,24 @@ export default function FilesPage() {
       <div className={cn('mx-auto px-lg py-lg flex flex-col gap-md', widePreview ? 'max-w-6xl' : 'max-w-5xl')}>
         {/* R2 final sweep (design 11:133-144 pagehead): H1 + muted subtitle
             on the left, the actions-area search box on the right (220px,
-            「搜索文件名…」); on narrow widths the rows stack. */}
+            「搜索文件名…」); on narrow widths the rows stack. G4a: the
+            pagehead meta row grows the index count (+ the common root path
+            when every entry shares one, design 11 顶栏 「~/work/shannon ·
+            18 个文件」 — the global Header's page context is chrome, so the
+            meta lives here). */}
         <div className="flex items-start justify-between gap-md flex-wrap">
           <div className="min-w-0">
             <h1 className="font-headline-md text-headline-sm text-on-surface font-bold">{t('office.files.title')}</h1>
-            <p className="font-label-sm text-on-surface-variant mt-[2px]">{t('office.files.subtitle')}</p>
+            <p className="font-label-sm text-on-surface-variant mt-[2px] flex items-center gap-sm flex-wrap">
+              <span>{t('office.files.subtitle')}</span>
+              {entries != null && entries.length > 0 && (
+                <span data-testid="files-meta-count" className="inline-flex items-center gap-xs shrink-0 tabular-nums">
+                  {commonRoot && <span className="font-mono">{commonRoot}</span>}
+                  {commonRoot && <span aria-hidden="true">·</span>}
+                  <span>{t('office.files.fileCount', { count: entries.length })}</span>
+                </span>
+              )}
+            </p>
           </div>
           {/* Same pill search input as the Extensions hub — icon + borderless
               Input inside a rounded shell. Esc clears (and does not also
@@ -450,17 +492,27 @@ export default function FilesPage() {
                       onClick={() => toggleSelection(entry)}
                       className="flex flex-col gap-xs text-left bg-transparent border-0 p-0 cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                     >
-                      {/* Thumb: file-type glyph, language-neutral. A lost
-                          file tints it amber (design 11:190 color:var(--warn)),
-                          matching the card's dashed amber identity. */}
+                      {/* G4a (design 11 文件卡): embedded preview thumb —
+                          a ~96px tinted block with the type glyph centered.
+                          `ink-3 底色块` rides the surface-container token;
+                          a lost file tints the glyph amber (design 11:190
+                          color:var(--warn)), matching the dashed identity. */}
                       <span
+                        data-testid="files-row-thumb"
                         className={cn(
-                          'material-symbols-outlined icon-2xl',
-                          isMissing ? 'text-warning' : 'text-on-surface-variant',
+                          'h-24 rounded-lg bg-surface-container flex items-center justify-center',
+                          isMissing && 'bg-warning-container/25',
                         )}
                         aria-hidden="true"
                       >
-                        {fileTypeIcon(entry.name)}
+                        <span
+                          className={cn(
+                            'material-symbols-outlined icon-2xl',
+                            isMissing ? 'text-warning' : 'text-on-surface-variant',
+                          )}
+                        >
+                          {fileTypeIcon(entry.name)}
+                        </span>
                       </span>
                       <span className="block font-label-sm text-on-surface truncate pr-lg">{entry.name}</span>
                       <span className="flex flex-wrap items-center gap-xs font-label-xs text-on-surface-variant tabular-nums">

@@ -100,7 +100,9 @@ export function TaskStep({
 
       {/* Template cards — concrete first tasks (design 01:141-160). Clicking
           fills the composer; the aria-pressed state records which use case
-          drives the recommendations below. */}
+          drives the recommendations below. G4a card spec: solid ink-2 fill
+          (surface-container-low), 12.5px→text-label-md single-line title,
+          11px→text-label-xs single-line description. */}
       <div className="mt-md grid grid-cols-2 gap-sm sm:grid-cols-4">
         {TASKS.map(t => (
           <button
@@ -115,15 +117,15 @@ export function TaskStep({
             className={cn(
               'h-auto rounded-xl border p-md text-left cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
               task === t.id
-                ? 'border-primary bg-primary-container/5'
-                : 'border-outline-variant/50 hover:border-primary/50 hover:bg-surface-container-low',
+                ? 'border-primary bg-primary-container/25'
+                : 'border-outline-variant/40 bg-surface-container-low hover:border-primary/50 hover:bg-surface-container',
             )}
           >
             <span className="material-symbols-outlined text-primary" aria-hidden="true">{t.icon}</span>
-            <div className="mt-xs font-label-md font-medium text-on-surface">
+            <div className="mt-xs font-label-md text-label-md font-medium text-on-surface truncate">
               {intl.formatMessage({ id: t.labelKey })}
             </div>
-            <div className="mt-1 truncate font-label-sm text-on-surface-variant">
+            <div className="mt-1 font-label-xs text-label-xs text-on-surface-variant truncate">
               {intl.formatMessage({ id: t.blurbKey })}
             </div>
           </button>

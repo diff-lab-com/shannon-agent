@@ -134,16 +134,25 @@ describe('Tasks Enhanced', () => {
     expect(screen.getByText('0%')).toBeInTheDocument()
   })
 
-  it('renders Schedule heading', () => {
+  // G4a (design 04 右列): the side calendar is a fixed current-month mini
+  // card — month name heading, no month navigation.
+  it('renders the current-month side calendar heading', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Schedule')).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-side-calendar')).toBeInTheDocument()
+    // Day headers come from Intl weekday 'short' (locale-aware); en → "Mon".
+    expect(screen.getByText('Mon')).toBeInTheDocument()
+    // Today wears the aria-current date marker.
+    const today = new Date().getDate().toString()
+    expect(screen.getByText(today, { selector: '[aria-current="date"]' })).toBeInTheDocument()
   })
 
-  it('shows no active tasks message', () => {
+  // G4a: the goals summary card renders its honest empty state when no goal
+  // runs exist (the old Active-Now list moved out with the redesign).
+  it('shows the goals card empty state', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('No active tasks')).toBeInTheDocument()
+    expect(screen.getByTestId('tasks-goals-empty')).toBeInTheDocument()
   })
 
   it('renders tasks with status badges', () => {
@@ -202,11 +211,13 @@ describe('Tasks Enhanced', () => {
     expect(screen.getByText('Agent Allocation')).toBeInTheDocument()
   })
 
-  it('navigates calendar months', () => {
+  // G4a: the mini calendar is fixed to the current month (design 04) — the
+  // month-navigation buttons are gone; the + button opens the schedule form.
+  it('side calendar + button opens the schedule form', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    fireEvent.click(screen.getByLabelText('Previous month'))
-    fireEvent.click(screen.getByLabelText('Next month'))
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule a routine' }))
+    expect(screen.getByText('Create Scheduled Routine')).toBeInTheDocument()
   })
 
   it('shows failed status badge', () => {

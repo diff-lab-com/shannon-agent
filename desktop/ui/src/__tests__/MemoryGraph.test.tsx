@@ -196,9 +196,12 @@ describe('MemoryPanel view switching + provenance badge', () => {
   it('shows the source badge only for entries carrying a source session', async () => {
     mockList([entryWithSource, entryWithoutSource])
     render(<MemoryPanel onOpenMemorySource={vi.fn()} />)
-    const badges = await screen.findAllByTestId('memory-source-badge')
-    expect(badges).toHaveLength(1)
-    expect(badges[0]).toHaveTextContent(/auto-extract/i)
+    // G4a 记忆行解剖: with a jump handler the sourced entry's provenance is
+    // the meta-line LINK (kind text visible, 'Open chat' as the accessible
+    // name); the unsourced entry renders no provenance at all.
+    const links = await screen.findAllByTestId('memory-source-link')
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveTextContent(/auto-extract/i)
     // jump button rendered once — only next to the sourced entry
     expect(screen.getAllByRole('button', { name: /open chat|跳转会话/i })).toHaveLength(1)
   })

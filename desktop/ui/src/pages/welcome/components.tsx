@@ -5,7 +5,6 @@
 // they are scoped to the Welcome flow only — other pages have their own
 // card variants.
 import { useIntl } from 'react-intl'
-import { cn } from '@/lib/utils'
 
 export function Stepper({ step, labels }: { step: number; labels: string[] }) {
   const intl = useIntl()
@@ -14,39 +13,32 @@ export function Stepper({ step, labels }: { step: number; labels: string[] }) {
   // Welcome step entrypoint now supplies its own label list.
   const labelKeys = labels
   const stepLabel = intl.formatMessage({ id: labelKeys[step] })
-  // Dots on top, labels always visible underneath — an inline label after
-  // the current dot (the old layout) shifted the whole row's geometry on
-  // every step change and left the dots unaligned.
+  // G4a (design 01:394-398 步骤指示): the PILL form — the current step rides
+  // a violet-dim capsule with a violet hairline (第 1 步 · 共 2 步 —— 标签),
+  // remaining steps stay as quiet muted text beside it. The container's
+  // aria-label keeps announcing the full "Step x of y: label" sentence.
   return (
     <div
-      className="flex items-start justify-center mb-xl"
+      className="flex items-center justify-center gap-sm flex-wrap mb-xl"
       aria-label={intl.formatMessage(
         { id: 'welcome.stepper.step' },
         { current: step + 1, total: labelKeys.length, label: stepLabel },
       )}
     >
-      {labelKeys.map((key, i) => (
-        <div key={key} className="flex items-start">
-          <div className="flex flex-col items-center gap-xs w-20">
-            <div
-              className={cn(
-                'w-2 h-2 rounded-full mt-1.5',
-                i <= step ? 'bg-primary' : 'bg-outline-variant',
-              )}
-            />
-            <span
-              className={cn(
-                'font-label-sm text-center',
-                i === step ? 'text-link font-bold' : 'text-on-surface-variant',
-              )}
-            >
-              {intl.formatMessage({ id: key })}
-            </span>
-          </div>
-          {i < labelKeys.length - 1 && (
-            <div className="w-8 h-px bg-outline-variant mt-1.5" aria-hidden="true" />
-          )}
-        </div>
+      <span
+        data-testid="welcome-stepper-pill"
+        className="inline-flex items-center gap-xs rounded-full border border-primary/40 bg-primary-container text-on-primary-container px-md py-xs font-label-sm font-semibold whitespace-nowrap"
+      >
+        <span className="material-symbols-outlined icon-sm" aria-hidden="true">flag</span>
+        {intl.formatMessage(
+          { id: 'welcome.stepper.step' },
+          { current: step + 1, total: labelKeys.length, label: stepLabel },
+        )}
+      </span>
+      {labelKeys.slice(step + 1).map(key => (
+        <span key={key} className="font-label-sm text-on-surface-variant whitespace-nowrap">
+          {intl.formatMessage({ id: key })}
+        </span>
       ))}
     </div>
   )
