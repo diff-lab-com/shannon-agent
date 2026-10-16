@@ -114,16 +114,31 @@ function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate, activeMatc
       aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint}
       onClick={onNavigate}
     >
-      {({ isActive: navIsActive }) => (
-        <>
-          <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: (isActive ?? navIsActive) ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
-          <span className="flex-1 min-w-0 truncate">{label}</span>
-          {kbd && (
-            <kbd className="kbd shrink-0 font-mono" aria-hidden="true">{kbd}</kbd>
-          )}
-          {trail}
-        </>
-      )}
+      {({ isActive: navIsActive }) => {
+        const active = isActive ?? navIsActive
+        return (
+          <>
+            <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: active ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
+            <span className="flex-1 min-w-0 truncate">{label}</span>
+            {kbd && (
+              /* On the active (accent-container) row the keycap's own
+                 translucent surface bg breaks 4.5:1 on light themes (.kbd
+                 outranks call-site bg-* by authoring order), so the active
+                 chip forgoes .kbd and rides the row's own contrast. */
+              <kbd
+                className={cn(
+                  'shrink-0 font-mono text-label-2xs leading-none px-1.5 rounded-[5px] border border-b-2',
+                  active ? 'border-current/40' : 'kbd',
+                )}
+                aria-hidden="true"
+              >
+                {kbd}
+              </kbd>
+            )}
+            {trail}
+          </>
+        )
+      }}
     </NavLink>
   )
 }
@@ -372,7 +387,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         type="button"
         aria-label={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
         title={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
-        className="mb-xs w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[10px] bg-surface-container-low/60 border border-outline-variant/30 font-label-md text-label-sm text-on-surface-variant/80 hover:bg-surface-container-low hover:text-on-surface cursor-pointer transition-all min-w-0 text-left"
+        className="mb-xs w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[10px] bg-surface-container-low/60 border border-outline-variant/30 font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface cursor-pointer transition-all min-w-0 text-left"
         onClick={() => window.dispatchEvent(new Event('shannon:toggle-palette'))}
       >
         <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">search</span>
