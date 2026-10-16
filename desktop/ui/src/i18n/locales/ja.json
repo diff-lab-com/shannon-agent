@@ -4031,6 +4031,8 @@
   "diff.dialog.conflict": "差分を読み込んだ後にファイルが変更されました",
   "diff.dialog.conflict.desc": "レビュー中にファイルが変更されました（mtime 不一致）。適用する前に、閉じて差分を開き直し最新の内容を確認してください。",
   "diff.review.deleteWarning": "この変更は、元のファイルが空でないにもかかわらずファイル内容を全件削除します。既存ファイルを保護するため適用は無効化されています。",
+  "diff.review.workspace.aria": "差分レビューワークスペース",
+  "diff.review.workspace.close": "レビューを閉じる",
   "editor.discard.title": "未保存の変更を破棄しますか？",
   "editor.discard.message": "エディタに未保存の変更があります。今閉じたりファイルを切り替えたりすると破棄されます。",
   "editor.discard.confirm": "変更を破棄",

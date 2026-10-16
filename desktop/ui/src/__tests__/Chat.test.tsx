@@ -1346,3 +1346,99 @@ describe('running-send behavior pref (Settings R3 T10)', () => {
     expect(ctx.enqueuePrompt).not.toHaveBeenCalled()
   })
 })
+
+// T7 (docs/design/ui-redesign-2026-10/pages/03-chat-review.html `review-wrap`,
+// R3 §4.1): while a diff review session is active the MAIN region swaps the
+// transcript for the full-width review workspace; closing the review returns
+// the chat. The landed workbench features (progress bar, key hints, file
+// list) survive the move into the new form.
+describe('Chat — main-area review workspace (03 review-wrap, T7)', () => {
+  const writeMessage = {
+    role: 'assistant',
+    content: '',
+    timestamp: 1,
+    tool_calls: [
+      {
+        tool_use_id: 't1',
+        tool_name: 'write_file',
+        tool_input: { path: '/tmp/report.md', content: 'x' },
+        status: 'completed',
+        is_error: false,
+      },
+    ],
+  }
+
+  beforeEach(() => {
+    resetCtx()
+    vi.mocked(api.getFileDiff).mockResolvedValue({
+      old_content: 'line one\nline two',
+      new_content: 'line one\nline two edited\nline three',
+      file_name: 'report.md',
+      language: 'markdown',
+      mtime: '2026-10-15T00:00:00+00:00',
+    })
+  })
+
+  it('review active → the main area shows the review workspace; closed → back to the transcript', async () => {
+    ctx.messages = [writeMessage]
+    renderChat()
+    // Transcript first.
+    expect(screen.getByTestId('chat-scroll-container')).toBeInTheDocument()
+
+    // Activate the review the way the transcript does (FileChangesCard
+    // 「Review changes」 → setDiffPath).
+    fireEvent.click(await screen.findByTestId('file-card-review-diff'))
+
+    // The workspace replaces the transcript in the main region.
+    expect(screen.getByTestId('review-workspace')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-scroll-container')).not.toBeInTheDocument()
+    expect(screen.getByText('Review 1 file')).toBeInTheDocument()
+
+    // The landed review features live in the new form: progress bar +
+    // the pinned-bottom mono key-hint bar (one keys surface, the inline
+    // copy suppressed).
+    expect(await screen.findByRole('progressbar')).toBeInTheDocument()
+    expect(screen.getByTestId('review-hintbar')).toBeInTheDocument()
+    expect(screen.getByTestId('review-hintbar')).toHaveTextContent('j/k move')
+    expect(screen.queryByTestId('diff-review-keys')).not.toBeInTheDocument()
+
+    // Closing the review (the workspace's always-present exit) returns
+    // the transcript.
+    fireEvent.click(screen.getByRole('button', { name: 'Close review' }))
+    expect(screen.queryByTestId('review-workspace')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-scroll-container')).toBeInTheDocument()
+  })
+
+  it('picking another file from the workspace list retargets the review without leaving it', async () => {
+    ctx.messages = [
+      writeMessage,
+      {
+        role: 'assistant',
+        content: '',
+        timestamp: 2,
+        tool_calls: [
+          {
+            tool_use_id: 't2',
+            tool_name: 'edit_file',
+            tool_input: { path: '/tmp/other.ts', content: 'y' },
+            status: 'completed',
+            is_error: false,
+          },
+        ],
+      },
+    ]
+    renderChat()
+    // Two seeded writes → two FileChangesCard review buttons; either starts
+    // the session.
+    const reviewButtons = await screen.findAllByTestId('file-card-review-diff')
+    fireEvent.click(reviewButtons[0])
+    expect(await screen.findByTestId('review-workspace')).toBeInTheDocument()
+
+    // The workspace's file list carries both changed files; picking the
+    // other one swaps the review target (main region stays the workspace).
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch to /tmp/other.ts' }))
+    expect(screen.getByTestId('review-workspace')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-scroll-container')).not.toBeInTheDocument()
+    expect(vi.mocked(api.getFileDiff)).toHaveBeenCalledWith('/tmp/other.ts')
+  })
+})

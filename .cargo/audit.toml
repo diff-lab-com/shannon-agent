@@ -100,3 +100,18 @@ ignore = [
     # attacker-facing. Keep the two lists in sync per the header note.
     "RUSTSEC-2024-0449",
 ]
+
+# ── Yanked-crate detection ─────────────────────────────────────────────
+# TEMPORARILY DISABLED (2026-10-16, PR #414): crates.io mass-yanked the zip
+# 2.x/3.x/8.x lines (only 9.0.x survives). calamine 0.36.1 (zip ^8.6) and
+# rust_xlsxwriter 0.99.x (zip ^8.3) have no release on a live zip line, so
+# ANY resolvable tree of this workspace necessarily contains the yanked
+# zip 8.6.0 — and cargo-audit 0.22's YankedConfig has no per-crate ignore,
+# only this global lever. This also matches deny.toml's standing policy
+# (see its header: yanked crates are warnings, never CI blockers).
+# Our own manifests migrated to zip "9" (PR #414); the residual yanked
+# entry is calamine's transitive. RE-ENABLE when calamine / rust_xlsxwriter
+# ship zip-9-compatible releases and the lockfile no longer holds yanked
+# entries.
+[yanked]
+enabled = false

@@ -18,6 +18,10 @@
   .ico32.vio { background: var(--vio-dim); color: var(--vio-2); }
   .ico32.info { background: var(--info-dim); color: var(--info); }
   .ico32.ok { background: var(--ok-dim); color: var(--ok); }
+  /* 卡足诚实徽章(2026-10-15 R3 §4 措辞诚实化):图标 ok 色、正文 t2 —— 与实现
+     Featured.tsx SecurityBadge fallback 同构(icon text-success + 文案 text-on-surface-variant)。 */
+  .catcard .secured { color: var(--t2); }
+  .catcard .secured .ic { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -177,6 +181,12 @@
       </div>
 
       <!-- 目录 grid:3 列 × 3 行 + 安全横幅 -->
+      <!-- 卡足安全徽章 —— 2026-10-15 R3 §4「措辞诚实化」顺笔:旧「注入扫描 ✓ 已签名 ✓」双勾暗示运行时
+           防护,双重失真 —— ① 扫描是安装期对目录与 README 的建议性静态扫描,不扫运行时出站内容
+           (securityBadgeScanHelp);② 「已签名」是清单自声明发布者标识,非密码学校验(securityBadgePublisherHelp)。
+           对齐实现 Featured.tsx SecurityBadge fallback 文案 = extensions.featured.securityBadge
+           「安装时扫描 · 发布者自声明」;设置页「出站防线」卡的实时读态(模式 + Findings)由 PR #413 落地
+           (r4 §E.0),属 12-settings-security 的卡,与本页卡足无关。 -->
       <div class="catgrid" style="padding-bottom:12px">
 
         <!-- 1 GitHub(已授权态示范:已连接 → 管理,见 D2 回改注) -->
@@ -189,7 +199,7 @@
           </div>
           <p class="desc">issues、PR、Actions 的工作流自动化</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn ghost sm">管理</button>
           </div>
@@ -204,15 +214,16 @@
           </div>
           <p class="desc">页面与数据库读写,同步会议记录</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
         </div>
 
-        <!-- 3 Slack —— 按 2026-10-14 裁决回改(D8):市场卡不再画「需认证/去认证」——市场卡无实时认证状态
-             (实现 Featured.tsx F-11 诚实契约:未安装 OAuth 厂商只画「添加/去授权」,认证动作落在已安装管理行,
-             见页尾「已安装 · 管理行」注记)。 -->
+        <!-- 3 Slack —— 按 2026-10-14 裁决回改(D8)+ 2026-10-15 R3 §4「去授权」文案顺笔:市场卡不画认证状态
+             (实现 Featured.tsx F-11 诚实契约:后端无 connected/needs-auth API,卡面从不声称 已连接/去认证;
+             未安装 OAuth 厂商只画「添加」—— 安装即授权,浏览器 loopback 一键完成),认证动作(重新认证 /
+             去认证)落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-chat"/></svg></div>
@@ -222,9 +233,9 @@
           </div>
           <p class="desc">频道消息摘要与定时播报</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
-            <button class="btn soft sm"><svg class="ic"><use href="#i-key"/></svg>去授权</button>
+            <button class="btn soft sm"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
         </div>
 
@@ -237,7 +248,7 @@
           </div>
           <p class="desc">只读查询,自动 <span class="mono">LIMIT</span> 保护</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
@@ -253,7 +264,7 @@
           </div>
           <p class="desc">按团队规范审查 PR,输出行级评论</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn ghost sm">详情</button>
           </div>
@@ -261,8 +272,9 @@
 
         <!-- 6 Claude 远程连接 —— 按 2026-10-14 裁决回改(D2):撤销「桌面端即将支持 · 请先使用 CLI」琥珀徽章
              (实现已支持 OAuth loopback:Featured.tsx installMcpOAuthLoopback 一键授权,P KCE 全程本机完成)。
-             改画真实连接状态形态:未连接 → 主操作「去授权」(授权即安装,loopback 回调后变为「已授权 · 管理」)。
-             市场卡不画实时认证状态开关——认证动作的撤销(去认证)落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
+             主操作对齐实现词汇(2026-10-15 R3 §4「去授权」文案顺笔):未安装 → 「添加」(安装即授权,
+             loopback 回调后已安装 → 「管理」)。市场卡不画实时认证状态开关——认证动作的撤销(去认证)
+             落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-link"/></svg></div>
@@ -272,10 +284,10 @@
           </div>
           <p class="desc">云端托管的远程 MCP 服务,一键跳浏览器授权(loopback 本机回调)</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <span class="st mute">未连接</span>
-            <button class="btn sm soft"><svg class="ic"><use href="#i-key"/></svg>去授权</button>
+            <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
         </div>
 
@@ -303,7 +315,7 @@
           </div>
           <p class="desc">浏览器自动化与截图自检</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>安装</button>
           </div>
@@ -318,16 +330,22 @@
           </div>
           <p class="desc">异常聚合,失败自动带上下文回会话</p>
           <div class="foot">
-            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>注入扫描 ✓ 已签名 ✓</span>
+            <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
             <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
         </div>
 
-        <!-- 底部安全横幅(跨 3 列) -->
+        <!-- 底部安全横幅(跨 3 列)—— 文案对齐实现 extensions.hub.securityBanner(批次 2 诚实化已把
+             「签名校验」从横幅撤下:签名核对属逐包安装期自声明语义,见 r4 §E.0 / 12-settings-security
+             「安装时校验 · 自声明语义」);凭据句对齐 Welcome 页脚「密钥永不出机」叙事。
+             「安全白皮书」按钮注记(2026-10-15 R3 §4 顺笔):设计先行元素,实现刻意不做 —— 无白皮书可指
+             (desktop/ui/src/pages/Extensions.tsx M1 注记:"The design's 安全白皮书 button is
+             intentionally absent — there is no whitepaper to point at")。稿内保留按钮作安全叙事的
+             视觉锚,实现侧横幅无此入口;日后若产出白皮书再接线,届时稿随落地同步。 -->
         <div class="card pad" style="grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:14px 16px">
           <svg class="ic" style="width:18px;height:18px;color:var(--ok)"><use href="#i-shield"/></svg>
-          <div style="font-size:12.5px;color:var(--t2)">目录内所有条目安装前执行提示注入扫描与签名校验;凭据只写入本机系统 keyring</div>
+          <div style="font-size:12.5px;color:var(--t2)">目录内所有条目安装前执行本机提示注入扫描；凭据只写入本机，永不出机。</div>
           <span class="spacer"></span>
           <button class="btn ghost sm">安全白皮书</button>
         </div>

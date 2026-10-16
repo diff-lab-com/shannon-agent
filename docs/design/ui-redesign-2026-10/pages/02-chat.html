@@ -119,9 +119,11 @@
         <div class="meter-row"><span>本月用量 / 预算 $20</span><b>$4.18</b></div>
         <div class="meter mt8"><i style="width:21%"></i></div>
       </div>
+      <!-- 模型行 —— 2026-10-15 r4 §E.3 观察顺笔:移除「开发模式」mode-pill —— 应用侧栏模型行无此
+           指示物(Sidebar.tsx 模型徽章 = 模型名 + 右侧大写 provider,无模式 pill),词汇亦非权限命名 v2;
+           上方用量 meter(SidebarUsageMeter)与模型徽章均真实在位,保留。 -->
       <div class="model-row">
         <svg class="ic"><use href="#i-key"/></svg><span class="lbl">ANTHROPIC · claude-sonnet-4-6</span>
-        <span class="mode-pill">开发模式</span>
       </div>
     </div>
   </aside>

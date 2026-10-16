@@ -4032,6 +4032,8 @@
   "diff.dialog.conflict": "diff를 불러온 후 파일이 변경되었습니다",
   "diff.dialog.conflict.desc": "검토 중에 파일이 수정되었습니다(mtime 불일치). 적용하기 전에 diff를 닫았다가 다시 열어 최신 내용을 확인하세요.",
   "diff.review.deleteWarning": "이 변경은 원본 파일이 비어 있지 않은데 파일 내용 전체를 삭제합니다. 기존 파일을 보호하기 위해 적용이 비활성화되었습니다.",
+  "diff.review.workspace.aria": "Diff 검토 작업 공간",
+  "diff.review.workspace.close": "검토 닫기",
   "editor.discard.title": "저장하지 않은 변경을 버릴까요?",
   "editor.discard.message": "에디터에 저장하지 않은 변경이 있습니다. 지금 닫거나 파일을 바꾸면 버려집니다.",
   "editor.discard.confirm": "변경 버리기",

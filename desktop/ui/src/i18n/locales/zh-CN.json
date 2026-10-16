@@ -4037,6 +4037,8 @@
   "diff.dialog.conflict": "文件在加载差异后已被修改",
   "diff.dialog.conflict.desc": "评审期间文件发生了变更（mtime 不一致）。请关闭并重新打开差异，确认最新内容后再应用。",
   "diff.review.deleteWarning": "此变更会删除文件的全部内容，而原文件并非为空。为防止数据丢失，已禁用「应用」。",
+  "diff.review.workspace.aria": "Diff 评审工作台",
+  "diff.review.workspace.close": "关闭评审",
   "editor.discard.title": "丢弃未保存的修改？",
   "editor.discard.message": "编辑器中存在未保存的修改。关闭或切换文件将丢弃这些修改。",
   "editor.discard.confirm": "丢弃修改",

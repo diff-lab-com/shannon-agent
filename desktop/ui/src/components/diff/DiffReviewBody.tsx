@@ -1,7 +1,8 @@
 // Shared single-file diff review body — fetch + per-hunk accept/reject
-// decisions + Apply flow (P1.1 M1), extracted from DiffDialog so the right
-// dock's Diff tab (ZCode delta ⑦) can host the same review surface
-// side-by-side with the conversation instead of blocking it behind a modal.
+// decisions + Apply flow (P1.1 M1), extracted from DiffDialog. Hosts: the
+// DiffDialog modal, and — since T7 (03 review-wrap, R3 §4.1) — the chat
+// page's MAIN-AREA ReviewWorkspace (the full-width form the design gives the
+// review workbench; the dock's Diff tab keeps only the summary surface).
 //
 // Owns the decisions Map state so toggles survive re-renders; state resets
 // whenever filePath changes (different file → different hunks) or the body
@@ -22,12 +23,16 @@ import type { FileDiff } from '@/types'
 interface DiffReviewBodyProps {
   filePath: string | null
   onClose: () => void
-  /** Whether the host surface is live (modal open / dock tab active). */
+  /** Whether the host surface is live (modal open / workspace mounted). */
   active: boolean
   /** Aurora 2026-10 diff-review loop: notified whenever this file's hunk
-   *  decisions mutate — the dock's file-list sidebar subscribes to keep its
+   *  decisions mutate — the file-list sidebar subscribes to keep its
    *  per-file status badges (accepted/partial counts) live. */
   onDecisionsChange?: (decisions: Map<string, HunkDecision>) => void
+  /** T7 (03 review-wrap): the main-area ReviewWorkspace renders the key map
+   *  as the design's pinned-bottom mono hintbar instead — it suppresses this
+   *  inline copy so a surface carries exactly one keys readout. */
+  showKeysHint?: boolean
 }
 
 function cycleDecision(d: HunkDecision): HunkDecision {
@@ -51,7 +56,7 @@ function asStructuredError(e: unknown): StructuredIpcError | null {
   return null
 }
 
-export default function DiffReviewBody({ filePath, onClose, active, onDecisionsChange }: DiffReviewBodyProps) {
+export default function DiffReviewBody({ filePath, onClose, active, onDecisionsChange, showKeysHint = true }: DiffReviewBodyProps) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id }, values)
@@ -277,12 +282,14 @@ export default function DiffReviewBody({ filePath, onClose, active, onDecisionsC
               {t('diff.review.progress', { accepted: acceptedCount, total: hunks.length })}
             </span>
           </div>
-          <div
-            data-testid="diff-review-keys"
-            className="font-label-xs text-on-surface-variant/80 whitespace-nowrap overflow-x-auto"
-          >
-            {t('diff.review.keys')}
-          </div>
+          {showKeysHint && (
+            <div
+              data-testid="diff-review-keys"
+              className="font-label-xs text-on-surface-variant/80 whitespace-nowrap overflow-x-auto"
+            >
+              {t('diff.review.keys')}
+            </div>
+          )}
         </div>
       )}
 

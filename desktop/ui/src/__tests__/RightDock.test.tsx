@@ -50,7 +50,6 @@ function dockTree(props: Partial<DockProps> = {}) {
           workingDir={null}
           planModeActive={false}
           diffPath={null}
-          onCloseDiff={vi.fn()}
           runProcess={initialRunProcess()}
           {...props}
         />
@@ -235,7 +234,7 @@ describe('RightDock — Aurora F-9 mount default + palette dock-solid', () => {
     render(
       <I18nProvider>
         <ArtifactProvider>
-          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} />
         </ArtifactProvider>
       </I18nProvider>,
     )
@@ -248,14 +247,14 @@ describe('RightDock — Aurora F-9 mount default + palette dock-solid', () => {
     const { rerender } = render(
       <I18nProvider>
         <ArtifactProvider>
-          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} />
         </ArtifactProvider>
       </I18nProvider>,
     )
     rerender(
       <I18nProvider>
         <ArtifactProvider>
-          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} />
         </ArtifactProvider>
       </I18nProvider>,
     )
@@ -268,7 +267,7 @@ describe('RightDock — Aurora F-9 mount default + palette dock-solid', () => {
     render(
       <I18nProvider>
         <ArtifactProvider>
-          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} onCloseDiff={vi.fn()} />
+          <RightDock open onOpen={vi.fn()} onClose={onClose} usage={null} activeToolCalls={[]} workingDir={null} planModeActive={false} diffPath={null} />
         </ArtifactProvider>
       </I18nProvider>,
     )

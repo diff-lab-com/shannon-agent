@@ -3582,7 +3582,13 @@ mod pin_and_auto_archive_tests {
             let mut entry = archive.by_index(i).unwrap();
             let mut bytes = Vec::new();
             std::io::Read::read_to_end(&mut entry, &mut bytes).unwrap();
-            out.push((entry.name().to_string(), bytes));
+            out.push((
+                entry
+                    .name()
+                    .expect("fixture zip entry name decodes")
+                    .into_owned(),
+                bytes,
+            ));
         }
         out
     }

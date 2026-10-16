@@ -115,7 +115,15 @@ fn extract_zip<R: Read + io::Seek>(
         let mut entry = archive
             .by_index(i)
             .map_err(|e| PluginError::InvalidManifest(format!("zip entry {i}: {e}")))?;
-        let raw_name = entry.name().to_string();
+        // zip 9: name() is encoding-aware and fallible (Result<Cow<str>>) —
+        // an undecodable entry name is rejected with the same manifest-error
+        // channel as the by_index failure above.
+        let raw_name = entry
+            .name()
+            .map_err(|e| {
+                PluginError::InvalidManifest(format!("zip entry {i}: name encoding: {e}"))
+            })?
+            .into_owned();
         if raw_name.ends_with('/') {
             // Directory entry — ensure it exists after sanitization.
             if let Ok(safe) = sanitize_entry_path(raw_name.trim_end_matches('/')) {
