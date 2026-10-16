@@ -71,7 +71,7 @@ const getNavClass = ({ isActive }: { isActive: boolean }) =>
   cn(
     "flex items-center gap-2.5 px-3 py-sm rounded-xl font-label-md text-label-sm transition-all duration-(--duration-normal) whitespace-nowrap min-w-0",
     isActive
-      ? "text-on-surface bg-primary-container font-bold"
+      ? "text-on-primary-container bg-primary-container font-bold"
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
   );
 
