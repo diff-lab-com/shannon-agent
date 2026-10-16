@@ -54,6 +54,14 @@ Adjacent workflows (not in `ci.yml`, but referenced by branch protection):
 All `ci.yml` jobs (sans OS matrix) are reachable from a laptop with the
 toolchain pinned in `rust-toolchain.toml`:
 
+> **Worktree builds: never point `CARGO_TARGET_DIR` at another checkout's
+> `target/`.** Cargo fingerprints misfire across trees with different crate
+> sources sharing one target dir, pairing stale dependency metadata with the
+> wrong sources — producing phantom compile errors (E0063/E0560-class,
+> seen twice in Oct 2026) that exist in NEITHER tree. Worktrees build with
+> their own default `target/` (per-checkout), even at the cost of a cold
+> dependency compile.
+
 ```bash
 # Format
 cargo fmt --all -- --check

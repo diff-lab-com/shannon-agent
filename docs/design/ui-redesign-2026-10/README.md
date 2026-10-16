@@ -217,3 +217,17 @@
 **刻意不改**(登记):02 之外 18 页侧栏同款「开发模式」mode-pill(03/04/04b/05/06/07/08/09/10/11/12×7)——R3/r4 记录仅点名 02,同族清批须整批重出截图,留待下批顺笔;07 卡 1「已连接」状态章(GitHub)属 F-11 同族呈现问题但无登记记录,不顺笔;11「已丢失卡整卡虚线」为 R3 §4.1 挂账的 app 侧待办、稿内已画目标形态(RD.1-8 / §7 已登记刻意不改),核实实现仍为灰态+opacity(FilesPage `data-missing` 行 opacity-50 + 琥珀虚线徽章),设计不动。12-settings-security「出站防线」卡稿仍画模式 seg/开关——与 r4 §S1 裁决 B 及 E.0 读态实现均不符,属新发现残留,超本批授权,登记待下批(需按 E.0 四态诚实渲染重画:模式徽章 + Findings 计数 + 「安装时校验 · 自声明语义」注记,无开关)。
 
 **截图**:02-chat / 06-usage / 07-connectors 已用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。
+
+---
+
+## 9. 2026-10-15 backlog 顺笔批(侧栏 mode-pill 同族清批 + 出站防线读态重绘 + GitHub「已连接」章撤除)
+
+> 落实 §8「刻意不改」登记的三项挂账:同族 mode-pill 清批(r4 §E.3 观察登记)、07 GitHub「已连接」章(F-11 同族)、12-settings-security「出站防线」卡(r4 §S1 裁决 B + PR #413 §E.0 shipped 读态)。原则不变:**实现是事实标准,设计稿向实现对齐**。
+
+1. **A2 · 侧栏「开发模式」mode-pill 同族清批(17 页 17 枚)**:`grep -ln "mode-pill"` 精确枚举后,陈旧 pill 实为 17 页——03 / 04 / 04b / 05 / 06 / 07 / 08 / 09 / 10 / 11 / 12-settings ×7(§8 记「18 页」系把 02-chat 计入;其匹配仅为 T2 批留下的页内注记文字,pill 已于该批移除;02c 两处匹配为 `approval-mode-pill`(composer 权限档 chip,testid/IPC 真实在位)文案,均不动)。逐页删除侧栏模型行 `<span class="mode-pill">开发模式</span>`,用量 meter(`SidebarUsageMeter`)与模型徽章真实在位照旧保留;rationale 注记落在首触页 03-chat-review(同 02-chat 先例,引 r4 §E.3)。
+2. **A3 · 12-settings-security「出站防线」卡按 shipped 读态重绘(PR #413 / r4 §E.0)**:撤除全部虚构控件——「审计/改写/关闭」模式段控与两枚 switch(应用侧无任何模式 toggle,S1 裁决 B 刻意不做;E.0 刻意不做项同),改画只读读态行:出站密钥扫描 = 实心徽章「改写中 · 本次运行发现:4」、提示注入扫描 =「审计中 · 本次运行发现:2」(shannon-ui `.st.vio`;计数为 findings 非 blocked,自进程启动起累计),签名校验行 = 中性能力注记「安装时校验 · 自声明语义」(静态,非 pending 非实时),卡头加幽灵刷新钮(title「刷新防线状态」),卡首 desc 与卡尾 statusLive 脚注逐字镜像 `settings.permissions.outbound.desc` / `.statusLive`(zh-CN;auditHits 冒号按源串保留半角)。琥珀虚线「读取中…/状态未知」与「未启用」中性态为应用侧真实形态(PermissionsSettings.tsx `renderGuardBadge` 四态),静态帧取默认点亮快照(redact/4 + audit/2,同 E.0 mock 口径),在途/失败态不画入 still——由卡头注记登记。页内 rationale 注记在案。
+3. **A4 · 07 GitHub「已连接」章撤除(F-11 对账)**:应用核实——市场卡唯一逐卡状态位 = 已安装与否:`Featured.tsx:43-46/314-321` F-11 注记「后端无 connected/needs-auth API,卡面从不声称 已连接/去认证」,未装 → 「添加」、已装 → 「管理」;`extensions.featured.connected`「已连接」仅作安装/连接成功后的 toast 文案,非卡面常驻章;数据源目录卡(`DataSources.tsx` AdapterCard)亦只画 已验证/查询即将上线,无连接态。裁定:**市场卡无连接态 → 撤章**(「管理」按钮保留 = 已安装态唯一合法展示,与 Notion/PostgreSQL 未装卡「添加」对照);卡上 D2「已授权态示范:已连接 · 管理」旧注一并改写(D2 形态已被 D8 + R3 §4 取代)。
+
+**刻意不改**(登记):07 Slack / Claude 远程连接 两张市场卡「未连接」mute 章(另 code-reviewer「已安装」、本地 Ollama「未运行」章同属市场卡自绘状态,app 侧 Featured 卡无此物)——同 F-11 族(app 侧未装市场卡不画任何状态章),本批授权仅点名 GitHub 卡,留待下批顺笔;07「已安装 · 管理行」Slack 行状态章「已连接」——该区 app 侧真实存在状态章(`McpServers.tsx` statusBadge:`srv.connected` → `extensions.mcp.statusOnline`「在线」、needs_auth →「登录已过期」、已停用/不可达/服务器错误各态),稿内画状态章方向正确,仅措辞「已连接」与 shipped「在线」有差,超本批授权留待顺笔;其余未动。
+
+**截图**:本批改动 17 页(§9-1 的 17 页含 07 与 12-settings-security)全部用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。
