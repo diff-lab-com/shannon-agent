@@ -200,7 +200,12 @@ tauri = { version = "2", features = ["tray-icon"] }
 
 [profile.release]
 opt-level = 3
-lto = true
+# thin, not fat: fat LTO + panic="abort" drops encoding_rs's #[no_mangle]
+# statics (UTF_8/UTF_16LE/UTF_16BE) that calamine 0.36's CFB path references,
+# failing the release link with undefined references (debug builds link fine —
+# LTO-only; found building the 2026-10-16 production deploy). thin LTO keeps
+# cross-crate inlining without the breakage.
+lto = "thin"
 codegen-units = 1
 strip = true
 panic = "abort"
