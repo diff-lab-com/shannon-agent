@@ -11,11 +11,11 @@
 | --- | --- | --- | --- | --- |
 | `test` (Test) | `cargo build --workspace` + nextest | yes | yes | Regressions in the integration suite |
 | `vscode` (VS Code Extension) | `npm run compile` + `npm test` | yes | yes | VS Code editor build breakage |
-| `clippy` (Clippy) | `cargo clippy --workspace -- -D warnings` | yes | yes | New lint regressions, dead code, performance footguns |
+| `clippy` (Clippy) | `cargo clippy --workspace -- -D warnings` **+ "Build docs" step: `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`** | yes | yes | New lint regressions, dead code, performance footguns; broken intra-doc links / rustdoc warnings (doc build merged into this job at the R4 split, 2026-10-01 — no standalone `doc` job anymore) |
 | `fmt` (Format) | `cargo fmt --all -- --check` | yes | yes | Un-formatted code blocks merges |
 | `audit` (Dependency Audit) | `cargo deny check --hide-inclusion-graph` | **yes (new)** | **yes (new)** | License violations, banned crates, restricted sources |
 | `rustsec-audit` (RustSec Advisory Audit) | `cargo install cargo-audit --locked && cargo audit` | **yes (new)** | **yes (new)** | Public RustSec advisories not covered by cargo-deny's Open Rust feed |
-| `doc` (Doc Build) | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` | no (advisory) | no (advisory) | Broken intra-doc links, missing examples. Currently `continue-on-error: true` until pre-existing doc fixes land. |
+| ~~`doc` (Doc Build)~~ | merged into `clippy` as its "Build docs" step at the R4 split (2026-10-01) — hard gate, not advisory | — | — | Former standalone job; see `clippy` row |
 | `metrics` | `scripts/gen-metrics.sh` | yes (downstream) | yes (downstream) | Aggregator: depends on `test`, `clippy`, `audit`, `rustsec-audit` |
 | `cross-platform` (Cross-platform Check) | `cargo check --workspace --exclude shannon-desktop` | **yes (new)** | **yes (new)** | Target-conditional code drift on `ubuntu` + `macos` + `windows` |
 | `check-linux-musl` (Linux musl Check) | `cargo check --workspace --exclude shannon-desktop --target x86_64-unknown-linux-musl` | no (`continue-on-error`) | no (`continue-on-error`) | Statically-linked Linux regression. Blocked upstream on musl-portable webkit/gtk. |
@@ -79,15 +79,18 @@ cargo deny check --hide-inclusion-graph
 # RustSec audit (optional: `cargo install cargo-audit --locked`)
 cargo audit --deny warnings
 
-# Doc (currently advisory)
+# Doc — HARD gate since the R4 merge (2026-10-01): runs as the "Build
+# docs" step inside the `clippy` job with RUSTDOCFLAGS=-D warnings, so
+# rustdoc warnings (e.g. private intra-doc links) block merges.
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
 One-shot wrapper:
 
 ```bash
-./scripts/ci-local.sh          # runs clippy + fmt + nextest + deny
-./scripts/ci-local.sh --doc    # also runs the doc gate
+./scripts/ci-local.sh            # runs fmt + clippy + test + deny + doc + wire-types
+./scripts/ci-local.sh --no-doc   # skip the doc gate
+./scripts/ci-local.sh --audit    # also run rustsec-audit (requires cargo-audit)
 ```
 
 The shell script is a thin wrapper that echoes a green/red summary
