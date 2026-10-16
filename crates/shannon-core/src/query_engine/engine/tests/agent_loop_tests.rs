@@ -3356,3 +3356,210 @@ async fn utility_slot_loop_level_compaction_request_lands_on_the_auxiliary_endpo
         "the loop-level LLM compaction branch must have run to completion in-loop; progress: {progress:?}"
     );
 }
+
+// ---- P0-1: post-execute normalization — the PostToolUseFailure producer --
+
+/// The `Err` path of `finalize_tool_result` must fire the PostToolUseFailure
+/// hook trigger (first producer of that event) with a payload mirroring the
+/// PostToolUse shape (error text as output, `is_error: true`), while the
+/// regular PostToolUse trigger, the completion `ToolProgress`, and the
+/// error `ToolUseResult` (carrying the around stage's `duration_ms`) behave
+/// exactly as the pre-P0-1 arms did.
+#[tokio::test]
+async fn p0_1_finalize_err_path_fires_post_tool_use_failure_trigger() {
+    use crate::bus::{BusInput, EventBus, TopicFilter};
+    use crate::query_engine::engine::events::QUERY_EVENT_CHANNEL_CAPACITY;
+
+    let bus = EventBus::new();
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = captured.clone();
+    let _sub = bus.subscribe_fn(
+        TopicFilter::kind(shannon_types::session_event::SessionEventKind::Custom),
+        move |input| {
+            if let BusInput::Event(event) = input {
+                if let Some(subtopic) = &event.subtopic {
+                    if let shannon_types::session_event::SessionEventBody::Custom(payload) =
+                        &event.body
+                    {
+                        sink.lock()
+                            .unwrap()
+                            .push((subtopic.to_string(), payload.data.clone()));
+                    }
+                }
+            }
+        },
+    );
+
+    let (tx_raw, mut rx) = mpsc::channel(QUERY_EVENT_CHANNEL_CAPACITY);
+    let tx = EventTx::new(tx_raw, bus.shared());
+    let routines = std::sync::Arc::new(tokio::sync::RwLock::new(
+        crate::triggered_routines::TriggeredRoutineRegistry::new(),
+    ));
+
+    let mut tool_results: Vec<ToolResultEntry> = Vec::new();
+    let succeeded = super::super::agent_loop::finalize_tool_result(
+        &tx,
+        &bus,
+        &routines,
+        Uuid::new_v4(),
+        "toolu_p0_1".to_string(),
+        "Bash",
+        &serde_json::json!({"command": "boom"}),
+        Err(crate::tools::ToolError::ExecutionFailed("boom".into())),
+        Some(12),
+        &mut tool_results,
+    )
+    .await;
+
+    assert!(!succeeded, "an Err result must not count as a success");
+    assert_eq!(tool_results.len(), 1, "one ToolResultEntry for the call");
+    assert!(tool_results[0].is_error);
+    assert_eq!(tool_results[0].tool_use_id, "toolu_p0_1");
+
+    // Both triggers fired, in the PostToolUse shape.
+    let rows = captured.lock().unwrap().clone();
+    let failure_rows: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|(ty, _)| ty == "PostToolUseFailure")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(
+        failure_rows.len(),
+        1,
+        "exactly one PostToolUseFailure trigger: {rows:?}"
+    );
+    let failure = failure_rows[0]["payload"].as_object().expect("payload obj");
+    assert_eq!(failure["tool_name"], "Bash");
+    assert_eq!(failure["is_error"], true);
+    assert_eq!(failure["input"]["command"], "boom");
+    let failure_output = failure["output"].as_str().expect("output str");
+    assert!(
+        failure_output.contains("boom"),
+        "the error message rides the payload: {failure_output}"
+    );
+
+    let post_rows: Vec<&serde_json::Value> = rows
+        .iter()
+        .filter(|(ty, _)| ty == "PostToolUse")
+        .map(|(_, data)| data)
+        .collect();
+    assert_eq!(
+        post_rows.len(),
+        1,
+        "PostToolUse trigger unchanged: {rows:?}"
+    );
+    assert_eq!(post_rows[0]["payload"]["is_error"], true);
+
+    // The channel sees the completion progress + the error ToolUseResult
+    // with the measured duration.
+    let mut saw_progress = false;
+    let mut saw_result = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            Ok(QueryEvent::ToolUseResult {
+                tool_name,
+                result,
+                is_error,
+                duration_ms,
+                ..
+            }) => {
+                assert_eq!(tool_name, "Bash");
+                assert!(is_error);
+                assert!(
+                    result.contains("Tool error:") && result.contains("boom"),
+                    "error text unchanged: {result}"
+                );
+                assert_eq!(duration_ms, Some(12), "measured duration rides the event");
+                saw_result = true;
+            }
+            Ok(QueryEvent::ToolProgress { progress, .. }) => {
+                if progress == 1.0 {
+                    saw_progress = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_progress, "completion ToolProgress must be emitted");
+    assert!(saw_result, "error ToolUseResult must be emitted");
+}
+
+/// The `Ok` path fires no PostToolUseFailure (only PostToolUse) — the
+/// failure trigger is exclusive to the Err arm.
+#[tokio::test]
+async fn p0_1_finalize_ok_path_fires_no_failure_trigger() {
+    use crate::bus::{BusInput, EventBus, TopicFilter};
+    use crate::query_engine::engine::events::QUERY_EVENT_CHANNEL_CAPACITY;
+
+    let bus = EventBus::new();
+    let captured: std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = captured.clone();
+    let _sub = bus.subscribe_fn(
+        TopicFilter::kind(shannon_types::session_event::SessionEventKind::Custom),
+        move |input| {
+            if let BusInput::Event(event) = input {
+                if let Some(subtopic) = &event.subtopic {
+                    if let shannon_types::session_event::SessionEventBody::Custom(payload) =
+                        &event.body
+                    {
+                        sink.lock()
+                            .unwrap()
+                            .push((subtopic.to_string(), payload.data.clone()));
+                    }
+                }
+            }
+        },
+    );
+
+    let (tx_raw, mut rx) = mpsc::channel(QUERY_EVENT_CHANNEL_CAPACITY);
+    let tx = EventTx::new(tx_raw, bus.shared());
+    let routines = std::sync::Arc::new(tokio::sync::RwLock::new(
+        crate::triggered_routines::TriggeredRoutineRegistry::new(),
+    ));
+
+    let mut tool_results: Vec<ToolResultEntry> = Vec::new();
+    let succeeded = super::super::agent_loop::finalize_tool_result(
+        &tx,
+        &bus,
+        &routines,
+        Uuid::new_v4(),
+        "toolu_p0_1_ok".to_string(),
+        "Read",
+        &serde_json::json!({"path": "/tmp/x"}),
+        Ok(crate::tools::ToolOutput::success("contents".to_string())),
+        Some(7),
+        &mut tool_results,
+    )
+    .await;
+
+    assert!(succeeded);
+    assert_eq!(tool_results.len(), 1);
+    assert!(!tool_results[0].is_error);
+
+    let rows = captured.lock().unwrap().clone();
+    assert!(
+        !rows.iter().any(|(ty, _)| ty == "PostToolUseFailure"),
+        "no failure trigger on the Ok path: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter().filter(|(ty, _)| ty == "PostToolUse").count(),
+        1,
+        "exactly the regular PostToolUse trigger: {rows:?}"
+    );
+
+    while let Ok(event) = rx.try_recv() {
+        if let Ok(QueryEvent::ToolUseResult {
+            result,
+            is_error,
+            duration_ms,
+            ..
+        }) = event
+        {
+            assert!(!is_error);
+            assert_eq!(result, "contents");
+            assert_eq!(duration_ms, Some(7));
+        }
+    }
+}

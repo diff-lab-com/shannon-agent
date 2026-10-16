@@ -31,6 +31,7 @@ fn one_turn(query_id: Uuid) -> Vec<QueryEvent> {
         tool_input: serde_json::json!({"command": "cargo check --workspace"}),
     });
     events.push(QueryEvent::ToolUseResult {
+        duration_ms: None,
         query_id,
         tool_use_id: "toolu_bench".into(),
         tool_name: "Bash".into(),

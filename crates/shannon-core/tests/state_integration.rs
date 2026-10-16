@@ -56,6 +56,7 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
         tool_input: serde_json::json!({"command": "ls"}),
     });
     tee.record_query_event(&shannon_core::QueryEvent::ToolUseResult {
+        duration_ms: None,
         query_id: Uuid::new_v4(),
         tool_use_id: "toolu_1".into(),
         tool_name: "Bash".into(),
