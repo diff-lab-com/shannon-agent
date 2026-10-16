@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ThemeProvider, useTheme } from '@/context/ThemeContext'
 
@@ -30,9 +30,10 @@ describe('ThemeContext', () => {
     }
   })
 
-  // Verdict A (ui-redesign-2026-10 review §5): the dark default is
-  // 'aurora-ink' (the 2026-10-15 design base); tokyo-night stays switchable.
-  it('defaults to the dark-first aurora-ink theme', () => {
+  // Verdict A (ui-redesign-2026-10 review §5) made aurora-ink the dark
+  // default; the H1 convergence (2026-10-17 ruling) made it the ONLY
+  // user-visible theme.
+  it('defaults to the aurora-ink theme', () => {
     render(
       <ThemeProvider>
         <ThemeConsumer />
@@ -41,37 +42,45 @@ describe('ThemeContext', () => {
     expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
   })
 
-  it('provides all 14 themes', () => {
+  // H1: the picker collapsed to a single entry — the 12 sibling themes stay
+  // in the generated registry as dormant infrastructure but are not exposed.
+  it('exposes exactly one theme (aurora-ink)', () => {
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    expect(screen.getByTestId('theme-count')).toHaveTextContent('14')
+    expect(screen.getByTestId('theme-count')).toHaveTextContent('1')
+    expect(screen.getByTestId('btn-aurora-ink')).toBeInTheDocument()
   })
 
-  // Verdict A follow-up: a stored 'material' is a pre-dark-default leftover
-  // (one-time migration) — it now lands on the current default aurora-ink.
-  it('migrates a stored material leftover to aurora-ink, once', () => {
-    localStorage.setItem('shannon-theme', 'material')
-    localStorage.removeItem('shannon.theme.darkDefaultMigrated')
+  // H1 migration (generalized from the 2026-10-08 material migration): ANY
+  // non-aurora-ink stored value — dormant picks (tokyo-night) or the retired
+  // 'system' mode — normalizes to aurora-ink, and the write-back commits
+  // aurora-ink to localStorage on the first boot.
+  it.each(['tokyo-night', 'material', 'system', 'dracula', 'a-future-stray-value'])(
+    'migrates a stored %s value to aurora-ink and writes it back',
+    (stored) => {
+      localStorage.setItem('shannon-theme', stored)
+      render(
+        <ThemeProvider>
+          <ThemeConsumer />
+        </ThemeProvider>
+      )
+      expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
+      expect(localStorage.getItem('shannon-theme')).toBe('aurora-ink')
+    },
+  )
+
+  it('keeps an explicit aurora-ink pick (idempotent boot)', () => {
+    localStorage.setItem('shannon-theme', 'aurora-ink')
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
     expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
-    expect(localStorage.getItem('shannon.theme.darkDefaultMigrated')).toBe('1')
-  })
-
-  it('keeps an explicit stored pick (tokyo-night) over the new default', () => {
-    localStorage.setItem('shannon-theme', 'tokyo-night')
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('tokyo-night')
+    expect(localStorage.getItem('shannon-theme')).toBe('aurora-ink')
   })
 
   // G7 i18n (P1-8): the provider carries message ids, not strings — every
@@ -83,101 +92,35 @@ describe('ThemeContext', () => {
         <ThemeConsumer />
       </ThemeProvider>
     )
-    for (const id of [
-      'system', 'material', 'aurora-ink', 'tokyo-night', 'tokyo-night-light', 'catppuccin',
-      'nord', 'ember', 'slate', 'solarized', 'solarized-light', 'dracula',
-      'gruvbox', 'gruvbox-light',
-    ]) {
+    for (const id of ['aurora-ink']) {
       expect(screen.getByTestId(`btn-${id}`).textContent).toMatch(/^settings\.theme\.name\./)
     }
   })
 
-  it('switches to solarized-light theme and sets data-theme', () => {
+  it('setTheme(aurora-ink) keeps data-theme and the stored value on aurora-ink', () => {
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    fireEvent.click(screen.getByTestId('btn-solarized-light'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('solarized-light')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('solarized-light')
+    // The only settable value is a no-op re-affirmation — the picker has no
+    // other destination to write.
+    fireEvent.click(screen.getByTestId('btn-aurora-ink'))
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('aurora-ink')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+    expect(localStorage.getItem('shannon-theme')).toBe('aurora-ink')
   })
 
-  it('switches to gruvbox-light theme and sets data-theme', () => {
+  it('sets data-theme + data-theme-mode attributes on document', () => {
+    localStorage.setItem('shannon-theme', 'tokyo-night') // pre-H1 leftover
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    fireEvent.click(screen.getByTestId('btn-gruvbox-light'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('gruvbox-light')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('gruvbox-light')
-  })
-
-  it('switches to solarized theme and sets data-theme', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-solarized'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('solarized')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('solarized')
-  })
-
-  it('switches to dracula theme and sets data-theme', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-dracula'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('dracula')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('dracula')
-  })
-
-  it('switches to gruvbox theme and sets data-theme', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-gruvbox'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('gruvbox')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('gruvbox')
-  })
-
-  it('resolves system theme to light/dight based on media query', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-system'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('system')
-    // resolvedTheme depends on prefers-color-scheme, data-theme is set accordingly
-    const dataTheme = document.documentElement.getAttribute('data-theme')
-    expect(['material', 'tokyo-night']).toContain(dataTheme)
-  })
-
-  it('switches theme on setTheme call', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-tokyo-night'))
-    expect(screen.getByTestId('current-theme')).toHaveTextContent('tokyo-night')
-  })
-
-  it('sets data-theme attribute on document', () => {
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-nord'))
-    expect(document.documentElement.getAttribute('data-theme')).toBe('nord')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
+    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('aurora-ink')
   })
 
   it('throws when useTheme used outside provider', () => {
@@ -220,78 +163,54 @@ describe('ThemeContext', () => {
   })
 })
 
-describe('ThemeContext — scheme registry (U9)', () => {
+describe('ThemeContext — scheme registry (U9, H1-narrowed)', () => {
   beforeEach(() => {
     window.localStorage.clear()
     document.documentElement.removeAttribute('data-theme-mode')
   })
 
-  // Expected scheme per theme — mirrors how each theme's tokens are authored.
-  const EXPECTED: Record<string, 'light' | 'dark'> = {
-    'material': 'light',
-    'aurora-ink': 'dark',
-    'tokyo-night': 'dark',
-    'tokyo-night-light': 'light',
-    'catppuccin': 'dark',
-    'nord': 'dark',
-    'ember': 'light',
-    'slate': 'light',
-    'solarized': 'dark',
-    'solarized-light': 'light',
-    'dracula': 'dark',
-    'gruvbox': 'dark',
-    'gruvbox-light': 'light',
-  }
-
-  it('mirrors the scheme of every theme onto data-theme-mode', () => {
+  // H1: aurora-ink is the only theme the provider writes, so the mirrored
+  // scheme contract narrows to its single dark entry. The dormant registry
+  // entries are still resolvable through themeModeOf for the cm/xterm
+  // mapping layers, but no runtime path selects them.
+  it('mirrors aurora-ink’s registered dark scheme onto data-theme-mode', () => {
+    localStorage.setItem('shannon-theme', 'tokyo-night') // pre-H1 leftover
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    for (const [id, scheme] of Object.entries(EXPECTED)) {
-      fireEvent.click(screen.getByTestId(`btn-${id}`))
-      expect(document.documentElement.getAttribute('data-theme'), id).toBe(id)
-      expect(document.documentElement.getAttribute('data-theme-mode'), id).toBe(scheme)
-    }
+    expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
   })
 
-  it('system resolves data-theme-mode with the resolved theme', () => {
-    // Patch the factory so every fresh matchMedia call reports dark.
+  it('writes the dark scheme even when the OS prefers light (no system mode)', () => {
+    // The retired 'system' branch used to resolve per OS — H1 removed it, so
+    // a light-OS preference must NOT leak a light scheme onto <html>.
     const real = window.matchMedia
     vi.spyOn(window, 'matchMedia').mockImplementation(q =>
-      ({ ...real(q), matches: q.includes('dark') }))
+      ({ ...real(q), matches: false }))
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    fireEvent.click(screen.getByTestId('btn-system'))
-    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
     expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
   })
 })
 
-describe('ThemeContext — live OS scheme switch in system mode (F-theme-system)', () => {
+describe('ThemeContext — the retired system mode stays retired (H1)', () => {
   beforeEach(() => {
     window.localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
     document.documentElement.removeAttribute('data-theme-mode')
   })
 
-  let matchMediaSpy: ReturnType<typeof vi.spyOn> | undefined
-
-  afterEach(() => {
-    // Targeted restore — vi.restoreAllMocks() would also wipe the setup
-    // file's global mocks (e.g. tauri-api configure → mockResolvedValue).
-    // Tests that never installed the spy must not crash the teardown.
-    matchMediaSpy?.mockRestore()
-    matchMediaSpy = undefined
-  })
-
-  // A controllable matchMedia: the provider registers its change listener on
-  // the object this factory returns, and `flip` mutates `matches` + fires the
-  // listeners exactly like a real prefers-color-scheme change does.
+  // H1 removed the OS-follow branch wholesale (the F-theme-system
+  // matchMedia listener existed only to feed it). These tests pin the
+  // consequence: stored 'system' migrates, and no prefers-color-scheme
+  // change can move the resolved theme off aurora-ink.
   function createSchemeMedia(startsDark: boolean) {
     type SchemeListener = (e: MediaQueryListEvent) => void
     const listeners = new Set<SchemeListener>()
@@ -317,85 +236,27 @@ describe('ThemeContext — live OS scheme switch in system mode (F-theme-system)
     return mql
   }
 
-  function mountWithMedia(mql: ReturnType<typeof createSchemeMedia>) {
-    matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation(() => mql as unknown as MediaQueryList)
-    return render(
-      <ThemeProvider>
-        <ThemeConsumer />
-      </ThemeProvider>
-    )
-  }
+  it('a stored system value migrates to aurora-ink and an OS flip cannot change it', () => {
+    localStorage.setItem('shannon-theme', 'system') // pre-H1 leftover
+    const mq = createSchemeMedia(false) // boots light
+    const spy = vi.spyOn(window, 'matchMedia').mockImplementation(() => mq as unknown as MediaQueryList)
+    try {
+      render(
+        <ThemeProvider>
+          <ThemeConsumer />
+        </ThemeProvider>
+      )
+      expect(screen.getByTestId('resolved-theme')).toHaveTextContent('aurora-ink')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+      expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
 
-  it('recomputes resolvedTheme + data-theme(-mode) when the OS flips light↔dark', () => {
-    const mq = createSchemeMedia(false) // boot light → material
-    mountWithMedia(mq)
-
-    fireEvent.click(screen.getByTestId('btn-system'))
-    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('material')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('material')
-    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('light')
-
-    // OS flips to dark — the listener must write the REAL new scheme (a
-    // same-value setState bail-out used to swallow this: F-theme-system).
-    act(() => mq.flip(true))
-    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('tokyo-night')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
-    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
-
-    // And back.
-    act(() => mq.flip(false))
-    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('material')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('material')
-    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('light')
-  })
-
-  it('keeps tracking OS flips that happened while an explicit theme was active', () => {
-    // The listener must not be scoped to theme='system': a flip while the
-    // user sits on dracula must not leave a stale scheme for the later
-    // switch back to 'system'.
-    const mq = createSchemeMedia(false)
-    mountWithMedia(mq)
-
-    fireEvent.click(screen.getByTestId('btn-dracula'))
-    act(() => mq.flip(true))
-    // Explicit theme is untouched by the OS flip...
-    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('dracula')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('dracula')
-    expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
-
-    // ...but switching back to system resolves from the CURRENT OS scheme.
-    fireEvent.click(screen.getByTestId('btn-system'))
-    expect(screen.getByTestId('resolved-theme')).toHaveTextContent('tokyo-night')
-    expect(document.documentElement.getAttribute('data-theme')).toBe('tokyo-night')
-  })
-
-  it('does not re-render consumers when the flip resolves to the same scheme', () => {
-    // If the new scheme truthfully equals the stored one, skipping the
-    // re-render is correct — the guard is that a REAL flip still lands.
-    let renders = 0
-    function RenderCounter() {
-      renders += 1
-      const { resolvedTheme } = useTheme()
-      return <span data-testid="counter-theme">{resolvedTheme}</span>
+      // OS flips dark: nothing observes it anymore — the theme stays put.
+      act(() => mq.flip(true))
+      expect(screen.getByTestId('resolved-theme')).toHaveTextContent('aurora-ink')
+      expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+      expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark')
+    } finally {
+      spy.mockRestore()
     }
-    const mq = createSchemeMedia(true) // boot dark → tokyo-night
-    matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation(() => mq as unknown as MediaQueryList)
-    render(
-      <ThemeProvider>
-        <ThemeConsumer />
-        <RenderCounter />
-      </ThemeProvider>
-    )
-    fireEvent.click(screen.getByTestId('btn-system'))
-    expect(screen.getByTestId('counter-theme')).toHaveTextContent('tokyo-night')
-
-    const afterSwitch = renders
-    act(() => mq.flip(true)) // same value — no state change, no re-render
-    expect(screen.getByTestId('counter-theme')).toHaveTextContent('tokyo-night')
-    expect(renders).toBe(afterSwitch)
-
-    act(() => mq.flip(false)) // real change — must land
-    expect(screen.getByTestId('counter-theme')).toHaveTextContent('material')
-    expect(renders).toBe(afterSwitch + 1)
   })
 })

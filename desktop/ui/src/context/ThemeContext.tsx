@@ -2,9 +2,27 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import * as api from '@/lib/tauri-api'
 import { THEME_REGISTRY } from '@/theme/generated/registry'
 
-export type ThemeName = 'material' | 'aurora-ink' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'solarized' | 'solarized-light' | 'dracula' | 'gruvbox' | 'gruvbox-light' | 'system'
+/**
+ * H1 theme convergence (2026-10-17 user ruling): Aurora Ink is the ONLY
+ * user-visible theme. The 12 sibling themes in theme-source.json stay in the
+ * repo as DORMANT INFRASTRUCTURE (generated token blocks + registry entries,
+ * UI-unreachable — kept so the pipeline and a future re-import stay
+ * rollback-cheap), but nothing in the runtime can select or render them:
+ * ThemeName collapses to a single id, `system` is gone (aurora-ink is dark
+ * by definition, there is no OS-follow branch), and any stored value a
+ * previous build persisted (material, tokyo-night, system, …) normalizes to
+ * aurora-ink on boot.
+ */
+export type ThemeName = 'aurora-ink'
 
-type ResolvedTheme = Exclude<ThemeName, 'system'>
+/**
+ * A resolvable `<html data-theme>` id. Still the FULL generated-registry
+ * union on purpose: the dormant mapping layers (cmTheme / xtermTheme read
+ * this attribute and keep per-theme tables for the hibernating themes) and
+ * their unit tests stay type-honest. The provider below only ever WRITES
+ * `ThemeName` — no runtime path can produce another id.
+ */
+type ResolvedTheme = (typeof THEME_REGISTRY)[number]['id']
 
 /** The light/dark scheme each resolved theme renders as — mirrors THEME_SCHEMES. */
 export function themeModeOf(resolved: ResolvedTheme): 'light' | 'dark' {
@@ -28,83 +46,58 @@ export function useTheme() {
   return ctx
 }
 
-// U9/U-themes: the scheme each theme renders as comes from the GENERATED
+// U9/H1: the scheme each registry id renders as comes from the GENERATED
 // registry (scripts/theme-source.json → scripts/generate-themes.mjs) — the
 // same single source that emits the token blocks in
 // src/theme/generated/themes.css. ThemeProvider mirrors it onto
 // <html data-theme-mode>, and index.css's `dark:` variant keys off that
-// attribute. The registry must match the token blocks: e2e/themes.spec.ts
-// asserts each theme's surface luminance against its registered scheme, so
-// a mismatch (e.g. a light token block registered as 'dark', which made the
-// `dark:` variants misfire on ember/slate) fails CI instead of shipping.
+// attribute. The dormant themes' entries are kept only so this map (and the
+// cm/xterm floors keyed by themeModeOf) stay total over the registry; the
+// provider writes aurora-ink exclusively.
 const THEME_SCHEMES = Object.fromEntries(
   THEME_REGISTRY.map(entry => [entry.id, entry.mode]),
 ) as Record<ResolvedTheme, 'light' | 'dark'>
 
-// Compile-time drift tripwire: the generated registry must cover exactly the
-// ResolvedTheme union — a theme added to the type (or to theme-source.json)
-// without the other fails here.
-type RegistryTheme = (typeof THEME_REGISTRY)[number]['id']
-type RegistryMissing = [Exclude<ResolvedTheme, RegistryTheme>] extends [never] ? true : false
-type RegistryExtra = [Exclude<RegistryTheme, ResolvedTheme>] extends [never] ? true : false
-const REGISTRY_ALIGNED: [RegistryMissing, RegistryExtra] = [true, true]
-void REGISTRY_ALIGNED
+// Compile-time drift tripwire (narrowed by the H1 convergence): the single
+// UI-reachable theme must remain a generated-registry id AND stay registered
+// 'dark' — removing aurora-ink from theme-source.json, renaming it, or
+// re-authoring it as a light scheme fails here instead of shipping a provider
+// whose token block no longer exists.
+const AURORA_SCHEME: (typeof THEME_SCHEMES)['aurora-ink'] = 'dark'
+void AURORA_SCHEME
 
 // G7 i18n (P1-8): theme display names are intl message ids
 // (`settings.theme.name.*`) resolved by the consumer (ThemeSettings) — the
 // provider renders outside <IntlProvider>, so it carries keys, not strings.
 // Built from the literal ids so the compiler flags any drift with ThemeName.
+// H1: exactly one entry — the dormant themes keep their locale keys deleted.
 const THEMES: { id: ThemeName; labelKey: string }[] = (
   [
-    'system',
-    'material',
     'aurora-ink',
-    'tokyo-night',
-    'tokyo-night-light',
-    'catppuccin',
-    'nord',
-    'ember',
-    'slate',
-    'solarized',
-    'solarized-light',
-    'dracula',
-    'gruvbox',
-    'gruvbox-light',
   ] as const
 ).map((id) => ({
   id,
-  // kebab-case theme id → camelCase message-id suffix ('tokyo-night' → tokyoNight).
+  // kebab-case theme id → camelCase message-id suffix ('aurora-ink' → auroraInk).
   labelKey: `settings.theme.name.${id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())}`,
 }))
 
-function getSystemTheme(): ResolvedTheme {
-  if (typeof window === 'undefined') return 'material'
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'tokyo-night' : 'material'
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  // Dark-first default (UI audit §2.5: all four competitors ship dark as the
-  // default or flagship look). Default is 'aurora-ink' — the 2026-10-15
-  // "aurora ink" design system (ui-redesign-2026-10, review §5 verdict A).
-  // Users who picked a theme keep theirs via localStorage; 'system' still
-  // resolves per OS preference (dark → tokyo-night, light → material — the
-  // pairing predates aurora-ink and is deliberately untouched).
+  // H1 theme convergence: default AND only option is 'aurora-ink' — the
+  // 2026-10-15 "aurora ink" design system (ui-redesign-2026-10, review §5
+  // verdict A), made the sole user-visible theme by the 2026-10-17 ruling.
   //
-  // One-time migration (2026-10-08 review round): stored 'material' is mostly
-  // a pre-dark-default leftover persisted by earlier builds, not a considered
-  // pick — flip it to the current dark default once, behind a flag, so an
-  // explicit choice made AFTER this migration still sticks. The target
-  // followed the default to 'aurora-ink' (2026-10-15 verdict A); users the
-  // earlier run already moved to 'tokyo-night' keep that stored pick.
+  // Migration (generalized from the 2026-10-08 one-time material migration):
+  // ANY non-aurora-ink stored value — 'material'/'tokyo-night' leftovers of
+  // the pre-H1 picker, or 'system' from the retired OS-follow mode — reads
+  // as aurora-ink, and the effect below writes aurora-ink back to
+  // localStorage, so the stored value is normalized on the first boot after
+  // the upgrade. No flag is needed anymore: aurora-ink is the only writable
+  // value, so re-normalizing on every boot is idempotent and an explicit
+  // "pick" cannot exist to protect.
   const [theme, setThemeState] = useState<ThemeName>(() => {
     if (typeof window !== 'undefined') {
-      const MIGRATION_KEY = 'shannon.theme.darkDefaultMigrated'
       const stored = localStorage.getItem('shannon-theme') as ThemeName | null
-      if (stored === 'material' && !localStorage.getItem(MIGRATION_KEY)) {
-        localStorage.setItem(MIGRATION_KEY, '1')
-        return 'aurora-ink'
-      }
-      return stored || 'aurora-ink'
+      return stored === 'aurora-ink' ? stored : 'aurora-ink'
     }
     return 'aurora-ink'
   })
@@ -117,43 +110,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 1.0
   })
 
-  // F-theme-system: the OS scheme lives in STATE, not in a render-time read.
-  // resolvedTheme used to call getSystemTheme() during render while the
-  // prefers-color-scheme listener "refreshed" it via setThemeState('system')
-  // — the SAME value, which hits React's eager bail-out: no re-render, so a
-  // live OS light↔dark switch never recomputed resolvedTheme and
-  // data-theme/data-theme-mode went stale. Writing the REAL new value below
-  // is a genuine state change (and if the new scheme truly equals the stored
-  // one, skipping the re-render is correct).
-  const [systemTheme, setSystemTheme] = useState<ResolvedTheme>(getSystemTheme)
-
-  const resolvedTheme: ResolvedTheme = theme === 'system' ? systemTheme : theme
+  // resolvedTheme is the stored theme itself: with 'system' retired there is
+  // no OS-scheme branch left to recompute (the old F-theme-system
+  // matchMedia listener existed solely to feed it and is gone with it).
+  const resolvedTheme: ResolvedTheme = theme
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', resolvedTheme)
-    document.documentElement.setAttribute('data-theme-mode', THEME_SCHEMES[resolvedTheme])
-    if (theme !== 'system') {
-      localStorage.setItem('shannon-theme', theme)
-    }
-  }, [theme, resolvedTheme])
+    document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.setAttribute('data-theme-mode', THEME_SCHEMES[theme])
+    // Write-back is also the migration commit: a pre-H1 stored value
+    // (tokyo-night, system, …) lands on disk as aurora-ink.
+    localStorage.setItem('shannon-theme', theme)
+  }, [theme])
 
   useEffect(() => {
     const baseFontSize = 16 * fontScale
     document.documentElement.style.fontSize = `${baseFontSize}px`
     localStorage.setItem('shannon.fontScale', fontScale.toString())
   }, [fontScale])
-
-  // Attached for every mode (not just theme='system'): an OS flip while the
-  // user sits on an explicit theme must still update systemTheme, or a later
-  // switch back to 'system' would resolve from a stale scheme. Non-color
-  // system settings (fontScale, contrast) have their own seams and are
-  // untouched by this listener.
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = () => setSystemTheme(getSystemTheme())
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
 
   const setTheme = useCallback((newTheme: ThemeName) => {
     setThemeState(newTheme)

@@ -11,7 +11,7 @@
 // pin that shape.
 
 import { describe, it, expect } from 'vitest'
-import { ADVANCED_MODES, APPROVAL_MODES, approvalModeOption, normalizeApprovalMode } from '@/lib/approvalModes'
+import { ADVANCED_MODES, APPROVAL_MODES, PLAN_OPTION, approvalModeOption, normalizeApprovalMode } from '@/lib/approvalModes'
 
 describe('APPROVAL_MODES (shared composer + settings quick tiers)', () => {
   it('lists exactly the three ladder stops, most to least supervised', () => {
@@ -38,6 +38,20 @@ describe('APPROVAL_MODES (shared composer + settings quick tiers)', () => {
       expect(mode.icon, mode.value).toBeTruthy()
       expect(mode.tone, mode.value).toBeTruthy()
     }
+  })
+
+  // Risk-ladder chip tones (ChatInput approval-mode pill; design r4 §E.4 as
+  // amended by the 2026-10-17 裁决): the supervised BASE tier (ask) is the
+  // default state, not a warning — neutral hairline border + muted label,
+  // no semantic color. The riskier stops keep their semantic edges: amber
+  // auto-edit, red full-auto, green plan.
+  it('ask wears the neutral hairline tone; auto-edit/full-auto/plan keep their semantic edges', () => {
+    const toneOf = (v: string) => [...APPROVAL_MODES, PLAN_OPTION].find(m => m.value === v)!.tone
+    expect(toneOf('ask')).toBe('border-outline-variant/50 text-on-surface-variant')
+    expect(toneOf('ask')).not.toMatch(/warning|error|success/)
+    expect(toneOf('auto-edit')).toBe('border-warning/50')
+    expect(toneOf('full-auto')).toBe('border-error/50')
+    expect(toneOf('plan')).toBe('border-success/50')
   })
 })
 

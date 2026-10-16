@@ -10,7 +10,9 @@ import { THEME_PALETTES } from '@/theme/generated/theme-palettes'
 export default function ThemeSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { theme, setTheme, themes, fontScale, setFontScale } = useTheme()
+  // H1: `theme` is a state readout — the only entry is app-defined and the
+  // card below is not a picker, so `setTheme` has no caller on this page.
+  const { theme, themes, fontScale, setFontScale } = useTheme()
   // 材质 (design-parity R1 2026-10-08): glass strength — Reduced applies the
   // persistent html.reduce-glass class (lib/glass), sharing the same solid
   // fill recipe as the OS prefers-reduced-transparency fallback.
@@ -32,45 +34,35 @@ export default function ThemeSettings() {
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.theme.subtitle')}</p>
 
       <div className="space-y-3 pb-10">
-        {/* Theme Selection — G1-B: selection = 1px violet outline, the card
-            fill stays put (the old selected fill-lightening read as a state
-            change, not a state marker); a green ✓ chip names the current
-            theme. Label reuses palette.item.current («Current») — no new
-            i18n key this batch.
-            G4a (design 12-settings-appearance 主题卡): each card renders its
-            theme's REAL two-tone swatch — left half the theme's page
-            background, right half its primary — data generated from
-            scripts/theme-source.json (src/theme/generated/theme-palettes.ts;
-            re-run `pnpm generate:themes` after re-tuning a theme, the
-            generator refuses drift). The 'system' entry has no swatch of its
-            own (it resolves per OS) and falls back to the live token pair. */}
+        {/* Theme Selection — H1 theme convergence (2026-10-17 ruling): the
+            grid collapsed to ONE card. Aurora Ink is the app-defined theme
+            (ThemeContext normalizes any stored value to it), so the card is a
+            state marker, not a picker: no button, no hover affordance, no
+            setTheme call — clicking is a no-op by construction. G4a's REAL
+            two-tone swatch (theme background | primary, generated from
+            scripts/theme-source.json via src/theme/generated/theme-palettes.ts;
+            re-run `pnpm generate:themes` after re-tuning, the generator
+            refuses drift) and G1-B's ✓ current chip are kept. The muted line
+            under the card states the contract. */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
           <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
             {themes.map(opt => {
               const palette = THEME_PALETTES[opt.id]
               return (
-              <Button
+              <div
                 key={opt.id}
-                variant="outline"
-                onClick={() => setTheme(opt.id)}
-                aria-pressed={theme === opt.id}
-                className={cn(
-                  'relative h-auto cursor-pointer p-md rounded-xl border transition-all text-left whitespace-normal',
-                  theme === opt.id
-                    ? 'border-primary'
-                    : 'border-outline-variant/30 hover:border-primary/50',
-                )}
+                aria-current="true"
+                data-testid={`theme-card-${opt.id}`}
+                className="relative h-auto p-md rounded-xl border border-primary text-left whitespace-normal"
               >
-                {theme === opt.id && (
-                  <span
-                    className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 px-1.5 py-[1px] rounded-full bg-success-container text-on-success-container text-label-2xs font-bold"
-                    title={t('palette.item.current')}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">check</span>
-                    {t('palette.item.current')}
-                  </span>
-                )}
+                <span
+                  className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 px-1.5 py-[1px] rounded-full bg-success-container text-on-success-container text-label-2xs font-bold"
+                  title={t('palette.item.current')}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">check</span>
+                  {t('palette.item.current')}
+                </span>
                 <div
                   data-testid={`theme-swatch-${opt.id}`}
                   title={
@@ -91,14 +83,16 @@ export default function ThemeSettings() {
                     style={{ background: palette ? palette.accent : 'var(--color-primary)' }}
                   />
                 </div>
-                <p className={cn('text-center font-label-md', theme === opt.id ? 'text-on-surface font-bold' : 'text-on-surface')}>
-                  {opt.id === 'system' && <span className="material-symbols-outlined icon-sm align-middle mr-xs">monitor</span>}
+                <p className="text-center font-label-md text-on-surface font-bold">
                   {t(opt.labelKey)}
                 </p>
-              </Button>
+              </div>
               )
             })}
           </div>
+          <p className="font-body-sm text-on-surface-variant mt-sm px-xs">
+            {t('settings.theme.definedByApp')}
+          </p>
         </section>
 
         {/* Font Size Selection */}
@@ -197,7 +191,7 @@ export default function ThemeSettings() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.theme.activeTheme')}</h3>
-              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: t(themes.find(opt => opt.id === theme)?.labelKey ?? 'settings.theme.name.system') })}</p>
+              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: t(themes.find(opt => opt.id === theme)?.labelKey ?? 'settings.theme.name.auroraInk') })}</p>
             </div>
             <div className="flex gap-sm">
               <div className="w-8 h-8 rounded-full bg-primary ring-2 ring-primary/30" title={t('settings.theme.colorPrimary')} />

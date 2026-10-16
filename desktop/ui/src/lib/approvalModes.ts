@@ -44,7 +44,12 @@ export const APPROVAL_MODES: readonly ApprovalModeOption[] = [
     labelKey: 'settings.general.approvalMode.ask.label',
     descriptionKey: 'settings.general.approvalMode.ask.description',
     icon: 'shield',
-    tone: 'border-warning/50',
+    // H1-composer follow-up (2026-10-17 裁决): the supervised base tier drops
+    // the amber risk tone — it is the DEFAULT state, not a warning. Neutral
+    // hairline border + on-surface-variant label, no semantic color (the
+    // default text there is a visible de-emphasis next to the still-toned
+    // auto-edit amber / full-auto red / plan green).
+    tone: 'border-outline-variant/50 text-on-surface-variant',
   },
   {
     value: 'auto-edit',

@@ -1549,9 +1549,11 @@ export default function ChatInput({
                 aria-label={t('chat.input.mode.label')}
                 title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
                 // G1-A S1 chip geometry (28px / radius 8 / 12px label) from the
-                // .chip utility; the risk-ladder border tone (amber ask /
-                // auto-edit, red full-auto, green plan) is the design's r4 §E.4
-                // ruling and stays. fill stays transparent (quiet chip).
+                // .chip utility; the risk-ladder border tone (neutral hairline
+                // ask — the 2026-10-17 裁决 dropped its amber, the supervised
+                // base tier is the default state, not a warning — amber
+                // auto-edit, red full-auto, green plan) is design r4 §E.4 as
+                // amended and stays. fill stays transparent (quiet chip).
                 className={cn('chip border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
