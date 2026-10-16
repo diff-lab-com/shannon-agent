@@ -11,7 +11,6 @@ import { useSessions } from '@/context/SessionContext'
 import { pushComposerDraft } from '@/lib/composerBridge'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import AddProviderModal from '@/components/settings/AddProviderModal'
-import { GradientText } from '@/components/reactbits/GradientText'
 import { Stepper } from './welcome/components'
 import { TaskStep } from './welcome/TaskStep'
 import { ModelStep } from './welcome/ModelStep'
@@ -199,15 +198,29 @@ export default function Welcome() {
       {/* 2026-09 review: the hero used to be only the brand mark + skip
           button — looked like an empty header. A two-line tagline + intro
           paragraph gives first-run users a reason to slow down and pick
-          a meaningful starting point (not just "Skip →"). */}
+          a meaningful starting point (not just "Skip →").
+          G4a (design 01 hero 氛围): the brand mark is a 44px aurora-gradient
+          rounded tile with a white glyph + violet halo, and the H1 carries
+          the aurora gradient as bg-clip text —整题渐变 (the trailing-phrase
+          split the design uses doesn't survive translation: zh-CN's tagline
+          has no separator word, so per-locale segmentation would be
+          unmaintainable; reported in the batch notes). */}
       <header className="flex flex-col gap-lg px-xl pt-xl pb-md max-w-narrow mx-auto w-full">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
-            <GradientText
-              text={intl.formatMessage({ id: 'app.name' })}
-              className="font-headline-md text-headline-md"
-            />
+            <span
+              aria-hidden="true"
+              className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+              style={{
+                backgroundImage: 'linear-gradient(135deg, var(--vio), var(--aurora-mid), var(--aurora-cyan))',
+                boxShadow: '0 4px 24px color-mix(in srgb, var(--vio) 35%, transparent)',
+              }}
+            >
+              <span className="material-symbols-outlined text-white icon-lg">auto_awesome</span>
+            </span>
+            <span className="font-headline-md font-bold text-on-surface">
+              {intl.formatMessage({ id: 'app.name' })}
+            </span>
           </div>
           <Button
             variant="ghost"
@@ -219,7 +232,11 @@ export default function Welcome() {
           </Button>
         </div>
         <div className="text-center max-w-2xl mx-auto">
-          <h1 className="font-headline-md text-on-surface text-[28px] leading-tight mb-sm">
+          <h1
+            className="font-headline-md text-[28px] leading-tight mb-sm bg-clip-text text-transparent"
+            style={{ backgroundImage: 'linear-gradient(93deg, var(--vio), var(--aurora-mid), var(--aurora-cyan))' }}
+            data-testid="welcome-hero-tagline"
+          >
             {intl.formatMessage({ id: 'welcome.hero.tagline' })}
           </h1>
           <p className="text-on-surface-variant font-body-md leading-relaxed">

@@ -134,7 +134,13 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       const isCurrent = m.name === status?.model || m.id === status?.model
       return {
         id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'),
-        meta: isCurrent ? t('palette.item.current') : undefined,
+        // G4b (2026-10-15 parity review §5-G4b / design 14 页 meta slot):
+        // non-current models wear their provider slug on the right-edge meta
+        // column (muted mono, same slot as the chat rows' relative time) —
+        // switching by model name alone is ambiguous across providers. The
+        // CURRENT model keeps its 「当前」 badge instead (unchanged G1-A
+        // behavior); the ↵ keycap stays rightmost on the selected row.
+        meta: isCurrent ? t('palette.item.current') : (m.provider || undefined),
         metaTone: isCurrent ? 'current' : undefined,
         action: () => {
           // Decision 1 (review P1-2 / B1-8): write the catalog id and pin the

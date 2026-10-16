@@ -47,6 +47,7 @@ import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
 import TaskDAGView from '@/components/tasks/TaskDAGView'
 import CalendarSidebarWidget from '@/components/tasks/CalendarSidebarWidget'
+import GoalsSideCard from '@/components/tasks/GoalsSideCard'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import CancelTaskModal from '@/components/tasks/CancelTaskModal'
@@ -133,8 +134,8 @@ export default function Tasks() {
   // Cross-component state
   const [tab, setTab] = useState<Tab>('active')
   const [running, setRunning] = useState<string | null>(null)
-  const [viewMonth, setViewMonth] = useState(new Date().getMonth())
-  const [viewYear, setViewYear] = useState(new Date().getFullYear())
+  const [viewMonth] = useState(new Date().getMonth())
+  const [viewYear] = useState(new Date().getFullYear())
   const [showFilters, setShowFilters] = useState(false)
   const [calendarView, setCalendarView] = useState(false)
   const [dagView, setDagView] = useState(false)
@@ -242,9 +243,6 @@ export default function Tasks() {
 
   const completedCount = tasks.filter(t => t.status === 'completed').length
   const efficiencyPct = tasks.length > 0 ? Math.round((completedCount / tasks.length) * 100) : 0
-
-  const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear - 1) } else { setViewMonth(viewMonth - 1) } }
-  const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear + 1) } else { setViewMonth(viewMonth + 1) } }
 
   const handleStartTask = async (rich?: { prompt: string; assignee: string; priority: string }) => {
     const body = rich?.prompt ?? newTaskPrompt.trim()
@@ -602,32 +600,33 @@ export default function Tasks() {
             onSelectTask={setSelectedTaskId}
           />
         ) : (
-          <div className="grid grid-cols-12 gap-gutter">
-            <TaskList
-              tasks={pagedFilteredTasks}
-              loading={loading}
-              page={taskPage}
-              totalPages={taskTotalPages}
-              onPageChange={setTaskPage}
-              runningId={running}
-              runnableIds={routineIds}
-              autoPausedReasons={autoPausedReasons}
-              onSelectTask={setSelectedTaskId}
-              onRunNow={handleRunNow}
-              onCancelTask={setCancelTarget}
-              onCreateTask={() => setShowNewTask(true)}
-            />
-            <div className="col-span-12 lg:col-span-4 space-y-gutter">
-              <CalendarSidebarWidget
-                viewMonth={viewMonth}
-                viewYear={viewYear}
-                onPrevMonth={prevMonth}
-                onNextMonth={nextMonth}
-                tasks={tasks}
-                scheduledTasks={scheduledTasks}
+          <div className="flex flex-col xl:flex-row xl:items-start gap-gutter">
+            <div className="flex-1 min-w-0 w-full">
+              <TaskList
+                tasks={pagedFilteredTasks}
+                loading={loading}
+                page={taskPage}
+                totalPages={taskTotalPages}
+                onPageChange={setTaskPage}
+                runningId={running}
+                runnableIds={routineIds}
+                autoPausedReasons={autoPausedReasons}
                 onSelectTask={setSelectedTaskId}
-                onSelectRoutine={setSelectedRoutineId}
+                onRunNow={handleRunNow}
+                onCancelTask={setCancelTarget}
+                onCreateTask={() => setShowNewTask(true)}
               />
+            </div>
+            {/* G4a (design 04 右列): 300px rail at ≥1280px — mini month
+                calendar + goals summary on top of the existing operator
+                widgets; below the breakpoint the rail stacks under the list
+                (structural fallback, nothing hidden). */}
+            <div className="w-full xl:w-[300px] xl:shrink-0 space-y-gutter" data-testid="tasks-side-rail">
+              <CalendarSidebarWidget
+                onCreateScheduled={openScheduleForm}
+                scheduledTasks={scheduledTasks}
+              />
+              <GoalsSideCard projectDir={projectKey} />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
             </div>

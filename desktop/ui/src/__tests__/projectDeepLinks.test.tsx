@@ -179,14 +179,16 @@ describe('/tasks?project= (P-U3)', () => {
       goalRun({ sessionId: 'g3', title: 'Unhoused goal', workingDir: null }),
     ])
     renderAppPage(<Tasks />, '/tasks?project=%2Fw%2Falpha')
-    expect(await screen.findByText('Alpha goal')).toBeInTheDocument()
-    expect(screen.queryByText('Beta goal')).not.toBeInTheDocument()
-    expect(screen.queryByText('Unhoused goal')).not.toBeInTheDocument()
+    // G4a: the goal title renders twice on the Runs tab — the full card in
+    // GoalRunPanel AND the right-rail 目标 summary row — so match-all here.
+    expect((await screen.findAllByText('Alpha goal')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryAllByText('Beta goal')).toHaveLength(0)
+    expect(screen.queryAllByText('Unhoused goal')).toHaveLength(0)
 
     // Removing the chip restores the full roster.
     fireEvent.click(screen.getByTestId('project-filter-chip-remove'))
-    expect(await screen.findByText('Beta goal')).toBeInTheDocument()
-    expect(screen.getByText('Unhoused goal')).toBeInTheDocument()
+    expect((await screen.findAllByText('Beta goal')).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('Unhoused goal').length).toBeGreaterThanOrEqual(1)
   })
 
   it('filters the Routines tab by routine working_dir', async () => {

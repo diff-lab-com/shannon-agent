@@ -231,3 +231,17 @@
 **刻意不改**(登记):07 Slack / Claude 远程连接 两张市场卡「未连接」mute 章(另 code-reviewer「已安装」、本地 Ollama「未运行」章同属市场卡自绘状态,app 侧 Featured 卡无此物)——同 F-11 族(app 侧未装市场卡不画任何状态章),本批授权仅点名 GitHub 卡,留待下批顺笔;07「已安装 · 管理行」Slack 行状态章「已连接」——该区 app 侧真实存在状态章(`McpServers.tsx` statusBadge:`srv.connected` → `extensions.mcp.statusOnline`「在线」、needs_auth →「登录已过期」、已停用/不可达/服务器错误各态),稿内画状态章方向正确,仅措辞「已连接」与 shipped「在线」有差,超本批授权留待顺笔;其余未动。
 
 **截图**:本批改动 17 页(§9-1 的 17 页含 07 与 12-settings-security)全部用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。
+
+---
+
+## 10. 2026-10-16/17 parity 收敛五批(G0-G4,评审 docs/reviews/2026-10-15-parity-cost-competitor-review.md 裁决落地)
+
+> 2026-10-15 三线评审(设计还原度/用量统计策略/竞品对比)获批后的实施总记录:G0 真缺陷+费率诚实化(PR #419) → G1 设计系统一致性 S1-S6(PR #420) → G2 Aurora Ink 默认主题(裁决 A,PR #421) → G3 用量口径曝光收敛(裁决 B 中道,PR #423) → G4 页面骨架+消息级统计(本批 PR)。
+
+1. **G0**:Companion 裁切/Connections 孤儿图标/Connectors 激活态/MC 循环入口四真缺陷;未知费率不再 \$3/\$15 兜底(cost_usd 全链路 Option)+usage.jsonl raw_usage;shannon-mcp discovery 测试 HomeIsolation 密封。
+2. **G1**:S1 .chip 几何(28px/r8/12px)、S2 语义四色(container 对全量迁移)、S3 .aurora-bar 渐变签名、S4 主 CTA --vio-deep 白字、S5 mono+tabular 数字与 --text-label-lg 13px role、S6 页头/密度、双状态条并一(footer 退役)、palette 打磨。
+3. **G2**:aurora-ink 主题(#0a0b10 ink 底)设为默认,on-primary 深字过 AA 门,CTA 深紫由固定常量承载;13 主题 axe 全过。
+4. **G3**:token+上下文% 主口径;费用全量「估算」徽标;composer 预估改「≈ N tokens」;usage 页 KPI 重排+费率未知注记(unknown_rate_records/events DTO);预算控制面 USD 豁免。
+5. **G4(a)**:Memory 双栏+分类环图+行解剖、Files 预览缩略、Connectors 下划线 tab+卡足安全行、Tasks 右列(月历+目标卡)、Welcome hero 氛围(渐变 tile+渐变标题)、主题卡真实色板(generator 新 emit theme-palettes.ts);**(b)**:消息 hover 轮次级用量明细(↓in ↑out ↻cache+耗时+tok/s+≈$,本地模型 · \$0),palette meta 列。轮次级裁定:消息级 usage 不存在于 wire,绝对 cache 数只有 TimelineTurn 携带。
+
+**i18n**:G0-G4 累计 +13/-8 键 ×10 locale。**截图**:本批为代码批,页面静态稿不再重出(实现截图由 visual-baseline/e2e 覆盖);设计稿侧无回改。

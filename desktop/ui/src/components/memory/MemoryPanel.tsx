@@ -37,7 +37,7 @@ import { MemoryCard } from './MemoryCard'
 import { MemoryEditor, type MemorySaveInput } from './MemoryEditor'
 import { MemoryGraphView } from './MemoryGraphView'
 import DreamPanel from './DreamPanel'
-import StatCard from '@/components/ui/stat-card'
+import { CategoryDonutCard, DreamSummaryCard } from './MemorySideCards'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { toastError } from '@/lib/errorToast'
@@ -238,18 +238,28 @@ export default function MemoryPanel({
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
-      <div className="max-w-[1100px] mx-auto px-lg py-xl">
-        <p className="text-body-md text-on-surface-variant mb-xl">
-          {t('memory.subtitle')}
-        </p>
+      <div className="max-w-[1180px] mx-auto px-lg py-xl">
+        {/* G4a 页头 (design 08:91-97): 19px 页头大标题 + 单行副题。标题复用
+            memory.title（代码中此前无人引用，10 locale 译文已就位），副题
+            复用 memory.subtitle。 */}
+        <div className="mb-lg">
+          <h1 className="text-headline-sm font-bold text-on-surface leading-tight">{t('memory.title')}</h1>
+          <p className="font-label-sm text-on-surface-variant mt-[2px] truncate">{t('memory.subtitle')}</p>
+        </div>
 
-        {/* 注入预览横幅 (design 08:146-156) — injection state + the
-            per-session bypass switch. W4 视觉收敛: carries the aurora-line
-            top edge — design 08 draws `.glasscard aurora-line` on exactly
-            this banner (the earlier "not one of the four aurora surfaces"
-            ruling predates the W4 design-drawn mandate). The 「将携带 N 条」
-            count is the real pre-read (缓期项 #6); it degrades to the honest
-            amber placeholder when no memory store backs this deployment. */}
+        {/* G4a 双栏 (design 08:280-282 `1fr 300px`): 主列 = 注入预览 + 记忆
+            列表，右栏 300px = 分类分布环图 + 梦整理摘要。<1280px 时右栏落到
+            主列下方（结构降级，不隐藏数据）。 */}
+        <div className="flex flex-col xl:flex-row items-start gap-lg">
+          <div className="flex-1 min-w-0 w-full">
+            {/* 注入预览横幅 (design 08:146-156) — injection state + the
+                per-session bypass switch. W4 视觉收敛: carries the aurora-line
+                top edge — design 08 draws `.glasscard aurora-line` on exactly
+                this banner (the earlier "not one of the four aurora surfaces"
+                ruling predates the W4 design-drawn mandate). The 「将携带
+                N 条」 count is the real pre-read (缓期项 #6); it degrades to
+                the honest amber placeholder when no memory store backs this
+                deployment. */}
         <div
           data-testid="memory-injection-banner"
           className="aurora-line flex flex-wrap items-center gap-sm px-md py-sm rounded-2xl bg-surface-container-lowest/80 border border-outline-variant/30 shadow-e1 mb-xl"
@@ -343,37 +353,6 @@ export default function MemoryPanel({
             </span>
           </div>
         </div>
-
-        {/* Dream distillation (梦境提炼) — run / review-gated proposals /
-            report. Sits above the memory browser: it is the only surface
-            that proposes *changes* to the memories below. */}
-        <DreamPanel />
-
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-md mb-xl">
-            <StatCard label={t('memory.stats.total')} value={stats.total} icon="database" />
-            <StatCard
-              label={t('memory.stats.preferences')}
-              value={stats.by_category['preference'] ?? 0}
-              icon="tune"
-            />
-            <StatCard
-              label={t('memory.stats.decisions')}
-              value={stats.by_category['decision'] ?? 0}
-              icon="fork_right"
-            />
-            <StatCard
-              label={t('memory.stats.errors')}
-              value={stats.by_category['error'] ?? 0}
-              icon="bug_report"
-            />
-            <StatCard
-              label={t('memory.stats.projects')}
-              value={Object.keys(stats.by_project).length}
-              icon="folder"
-            />
-          </div>
-        )}
 
         {errorMsg && (
           <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error-container border border-error/20 text-on-error-container font-label-md mb-lg">
@@ -520,6 +499,25 @@ export default function MemoryPanel({
             ))}
           </div>
         )}
+
+            {/* Dream distillation (梦境提炼) — run / review-gated proposals /
+                report. G4a: moves below the memory browser (design 08 keeps
+                the browser as the page body); the right rail's 梦整理 summary
+                card links here via the dream-panel id. */}
+            <DreamPanel />
+          </div>
+
+          {/* G4a 右栏 (design 08): 分类分布环图 + 梦整理摘要, 300px at
+              ≥1280px, stacked below the list on narrow windows. */}
+          <aside
+            data-testid="memory-side-rail"
+            aria-label={t('memory.title')}
+            className="w-full xl:w-[300px] xl:shrink-0 flex flex-col gap-md"
+          >
+            <CategoryDonutCard stats={stats} />
+            <DreamSummaryCard />
+          </aside>
+        </div>
       </div>
 
       {(creating || editing) && (

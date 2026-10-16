@@ -39,9 +39,11 @@ describe('Tasks page', () => {
     await waitFor(() => expect(screen.getByText('No tasks yet.')).toBeInTheDocument())
   })
 
-  it('renders calendar widget', async () => {
+  // G4a (design 04 右列): the side rail's mini month calendar card replaced
+  // the old navigable widget (fixed current month).
+  it('renders the side-rail mini month calendar', async () => {
     render(wrap(<Tasks />))
-    await waitFor(() => expect(screen.getByText('Schedule')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('tasks-side-calendar')).toBeInTheDocument())
   })
 })
 

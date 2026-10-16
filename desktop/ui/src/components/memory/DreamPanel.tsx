@@ -270,6 +270,7 @@ export default function DreamPanel() {
 
   return (
     <section
+      id="dream-panel"
       aria-label={t('memory.dream.title')}
       data-testid="dream-panel"
       className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 mb-xl"

@@ -310,7 +310,6 @@ export default function Featured() {
           const isBusy = busy === vendor.slug;
           const feedbackForVendor = feedback?.slug === vendor.slug ? feedback : null;
           const showTokenPrompt = tokenPrompt === vendor.slug;
-          const accent = ACCENT_BY_SLUG[vendor.slug] ?? ACCENT_DEFAULT;
           // F-11 (honest states): the only per-vendor bit the backend gives us
           // beyond the catalog row itself is "installed" — MCP rows in
           // list_installed_addons carry the server name, and every featured
@@ -322,15 +321,16 @@ export default function Featured() {
           return (
             <div
               key={vendor.slug}
-              className={`relative overflow-hidden rounded-3xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e4 hover:-translate-y-1 transition-all duration-(--duration-normal) flex flex-col group`}
+              className={`relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-e2 transition-all duration-(--duration-normal) flex flex-col group`}
             >
-              {/* Accent strip */}
-              <div className={cn("h-1.5 w-full bg-gradient-to-r", accent.bar)} />
-
               <div className="p-lg flex flex-col flex-1">
+                {/* G4a (设计 07 目录卡解剖): 32px rounded tile, semantic dim
+                    fill + thin-line icon (the old 56px gradient brick and the
+                    accent strip are retired — the design keeps the card quiet
+                    and gives the foot to the security line). */}
                 <div className="flex items-start justify-between mb-md gap-sm">
-                  <div className={cn("relative w-14 h-14 rounded-2xl bg-gradient-to-br flex items-center justify-center shadow-e2", accent.icon)}>
-                    <span className="material-symbols-outlined text-white icon-xl drop-shadow-e1 max-w-full overflow-hidden">
+                  <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined icon-md" aria-hidden="true">
                       {vendor.icon}
                     </span>
                   </div>
@@ -338,7 +338,7 @@ export default function Featured() {
                   <TrustBadge trust={vendor.trust} />
                 </div>
 
-                <h3 className="font-bold text-label-lg text-on-surface mb-xs leading-tight">
+                <h3 className="font-semibold text-label-lg text-on-surface mb-xs leading-tight">
                   {vendor.display_name}
                 </h3>
                 <p className="text-label-sm text-on-surface-variant flex-1 mb-sm leading-relaxed min-h-[40px]">
@@ -463,25 +463,8 @@ export default function Featured() {
   );
 }
 
-/// Per-vendor accent palettes. Each entry picks a coherent gradient for the
-/// top accent strip, icon halo, and CTA button. The default is a neutral
-/// Shannon brand gradient. Keep the palette names stable so designers can
-/// re-skin in one place.
-const ACCENT_DEFAULT = {
-  bar: "from-primary/60 to-primary/20",
-  icon: "from-primary to-primary/70",
-  button: "from-primary to-primary/80",
-};
-const ACCENT_BY_SLUG: Record<string, typeof ACCENT_DEFAULT> = {
-  github: { bar: "from-slate-600/60 to-slate-400/20", icon: "from-slate-700 to-slate-500", button: "from-slate-700 to-slate-600" },
-  gitlab: { bar: "from-orange-500/60 to-amber-400/20", icon: "from-orange-600 to-amber-500", button: "from-orange-600 to-amber-600" },
-  linear: { bar: "from-indigo-500/60 to-violet-400/20", icon: "from-indigo-600 to-violet-500", button: "from-indigo-600 to-violet-600" },
-  notion: { bar: "from-zinc-800/60 to-zinc-500/20", icon: "from-zinc-800 to-zinc-600", button: "from-zinc-800 to-zinc-700" },
-  slack: { bar: "from-purple-500/60 to-rose-400/20", icon: "from-purple-600 to-rose-500", button: "from-purple-600 to-rose-600" },
-  figma: { bar: "from-pink-500/60 to-orange-400/20", icon: "from-pink-600 to-orange-500", button: "from-pink-600 to-orange-600" },
-  filesystem: { bar: "from-emerald-500/60 to-teal-400/20", icon: "from-emerald-600 to-teal-500", button: "from-emerald-600 to-teal-600" },
-  postgres: { bar: "from-blue-500/60 to-sky-400/20", icon: "from-blue-600 to-sky-500", button: "from-blue-600 to-sky-600" },
-};
+/// Per-vendor accent palettes were retired with the G4a card anatomy (design
+/// 07 keeps the card quiet: 32px dim tile, no accent strip) — removed.
 
 function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
   const intl = useIntl()

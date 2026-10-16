@@ -480,16 +480,22 @@ function SkillCard({
   const inDevelopment = isInDevelopmentSkill(entry);
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
+      {/* G4a (设计 07 目录卡解剖): 32px rounded tile + title row. */}
       <div className="flex items-start justify-between mb-xs gap-xs">
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={onOpenDetail}
-          aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
-          className="text-left flex-1 min-w-0 hover:text-primary transition-colors justify-start px-0 h-auto"
-        >
-          <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
-        </Button>
+        <div className="flex items-center gap-sm min-w-0 flex-1">
+          <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">extension</span>
+          </div>
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={onOpenDetail}
+            aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
+            className="text-left flex-1 min-w-0 hover:text-primary transition-colors justify-start px-0 h-auto"
+          >
+            <h4 className="font-semibold text-label-lg text-on-surface hover:underline truncate">{entry.name}</h4>
+          </Button>
+        </div>
         {inDevelopment ? (
           <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-surface-container-highest text-on-surface-variant">
             {t('extensions.skills.inDevelopment')}
@@ -524,19 +530,30 @@ function SkillCard({
           {feedback.msg}
         </div>
       )}
-      <div className="flex gap-xs">
+      {/* G4a card foot (设计 07): security line left, actions RIGHT — View /
+          Install stop hugging the left edge. The standing line reuses the
+          catalog's 安装时扫描 · 发布者自声明 copy (the trust chip above keeps
+          the per-entry verdict). */}
+      <div className="mt-auto pt-sm flex items-center gap-sm min-w-0">
+        <span
+          className="text-label-xs text-on-surface-variant inline-flex items-center gap-xs min-w-0 flex-1"
+          title={`${t('extensions.featured.securityBadgeScanHelp')} ${t('extensions.featured.securityBadgePublisherHelp')}`}
+        >
+          <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">verified_user</span>
+          <span className="truncate">{t('extensions.featured.securityBadge')}</span>
+        </span>
         {entry.homepage_url && (
           <a
             href={entry.homepage_url}
             target="_blank"
             rel="noreferrer"
-            className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
+            className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest shrink-0"
           >
             {t('extensions.skills.view')}
           </a>
         )}
         {inDevelopment ? (
-          <div className="text-label-xs text-on-surface-variant self-center">
+          <div className="text-label-xs text-on-surface-variant self-center shrink-0">
             {t('extensions.skills.inDevelopmentHint')}
           </div>
         ) : (
@@ -545,7 +562,7 @@ function SkillCard({
             size="sm"
             onClick={onInstall}
             disabled={busy || installed}
-            className="disabled:cursor-not-allowed"
+            className="disabled:cursor-not-allowed shrink-0"
           >
             {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
           </Button>

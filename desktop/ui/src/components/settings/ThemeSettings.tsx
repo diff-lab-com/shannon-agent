@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/context/ThemeContext'
 import { readReduceGlass, setReduceGlass } from '@/lib/glass'
+import { THEME_PALETTES } from '@/theme/generated/theme-palettes'
 
 export default function ThemeSettings() {
   const intl = useIntl()
@@ -35,11 +36,20 @@ export default function ThemeSettings() {
             fill stays put (the old selected fill-lightening read as a state
             change, not a state marker); a green ✓ chip names the current
             theme. Label reuses palette.item.current («Current») — no new
-            i18n key this batch. */}
+            i18n key this batch.
+            G4a (design 12-settings-appearance 主题卡): each card renders its
+            theme's REAL two-tone swatch — left half the theme's page
+            background, right half its primary — data generated from
+            scripts/theme-source.json (src/theme/generated/theme-palettes.ts;
+            re-run `pnpm generate:themes` after re-tuning a theme, the
+            generator refuses drift). The 'system' entry has no swatch of its
+            own (it resolves per OS) and falls back to the live token pair. */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
           <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
-            {themes.map(opt => (
+            {themes.map(opt => {
+              const palette = THEME_PALETTES[opt.id]
+              return (
               <Button
                 key={opt.id}
                 variant="outline"
@@ -61,34 +71,33 @@ export default function ThemeSettings() {
                     {t('palette.item.current')}
                   </span>
                 )}
-                <div className="aspect-video rounded-md mb-sm border border-outline-variant/20 overflow-hidden bg-background p-xs space-y-xs">
-                  <div className="flex items-center gap-xs mb-xs">
-                    <div className="w-3 h-3 rounded-sm bg-primary-container" />
-                    <div className="h-1 flex-1 bg-outline-variant/20 rounded-sm" />
-                  </div>
-                  <div className="flex justify-end">
-                    <div className="bg-primary rounded-sm px-xs py-[1px] max-w-[60%]">
-                      <div className="h-1 bg-on-primary/50 rounded-sm w-8" />
-                    </div>
-                  </div>
-                  <div className="flex gap-xs">
-                    <div className="w-3 h-3 rounded-full bg-primary-container shrink-0" />
-                    <div className="bg-surface-container-lowest border border-outline-variant/10 rounded-sm px-xs py-[1px] max-w-[70%]">
-                      <div className="h-1 bg-on-surface-variant/30 rounded-sm w-10" />
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <div className="bg-primary rounded-sm px-xs py-[1px] max-w-[45%]">
-                      <div className="h-1 bg-on-primary/50 rounded-sm w-5" />
-                    </div>
-                  </div>
+                <div
+                  data-testid={`theme-swatch-${opt.id}`}
+                  title={
+                    palette
+                      ? `${t(opt.labelKey)} · ${palette.bg} / ${palette.accent}`
+                      : t(opt.labelKey)
+                  }
+                  className="h-10 rounded-md mb-sm border border-outline-variant/20 overflow-hidden flex"
+                >
+                  {/* Left = theme background, right = theme accent (the
+                      design's two-tone bar). */}
+                  <div
+                    className="flex-1"
+                    style={{ background: palette ? palette.bg : 'var(--color-surface-container)' }}
+                  />
+                  <div
+                    className="flex-1"
+                    style={{ background: palette ? palette.accent : 'var(--color-primary)' }}
+                  />
                 </div>
                 <p className={cn('text-center font-label-md', theme === opt.id ? 'text-on-surface font-bold' : 'text-on-surface')}>
                   {opt.id === 'system' && <span className="material-symbols-outlined icon-sm align-middle mr-xs">monitor</span>}
                   {t(opt.labelKey)}
                 </p>
               </Button>
-            ))}
+              )
+            })}
           </div>
         </section>
 
