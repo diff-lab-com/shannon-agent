@@ -77,6 +77,84 @@
   --color-on-surface-container: #212122;
 }
 
+/* Aurora Ink — the 2026-10-15 'aurora ink' design system (docs/design/ui-redesign-2026-10/assets/shannon-ui.css :root) as app default: ink #0a0b10 window, #0f1118 panels, #161923 embedded surfaces; brand violet #8b7cf7 primary with ink-dark on-primary (white tops out at 3.32:1 on #8b7cf7 — the AA PAIRS gate forces the dark label, same resolution as tokyo-night; the deep-violet CTA #6d5ce8 stays the fixed --vio-deep constant in index.css); text tiers t1 #eceef6 / t2 #a8adbf; hairline borders lifted from the design's white-7% composite; semantic quartet #3ddc97 / #f5b83d / #fb7185 / #4cc3f7; aurora-family ANSI (blue #6fa8e8, cyan #56c8dd) */
+[data-theme='aurora-ink'] {
+  --radius: 0.625rem;
+  --material-base: var(--color-surface-dim);
+  --background: #0a0b10;
+  --foreground: #eceef6;
+  --card: #0f1118;
+  --card-foreground: #eceef6;
+  --popover: #0f1118;
+  --popover-foreground: #eceef6;
+  --primary: #8b7cf7;
+  --primary-foreground: #0a0b10;
+  --secondary: #6fa8e8;
+  --secondary-foreground: #0a0b10;
+  --muted: #161923;
+  --muted-foreground: #a8adbf;
+  --accent: #161923;
+  --accent-foreground: #eceef6;
+  --destructive: #fb7185;
+  --border: #232631;
+  --input: #232631;
+  --ring: #8b7cf7;
+
+  --color-primary: #8b7cf7;
+  --color-link: #a89cfa;
+  --color-primary-container: #1f1f35;
+  --color-on-primary: #0a0b10;
+  --color-on-primary-container: #a89cfa;
+  --color-primary-fixed: #cdc7fb;
+  --color-on-primary-fixed: #16123a;
+  --color-secondary: #6fa8e8;
+  --color-on-secondary: #0a0b10;
+  --color-tertiary: #f5b83d;
+  --color-on-tertiary: #0a0b10;
+  --color-tertiary-fixed: #3a2f14;
+  --color-error: #fb7185;
+  --color-error-container: #2b1d25;
+  --color-on-error-container: #f2d8dd;
+  --color-on-error: #0a0b10;
+  --color-success: #3ddc97;
+  --color-success-container: #152927;
+  --color-on-success: #0a0b10;
+  --color-on-success-container: #b8e8d0;
+  --color-warning: #f5b83d;
+  --color-warning-container: #2b251c;
+  --color-on-warning: #0a0b10;
+  --color-on-warning-container: #f0e2bd;
+  --color-info: #4cc3f7;
+  --color-info-container: #162633;
+  --color-on-info: #0a0b10;
+  --color-on-info-container: #bfe2f5;
+  --color-surface: #0a0b10;
+  --color-surface-dim: #05060b;
+  --color-surface-bright: #0a0b10;
+  --color-surface-container-lowest: #0d0e15;
+  --color-surface-container-low: #0a0b10;
+  --color-surface-container: #0f1118;
+  --color-surface-container-high: #161923;
+  --color-surface-container-highest: #1d2130;
+  --color-on-surface: #eceef6;
+  --color-on-surface-variant: #a8adbf;
+  --color-inverse-surface: #eceef6;
+  --color-inverse-on-surface: #0a0b10;
+  --color-outline: #32353f;
+  --color-outline-variant: #262933;
+  --color-background: #0a0b10;
+  --color-on-background: #eceef6;
+  --chart-series-1: #8b7cf7;
+  --chart-series-2: #56c8dd;
+  --chart-series-3: #f5b83d;
+  --chart-series-4: #3ddc97;
+  --chart-series-5: #fb7185;
+  --chart-series-6: #6fa8e8;
+  --chart-series-7: #a89cfa;
+  --chart-series-8: #4cc3f7;
+  --color-on-surface-container: #dddedf;
+}
+
 /* Tokyo Night (dark) — primary family shifted to the Aurora design violet #8b7cf7 (ui-redesign-2026-10 W3); ANSI terminal palette keeps the official TN blue */
 [data-theme='tokyo-night'] {
   --radius: 0.625rem;

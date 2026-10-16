@@ -2,7 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, type React
 import * as api from '@/lib/tauri-api'
 import { THEME_REGISTRY } from '@/theme/generated/registry'
 
-export type ThemeName = 'material' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'solarized' | 'solarized-light' | 'dracula' | 'gruvbox' | 'gruvbox-light' | 'system'
+export type ThemeName = 'material' | 'aurora-ink' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'solarized' | 'solarized-light' | 'dracula' | 'gruvbox' | 'gruvbox-light' | 'system'
 
 type ResolvedTheme = Exclude<ThemeName, 'system'>
 
@@ -58,6 +58,7 @@ const THEMES: { id: ThemeName; labelKey: string }[] = (
   [
     'system',
     'material',
+    'aurora-ink',
     'tokyo-night',
     'tokyo-night-light',
     'catppuccin',
@@ -83,24 +84,29 @@ function getSystemTheme(): ResolvedTheme {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   // Dark-first default (UI audit §2.5: all four competitors ship dark as the
-  // default or flagship look). Users who picked a theme keep theirs via
-  // localStorage; 'system' still resolves per OS preference.
+  // default or flagship look). Default is 'aurora-ink' — the 2026-10-15
+  // "aurora ink" design system (ui-redesign-2026-10, review §5 verdict A).
+  // Users who picked a theme keep theirs via localStorage; 'system' still
+  // resolves per OS preference (dark → tokyo-night, light → material — the
+  // pairing predates aurora-ink and is deliberately untouched).
   //
   // One-time migration (2026-10-08 review round): stored 'material' is mostly
   // a pre-dark-default leftover persisted by earlier builds, not a considered
-  // pick — flip it to 'tokyo-night' once, behind a flag, so an explicit
-  // choice made AFTER this migration still sticks.
+  // pick — flip it to the current dark default once, behind a flag, so an
+  // explicit choice made AFTER this migration still sticks. The target
+  // followed the default to 'aurora-ink' (2026-10-15 verdict A); users the
+  // earlier run already moved to 'tokyo-night' keep that stored pick.
   const [theme, setThemeState] = useState<ThemeName>(() => {
     if (typeof window !== 'undefined') {
       const MIGRATION_KEY = 'shannon.theme.darkDefaultMigrated'
       const stored = localStorage.getItem('shannon-theme') as ThemeName | null
       if (stored === 'material' && !localStorage.getItem(MIGRATION_KEY)) {
         localStorage.setItem(MIGRATION_KEY, '1')
-        return 'tokyo-night'
+        return 'aurora-ink'
       }
-      return stored || 'tokyo-night'
+      return stored || 'aurora-ink'
     }
-    return 'tokyo-night'
+    return 'aurora-ink'
   })
 
   const [fontScale, setFontScaleState] = useState<number>(() => {

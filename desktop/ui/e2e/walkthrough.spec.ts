@@ -49,6 +49,7 @@ const ROUTES: { path: string; name: string }[] = [
 // (theme ids; label = id) — used for the light-theme glass legibility sweep.
 const ALL_THEMES: { id: string; label: string }[] = [
   { id: 'material', label: 'material' },
+  { id: 'aurora-ink', label: 'aurora-ink' },
   { id: 'tokyo-night', label: 'dark-tokyo-night' },
   { id: 'tokyo-night-light', label: 'tokyo-night-light' },
   { id: 'catppuccin', label: 'catppuccin' },

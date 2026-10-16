@@ -6,6 +6,7 @@ import AxeBuilder from '@axe-core/playwright'
 // pair must observably change a token-derived background.
 const THEME_CASES: { id: string; mode: 'light' | 'dark' }[] = [
   { id: 'material', mode: 'light' },
+  { id: 'aurora-ink', mode: 'dark' },
   { id: 'tokyo-night', mode: 'dark' },
   { id: 'tokyo-night-light', mode: 'light' },
   { id: 'catppuccin', mode: 'dark' },

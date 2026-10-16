@@ -69,7 +69,7 @@
   /* Scrims (audit 2026-10-08 B): fixed near-black overlays for the two
      modal-blocking layers — bg-scrim = dialog/menu backdrops, bg-scrim-strong
      = media lightboxes. Deliberately NOT per-theme: a scrim must darken
-     content identically in all 12 themes. Content VEILS (non-blocking
+     content identically in all 13 themes. Content VEILS (non-blocking
      loading states, e.g. the session-switch overlay) are a different thing
      and stay on surface tokens — see styles/README.md "Scrims and veils". */
   --color-scrim: rgb(0 0 0 / 0.5);
@@ -359,12 +359,16 @@
 }
 
 /* Aurora v2 contrast guardrail (AA 4.5:1) — audited 2026-10-07 against the
-   default dark theme (tokyo-night): --color-on-surface-variant #a9b1d6 over
-   --color-surface-container #1f2335 = 7.37:1, and muted-foreground #8d95b8
-   over the same surface = 5.28:1 (still 4.56:1 on container-highest
-   #292e42). All pass, so NO override layer is needed here. Re-audit (and
-   add the override in THIS unlayered region, never in the generated block)
-   only if theme-source.json ever lifts those text token values. */
+   then-default dark theme (tokyo-night): --color-on-surface-variant #a9b1d6
+   over --color-surface-container #1f2335 = 7.37:1, and muted-foreground
+   #8d95b8 over the same surface = 5.28:1 (still 4.56:1 on container-highest
+   #292e42). Re-audited 2026-10-15 against the new default aurora-ink
+   (ui-redesign-2026-10 verdict A): on-surface-variant #a8adbf over
+   surface-container #0f1118 = 8.44:1, still 7.16:1 on container-highest
+   #1d2130 and 7.85:1 on muted #161923. All pass, so NO override layer is
+   needed here. Re-audit (and add the override in THIS unlayered region,
+   never in the generated block) only if theme-source.json ever lifts those
+   text token values. */
 
 @utility glass-surface {
   background: color-mix(in srgb, var(--color-surface-container-lowest) calc(var(--glass-tint-alpha) * 100%), transparent);
@@ -410,7 +414,7 @@
     height: 1px;
     /* Literal rgba is deliberate: the aurora is a fixed brand signature
        (design --vio #8b7cf7 @ .55 / --aur #56c8dd @ .45), NOT a per-theme
-       token — it must read identically across all 12 themes. */
+       token — it must read identically across all 13 themes. */
     background: linear-gradient(90deg, transparent, rgba(139, 124, 247, 0.55), rgba(86, 200, 221, 0.45), transparent);
     pointer-events: none;
   }
@@ -435,7 +439,7 @@
    border-color leaked to all four sides of the base button border and read
    as an outlined box instead of a tab. Fixed brand hues (the full-strength
    --grad-aurora triple, same pair as aurora-line) — deliberately not theme
-   tokens, so the signature reads identically across all 12 themes; at full
+   tokens, so the signature reads identically across all 13 themes; at full
    opacity no light-theme lift is needed (unlike the hairline alphas above).
    Purely static decorative paint (::after, pointer-events:none) — selection
    stays carried by the tab's text color + aria-selected, so neither
@@ -532,7 +536,7 @@
   /* S3 aurora fill: the design's progress/meter/underline signature gradient,
      as a paint-it-yourself background-image (pair with a height, radius and
      overflow at the call site). Fixed brand hues, same triple as aurora-tab
-     above — identical across all 12 themes. */
+     above — identical across all 13 themes. */
   .aurora-bar {
     background-image: linear-gradient(90deg, #8b7cf7, #6fa8e8, #56c8dd);
   }
