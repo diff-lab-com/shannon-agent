@@ -264,7 +264,11 @@ pub struct UsagePayload {
     pub query_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cost_usd: f64,
+    /// Cost in USD. `None` when no rate is known for the model — the UI
+    /// hides the figure instead of fabricating one (honesty rule). Additive
+    /// — must mirror src/events.rs exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
 
     /// P1-1: optional owner session (multi-window filtering). Additive —
     /// must mirror src/events.rs exactly.

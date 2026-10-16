@@ -465,9 +465,20 @@ fn test_invalid_config_empty_json() {
 
 #[test]
 fn test_discover_config_empty_directory() {
+    // discover_config also reads user-level configs (~/.claude, ~/.shannon)
+    // from $HOME; point it at an empty home so the assertion is hermetic on
+    // dev machines that carry real configs. nextest runs each test as its
+    // own process, so the override cannot leak.
+    let home = tempfile::tempdir().unwrap();
+    let previous = std::env::var_os("HOME");
+    unsafe { std::env::set_var("HOME", home.path()) };
     let temp = tempfile::tempdir().unwrap();
     let config = discover_config(temp.path()).unwrap();
     assert!(config.mcp_servers.is_empty());
+    match previous {
+        Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
 }
 
 #[test]

@@ -148,7 +148,13 @@ pub struct UsagePayload {
     pub query_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cost_usd: f64,
+    /// Cost of this frame in USD. `None` when no rate is known for the model
+    /// — the UI hides the figure instead of fabricating one (honesty rule).
+    /// serde-defaulted and skipped when absent: producers written before the
+    /// field was an Option stay parseable, and unknown costs are never
+    /// rendered as a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// 2026-10-08 status bar (设计 02-chat 六段): cache-hit fraction for this
@@ -574,12 +580,26 @@ mod tests {
             p.context_total, None,
             "missing context_total defaults to None"
         );
+        // A legacy payload with a plain f64 cost parses as Some — old frames
+        // keep their known cost.
+        assert_eq!(p.cost_usd, Some(0.01));
+        // A payload without cost_usd (unknown rate) parses as None and drops
+        // the key on re-serialize (skip_serializing_if) — absent = hidden.
+        let no_cost: UsagePayload =
+            serde_json::from_str(r#"{"query_id":"q1","input_tokens":100,"output_tokens":20}"#)
+                .unwrap();
+        assert_eq!(no_cost.cost_usd, None);
+        assert!(
+            !serde_json::to_string(&no_cost)
+                .unwrap()
+                .contains("cost_usd")
+        );
 
         let with_peak = UsagePayload {
             query_id: "q1".into(),
             input_tokens: 100,
             output_tokens: 20,
-            cost_usd: 0.01,
+            cost_usd: Some(0.01),
             session_id: None,
             cache_hit_rate: None,
             context_total: Some(200_000),

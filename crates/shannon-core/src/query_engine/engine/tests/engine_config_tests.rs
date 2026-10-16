@@ -532,6 +532,7 @@ fn test_cache_tokens_from_message_start_are_used() {
                 output_tokens: 0,
                 cache_creation_input_tokens: 500,
                 cache_read_input_tokens: 800,
+                raw: None,
             },
         },
     };
@@ -557,6 +558,7 @@ fn test_cache_tokens_from_message_start_are_used() {
         output_tokens: 200,
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
+        raw: None,
     };
 
     // Merge: take the max of both sources
@@ -681,6 +683,7 @@ fn test_cache_hit_rate_accumulation_across_usage_events() {
                     output_tokens: 0,
                     cache_creation_input_tokens: *creation,
                     cache_read_input_tokens: *read,
+                    raw: None,
                 },
             },
         };

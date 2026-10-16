@@ -655,8 +655,10 @@ export default function ChatInput({
   }, [value, attachmentsKey, sessionId])
   // Budget linkage: the projected high end against the session cap. The
   // BudgetBanner keeps owning banner duty — this only tints the estimate row.
+  // Unknown pricing (costHigh null) leaves the projection hidden — no
+  // fabricated figure feeds the tint.
   const estimateBudgetRatio =
-    costEstimate && costEstimate.budgetUsd && costEstimate.budgetUsd > 0
+    costEstimate && costEstimate.costHigh != null && costEstimate.budgetUsd && costEstimate.budgetUsd > 0
       ? (costEstimate.spentUsd + costEstimate.costHigh) / costEstimate.budgetUsd
       : null
   const estimateBudgetNearing =
@@ -1460,7 +1462,7 @@ export default function ChatInput({
             linkage only; BudgetBanner remains the single banner. Purely
             visual (no aria-live): per-keystroke announcements would repeat
             the P2-9 mistake. */}
-        {costEstimate && (
+        {costEstimate && costEstimate.costLow != null && costEstimate.costHigh != null && (
           <div
             data-testid="send-cost-estimate"
             title={t('chat.input.cost.aria')}

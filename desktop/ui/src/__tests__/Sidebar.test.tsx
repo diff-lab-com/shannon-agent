@@ -256,6 +256,26 @@ describe('Sidebar — Navigation', () => {
     const triageLink = screen.getByRole('link', { name: /Open Inbox/i })
     expect(triageLink).toBeInTheDocument()
   })
+
+  // Parity G0: the Connectors row targets the hub's featured tab, but the
+  // whole /extensions/* area is the Connectors surface — sibling tabs keep
+  // the row lit (NavRow activeMatch prefix) while unrelated rows stay dark.
+  it('keeps the Connectors row active on /extensions sibling tabs', () => {
+    render(wrap(<Sidebar />, { path: '/extensions/market' }))
+    const connectors = screen.getByRole('link', { name: /Connectors/ })
+    expect(connectors.className).toContain('bg-primary/10')
+    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' }).className).not.toContain('bg-primary/10')
+  })
+
+  it('keeps the Connectors row active at the linked hub tab itself', () => {
+    render(wrap(<Sidebar />, { path: '/extensions/featured' }))
+    expect(screen.getByRole('link', { name: /Connectors/ }).className).toContain('bg-primary/10')
+  })
+
+  it('Connectors prefix match does not leak to look-alike routes', () => {
+    render(wrap(<Sidebar />, { path: '/extensions-sibling' }))
+    expect(screen.getByRole('link', { name: /Connectors/ }).className).not.toContain('bg-primary/10')
+  })
 })
 
 // U1 — the sidebar SessionsSection is the app's single session list (the

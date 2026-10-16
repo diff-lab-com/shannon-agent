@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, memo } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -73,10 +73,17 @@ const getNavClass = ({ isActive }: { isActive: boolean }) =>
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
   );
 
+/** NavLink has no custom-matcher hook, so rows whose active area is wider
+ *  than their link target pass `activeMatch`; the row class and the icon
+ *  fill must then both derive from this one value or they can disagree. */
+function matchesPathPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
 /** One flat nav row: fixed icon + truncating label + optional trailing slot.
  *  Batch B3: `kbd` surfaces the row's shortcut in the tooltip/aria label
  *  (ZCode 顶部动作区 pattern — shortcuts discoverable in place). */
-function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate }: {
+function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate, activeMatch }: {
   to: string
   icon: string
   labelId: string
@@ -84,15 +91,27 @@ function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate }: {
   kbd?: string
   trail?: React.ReactNode
   onNavigate?: () => void
+  /** Pathname prefix that lights the row instead of NavLink's own match
+   *  against `to` — e.g. a row linking one hub tab that must stay active
+   *  across the hub's sibling tabs. */
+  activeMatch?: string
 }) {
   const intl = useIntl()
+  const { pathname } = useLocation()
+  const isActive = activeMatch ? matchesPathPrefix(pathname, activeMatch) : undefined
   const label = intl.formatMessage({ id: labelId })
   const hint = kbd ? `${label} · ${kbd}` : label
   return (
-    <NavLink to={to} className={getNavClass} title={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint} onClick={onNavigate}>
-      {({ isActive }) => (
+    <NavLink
+      to={to}
+      className={(nav) => getNavClass({ isActive: isActive ?? nav.isActive })}
+      title={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint}
+      aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint}
+      onClick={onNavigate}
+    >
+      {({ isActive: navIsActive }) => (
         <>
-          <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
+          <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: (isActive ?? navIsActive) ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
           <span className="flex-1 min-w-0 truncate">{label}</span>
           {trail}
         </>
@@ -429,7 +448,10 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
                 </span>
               ) : undefined}
             />
-            <NavRow to="/extensions/featured" icon="extension" labelId="nav.extensions" titleId="nav.extensions" kbd={`${mod}3`} onNavigate={handleNavClick} />
+            {/* activeMatch: the row's target is one hub tab, but the whole
+                /extensions/* area is the Connectors surface — a sibling tab
+                (market/datasources/…) must keep the row lit. */}
+            <NavRow to="/extensions/featured" activeMatch="/extensions" icon="extension" labelId="nav.extensions" titleId="nav.extensions" kbd={`${mod}3`} onNavigate={handleNavClick} />
             <NavRow to="/memory" icon="psychology" labelId="nav.memory" titleId="nav.memory" kbd={`${mod}4`} onNavigate={handleNavClick} />
             {mode === 'dev' && (
               <>

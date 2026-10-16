@@ -974,10 +974,11 @@ mod tests {
                 query_id: query_id(),
                 input_tokens: 11,
                 output_tokens: 22,
-                cost_usd: 0.5,
+                cost_usd: Some(0.5),
                 cache_creation_tokens: 3,
                 cache_read_tokens: 4,
                 context_window_tokens: Some(200_000),
+                raw_usage: None,
             });
             tee.record_query_event(&QueryEvent::TurnCompleted {
                 query_id: query_id(),
@@ -988,10 +989,11 @@ mod tests {
                 query_id: query_id(),
                 input_tokens: 100,
                 output_tokens: 200,
-                cost_usd: 1.5,
+                cost_usd: Some(1.5),
                 cache_creation_tokens: 30,
                 cache_read_tokens: 40,
                 context_window_tokens: Some(128_000),
+                raw_usage: None,
             });
             tee.record_query_event(&QueryEvent::Completed {
                 query_id: query_id(),
@@ -1039,10 +1041,11 @@ mod tests {
             query_id: query_id(),
             input_tokens: 11,
             output_tokens: 22,
-            cost_usd: 0.5,
+            cost_usd: Some(0.5),
             cache_creation_tokens: 3,
             cache_read_tokens: 4,
             context_window_tokens: None,
+            raw_usage: None,
         };
         let turn_completed = QueryEvent::TurnCompleted {
             query_id: query_id(),

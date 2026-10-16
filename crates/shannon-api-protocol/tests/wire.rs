@@ -92,7 +92,7 @@ fn query_response_with_usage_and_errors() {
         usage: Some(UsageInfo {
             input_tokens: 100,
             output_tokens: 50,
-            cost_usd: 0.005,
+            cost_usd: Some(0.005),
         }),
         errors: vec![],
         session_id: Uuid::new_v4(),
@@ -126,12 +126,21 @@ fn usage_info_serialization() {
     let info = UsageInfo {
         input_tokens: 500,
         output_tokens: 200,
-        cost_usd: 0.0123,
+        cost_usd: Some(0.0123),
     };
     let parsed: UsageInfo = serde_json::from_value(serde_json::to_value(&info).unwrap()).unwrap();
     assert_eq!(parsed.input_tokens, 500);
     assert_eq!(parsed.output_tokens, 200);
-    assert!((parsed.cost_usd - 0.0123).abs() < f64::EPSILON);
+    assert_eq!(parsed.cost_usd, Some(0.0123));
+    // Unknown cost serializes as explicit null (absent = hidden — a null is
+    // not a fabricated figure) and parses back as None.
+    let unknown: UsageInfo = serde_json::from_value(serde_json::json!({
+        "input_tokens": 1u64, "output_tokens": 2u64
+    }))
+    .unwrap();
+    assert_eq!(unknown.cost_usd, None);
+    let unknown_wire = serde_json::to_value(&unknown).unwrap();
+    assert_eq!(unknown_wire["cost_usd"], serde_json::Value::Null);
 }
 
 // ── HealthResponse ──────────────────────────────────────────────────────
@@ -586,7 +595,7 @@ fn ws_server_message_usage() {
     let msg = WsServerMessage::Usage {
         input_tokens: 100,
         output_tokens: 50,
-        cost_usd: 0.003,
+        cost_usd: Some(0.003),
     };
     let parsed: serde_json::Value = serde_json::to_value(&msg).unwrap();
     assert_eq!(parsed["type"], "usage");
@@ -916,7 +925,7 @@ fn ws_server_message_roundtrip_all_variants() {
         WsServerMessage::Usage {
             input_tokens: 10,
             output_tokens: 5,
-            cost_usd: 0.001,
+            cost_usd: Some(0.001),
         },
         WsServerMessage::Completed {
             model: "test".to_string(),

@@ -147,13 +147,14 @@ mod tests {
     fn test_cost_tracker_calculate_cost_sonnet() {
         let model = "claude-3-5-sonnet-20241022";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0).expect("known-priced model");
         assert!((cost - 3.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000).expect("known-priced model");
         assert!((cost - 15.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 18.0).abs() < 0.001);
     }
 
@@ -161,13 +162,14 @@ mod tests {
     fn test_cost_tracker_calculate_cost_haiku() {
         let model = "claude-3-5-haiku-20241022";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0).expect("known-priced model");
         assert!((cost - 0.80).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000).expect("known-priced model");
         assert!((cost - 4.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 4.80).abs() < 0.001);
     }
 
@@ -175,13 +177,14 @@ mod tests {
     fn test_cost_tracker_calculate_cost_opus() {
         let model = "claude-3-opus-20240229";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0).expect("known-priced model");
         assert!((cost - 15.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000).expect("known-priced model");
         assert!((cost - 75.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 90.0).abs() < 0.001);
     }
 
@@ -189,7 +192,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_sonnet4() {
         let model = "claude-sonnet-4-20250514";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 18.0).abs() < 0.001);
     }
 
@@ -197,15 +201,17 @@ mod tests {
     fn test_cost_tracker_calculate_cost_default() {
         let model = "unknown-model";
 
+        // Honest-absent contract: an unpriced model produces NO cost — never
+        // a fabricated estimate.
         let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
-        assert!((cost - 18.0).abs() < 0.001);
+        assert!(cost.is_none());
     }
 
     #[test]
     fn test_cost_tracker_calculate_cost_small_tokens() {
         let model = "claude-3-5-sonnet-20241022";
 
-        let cost = CostTracker::calculate_cost(model, 1000, 500);
+        let cost = CostTracker::calculate_cost(model, 1000, 500).expect("known-priced model");
         let expected = (1000.0 / 1_000_000.0) * 3.0 + (500.0 / 1_000_000.0) * 15.0;
         assert!((cost - expected).abs() < 0.000001);
     }
@@ -253,13 +259,14 @@ mod tests {
     fn test_cost_tracker_calculate_cost_gpt4o() {
         let model = "gpt-4o";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 0);
+        let cost = CostTracker::calculate_cost(model, 1_000_000, 0).expect("known-priced model");
         assert!((cost - 2.5).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 0, 1_000_000);
+        let cost = CostTracker::calculate_cost(model, 0, 1_000_000).expect("known-priced model");
         assert!((cost - 10.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 12.5).abs() < 0.001);
     }
 
@@ -267,7 +274,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_gpt4turbo() {
         let model = "gpt-4-turbo";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 40.0).abs() < 0.001);
     }
 
@@ -275,7 +283,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_gpt35turbo() {
         let model = "gpt-3.5-turbo";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 2.0).abs() < 0.001);
     }
 
@@ -285,7 +294,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_ollama_llama() {
         let model = "llama3";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 0.0).abs() < 0.001);
     }
 
@@ -293,7 +303,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_ollama_mistral() {
         let model = "mistral:7b";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 0.0).abs() < 0.001);
     }
 
@@ -301,7 +312,8 @@ mod tests {
     fn test_cost_tracker_calculate_cost_ollama_qwen() {
         let model = "qwen:72b";
 
-        let cost = CostTracker::calculate_cost(model, 1_000_000, 1_000_000);
+        let cost =
+            CostTracker::calculate_cost(model, 1_000_000, 1_000_000).expect("known-priced model");
         assert!((cost - 0.0).abs() < 0.001);
     }
 
@@ -329,7 +341,7 @@ mod tests {
     #[test]
     fn test_cost_tracker_zero_tokens() {
         let model = "claude-sonnet-4";
-        let cost = CostTracker::calculate_cost(model, 0, 0);
+        let cost = CostTracker::calculate_cost(model, 0, 0).expect("known-priced model");
         assert!((cost - 0.0).abs() < 0.001);
     }
 
@@ -559,10 +571,11 @@ mod tests {
             query_id: id,
             input_tokens: 1000,
             output_tokens: 500,
-            cost_usd: 0.015,
+            cost_usd: Some(0.015),
             cache_creation_tokens: 200,
             cache_read_tokens: 500,
             context_window_tokens: Some(200_000),
+            raw_usage: None,
         };
         match event {
             QueryEvent::Usage {
@@ -575,9 +588,26 @@ mod tests {
             } => {
                 assert_eq!(input_tokens, 1000);
                 assert_eq!(output_tokens, 500);
-                assert!((cost_usd - 0.015).abs() < 0.0001);
+                assert_eq!(cost_usd, Some(0.015));
                 assert_eq!(cache_creation_tokens, 200);
                 assert_eq!(cache_read_tokens, 500);
+            }
+            _ => panic!("Expected Usage variant"),
+        }
+        // Old JSON without cost_usd/raw_usage stays parseable (serde default);
+        // cost_usd reads back as None — "unknown", never a fabricated number.
+        let legacy: QueryEvent = serde_json::from_str(
+            r#"{"Usage":{"query_id":"00000000-0000-0000-0000-000000000000","input_tokens":1,"output_tokens":2,"cache_creation_tokens":0,"cache_read_tokens":0}}"#,
+        )
+        .unwrap();
+        match legacy {
+            QueryEvent::Usage {
+                cost_usd,
+                raw_usage,
+                ..
+            } => {
+                assert_eq!(cost_usd, None);
+                assert_eq!(raw_usage, None);
             }
             _ => panic!("Expected Usage variant"),
         }
@@ -608,7 +638,7 @@ mod tests {
         let id = Uuid::new_v4();
         let event = QueryEvent::Cost {
             query_id: id,
-            total_cost_usd: 1.23,
+            total_cost_usd: Some(1.23),
             input_tokens: 50000,
             output_tokens: 25000,
         };
@@ -619,7 +649,7 @@ mod tests {
                 output_tokens,
                 ..
             } => {
-                assert!((total_cost_usd - 1.23).abs() < 0.001);
+                assert!((total_cost_usd.unwrap() - 1.23).abs() < 0.001);
                 assert_eq!(input_tokens, 50000);
                 assert_eq!(output_tokens, 25000);
             }
@@ -767,15 +797,21 @@ mod tests {
 
     #[test]
     fn test_calculate_cost_case_sensitivity() {
-        let cost_lower = CostTracker::calculate_cost("claude-3-5-sonnet", 1_000_000, 0);
-        let cost_mixed = CostTracker::calculate_cost("Claude-3-5-Sonnet", 1_000_000, 0);
+        // Pricing resolution is case-sensitive: the exact lowercase id bills,
+        // a mixed-case variant has NO entry. (The retired $3/$15 fallback
+        // masked this — it priced the unknown variant identically by pure
+        // coincidence, so the old assertion passed for the wrong reason.)
+        let cost_lower = CostTracker::calculate_cost("claude-3-5-sonnet", 1_000_000, 0)
+            .expect("known-priced model");
         assert!((cost_lower - 3.0).abs() < 0.001);
-        assert!((cost_mixed - 3.0).abs() < 0.001);
+        let cost_mixed = CostTracker::calculate_cost("Claude-3-5-Sonnet", 1_000_000, 0);
+        assert!(cost_mixed.is_none(), "unlisted variant must not be priced");
     }
 
     #[test]
     fn test_calculate_cost_model_with_prefix() {
-        let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         assert!((cost - 0.75).abs() < 0.001);
     }
 
@@ -1098,17 +1134,21 @@ mod tests {
 
     #[test]
     fn test_cost_tracker_model_name_variants() {
-        let cost = CostTracker::calculate_cost("claude-3-5-sonnet", 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost("claude-3-5-sonnet", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         assert!((cost - 18.0).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost("claude-3-5-haiku", 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost("claude-3-5-haiku", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         assert!((cost - 4.80).abs() < 0.001);
 
-        let cost = CostTracker::calculate_cost("claude-3-opus", 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost("claude-3-opus", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         assert!((cost - 90.0).abs() < 0.001);
 
+        // Unpriced model: no cost, not a fallback estimate.
         let cost = CostTracker::calculate_cost("unknown-model", 1_000_000, 1_000_000);
-        assert!(cost > 0.0);
+        assert!(cost.is_none());
     }
 
     #[test]

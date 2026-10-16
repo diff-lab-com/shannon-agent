@@ -714,8 +714,48 @@ fn parse_allowed_tools(raw: &serde_json::Value) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    /// Points $HOME at an empty tempdir for the duration of a test; restores
+    /// the previous value on drop. discover_config reads user-level configs
+    /// (`~/.claude`, `~/.shannon`) from $HOME, so discovery tests are only
+    /// hermetic with an empty home. nextest runs each test as its own
+    /// process, making the override safe; under the shared-process cargo
+    /// harness the restore guard keeps the exposure window minimal.
+    pub(crate) struct HomeIsolation {
+        previous: Option<std::ffi::OsString>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl HomeIsolation {
+        pub(crate) fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let previous = std::env::var_os("HOME");
+            unsafe { std::env::set_var("HOME", dir.path()) };
+            Self {
+                previous,
+                _dir: dir,
+            }
+        }
+    }
+
+    impl Drop for HomeIsolation {
+        fn drop(&mut self) {
+            if let Some(prev) = self.previous.take() {
+                unsafe { std::env::set_var("HOME", prev) };
+            } else {
+                unsafe { std::env::remove_var("HOME") };
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolate_home() -> super::test_support::HomeIsolation {
+        super::test_support::HomeIsolation::new()
+    }
 
     // ── Env var expansion tests ─────────────────────────────────────────
 
@@ -937,6 +977,7 @@ mod tests {
 
     #[test]
     fn test_discover_config_no_files() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let config = discover_config(temp.path()).unwrap();
         assert!(config.mcp_servers.is_empty());
@@ -944,6 +985,7 @@ mod tests {
 
     #[test]
     fn test_discover_config_merges() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
 
         // Write project-level .mcp.json
@@ -1296,6 +1338,7 @@ mod tests {
 
     #[test]
     fn test_discover_config_last_wins_override() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
 
         // .mcp.json defines "my-server" with command "node"
@@ -1345,6 +1388,7 @@ mod tests {
 
     #[test]
     fn test_discover_config_merges_from_multiple_files() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
 
         // .mcp.json has "server-a"

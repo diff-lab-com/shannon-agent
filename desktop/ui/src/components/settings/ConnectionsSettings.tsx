@@ -95,34 +95,51 @@ export default function ConnectionsSettings() {
 
       {/* X3 互链: gateway = model/platform access channel, data sources =
           external data connections. One line each way so users stop bouncing
-          between the two pages looking for "where do I connect X". */}
-      <p className="text-on-surface-variant/80 font-body-sm max-w-prose flex flex-wrap items-center gap-xs">
-        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-          swap_horiz
-        </span>
-        {t('settings.connections.crossLink.text')}{' '}
-        <button
-          type="button"
-          onClick={() => navigate('/extensions/datasources')}
-          data-testid="gateway-to-datasources-link"
-          className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
-        >
-          {t('settings.connections.crossLink.link')}
-          <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-            arrow_forward
+          between the two pages looking for "where do I connect X". Icon and
+          title share one flex row so a long description can never wrap the
+          icon into an orphaned line of its own. */}
+      <div className="max-w-prose space-y-xs">
+        <div className="flex items-center gap-xs">
+          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">
+            swap_horiz
           </span>
-        </button>
-      </p>
+          <h3 className="font-label-md font-medium text-on-surface">
+            {t('settings.connections.crossLink.title')}
+          </h3>
+        </div>
+        <p className="text-on-surface-variant/80 font-body-sm">
+          {t('settings.connections.crossLink.text')}{' '}
+          <button
+            type="button"
+            onClick={() => navigate('/extensions/datasources')}
+            data-testid="gateway-to-datasources-link"
+            className="text-primary hover:underline cursor-pointer inline-flex items-center gap-0.5"
+          >
+            {t('settings.connections.crossLink.link')}
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">
+              arrow_forward
+            </span>
+          </button>
+        </p>
+      </div>
 
       {/* J4-5: the gateway delivers inbound IM traffic into the sidebar
           session list — say so, or users configure a platform and then hunt
-          for a separate inbox page that does not exist. */}
-      <p className="text-on-surface-variant/80 font-body-sm max-w-prose flex flex-wrap items-center gap-xs">
-        <span className="material-symbols-outlined icon-sm" aria-hidden="true">
-          forum
-        </span>
-        {t('settings.connections.imSessionsNote')}
-      </p>
+          for a separate inbox page that does not exist. Same icon+title row
+          structure as the cross-link note above. */}
+      <div className="max-w-prose space-y-xs">
+        <div className="flex items-center gap-xs">
+          <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">
+            forum
+          </span>
+          <h3 className="font-label-md font-medium text-on-surface">
+            {t('settings.connections.imSessionsNote.title')}
+          </h3>
+        </div>
+        <p className="text-on-surface-variant/80 font-body-sm">
+          {t('settings.connections.imSessionsNote')}
+        </p>
+      </div>
 
       <EngineConnectionCard
         config={config}

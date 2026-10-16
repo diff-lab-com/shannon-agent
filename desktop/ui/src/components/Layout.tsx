@@ -251,8 +251,12 @@ export function Layout() {
               <>
                 <span className="w-2 h-2 rounded-full bg-tertiary shrink-0" />
                 <span>{intl.formatMessage({ id: 'footer.tokens' }, { count: (usage.input_tokens + usage.output_tokens) })}</span>
-                <span className="text-outline-variant">·</span>
-                <span className="text-primary">{fmtFooterCost(usage.cost_usd)}</span>
+                {usage.cost_usd != null && (
+                  <>
+                    <span className="text-outline-variant">·</span>
+                    <span className="text-primary">{fmtFooterCost(usage.cost_usd)}</span>
+                  </>
+                )}
               </>
             ) : (
               <>

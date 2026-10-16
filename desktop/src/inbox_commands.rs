@@ -742,7 +742,9 @@ pub(crate) fn routine_month_spend(
                 .as_deref()
                 .is_some_and(|s| sessions.contains(s))
         })
-        .map(|record| record.cost_usd)
+        // Unknown-rate records (cost None) are excluded — the gate sums
+        // known spend only, never treats unknown as $0-poisoned or free.
+        .filter_map(|record| record.cost_usd)
         .sum()
 }
 
@@ -1100,8 +1102,11 @@ impl RunSpend {
 /// record then says "no data" instead of a fabricated zero (R2-W2-B Minor:
 /// the engine path used to write `Some(0.0)`/`Some(0)`; the github serve
 /// path already wrote `None`).
-pub(crate) fn fold_attempt_usage(spend: &mut RunSpend, cost_usd: f64, tokens: u64) {
-    spend.cost_usd = Some(spend.cost_usd.unwrap_or(0.0) + cost_usd);
+pub(crate) fn fold_attempt_usage(spend: &mut RunSpend, cost_usd: Option<f64>, tokens: u64) {
+    // Unknown rates (None) fold nothing — the run stays on known spend only.
+    if let Some(cost_usd) = cost_usd {
+        spend.cost_usd = Some(spend.cost_usd.unwrap_or(0.0) + cost_usd);
+    }
     spend.token_usage = Some(spend.token_usage.unwrap_or(0) + tokens);
 }
 
@@ -1134,9 +1139,13 @@ pub(crate) struct RunSpendTracker {
 
 impl RunSpendTracker {
     /// Fold one Usage event into the cumulative totals.
-    pub(crate) fn add_usage(&self, cost_usd: f64, tokens: u64) {
+    pub(crate) fn add_usage(&self, cost_usd: Option<f64>, tokens: u64) {
         let mut totals = self.totals.lock().expect("run spend tracker poisoned");
-        totals.cost_usd = Some(totals.cost_usd.unwrap_or(0.0) + cost_usd);
+        // Unknown rates (None) fold nothing — cumulative spend stays on the
+        // known total instead of booking a fabricated figure.
+        if let Some(cost_usd) = cost_usd {
+            totals.cost_usd = Some(totals.cost_usd.unwrap_or(0.0) + cost_usd);
+        }
         totals.token_usage = Some(totals.token_usage.unwrap_or(0) + tokens);
     }
 
@@ -1600,6 +1609,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                             cost_usd,
                             cache_creation_tokens,
                             cache_read_tokens,
+                            raw_usage,
                             ..
                         } => {
                             fold_attempt_usage(
@@ -1633,6 +1643,7 @@ pub(crate) async fn spawn_routine_run<R: tauri::Runtime>(
                                     cache_creation_tokens,
                                     cache_read_tokens,
                                     cost_usd,
+                                    raw_usage,
                                 },
                                 Some(session_id.to_string()).as_deref(),
                             ));
@@ -3255,7 +3266,7 @@ mod tests {
         );
 
         // The first event flips both totals to Some…
-        fold_attempt_usage(&mut spend, 0.0, 0);
+        fold_attempt_usage(&mut spend, Some(0.0), 0);
         assert_eq!(
             spend,
             RunSpend {
@@ -3266,12 +3277,15 @@ mod tests {
         );
 
         // …and later events accumulate on top.
-        fold_attempt_usage(&mut spend, 0.25, 4_096);
+        fold_attempt_usage(&mut spend, Some(0.25), 4_096);
+        // Unknown rates fold nothing on the cost column, but their known
+        // token counts still land — cost stays on known spend.
+        fold_attempt_usage(&mut spend, None, 1_000);
         assert_eq!(
             spend,
             RunSpend {
                 cost_usd: Some(0.25),
-                token_usage: Some(4_096),
+                token_usage: Some(5_096),
             }
         );
     }
@@ -3282,8 +3296,8 @@ mod tests {
         assert_eq!(tracker.snapshot(), RunSpend::default(), "nothing yet");
         assert!(tracker.session_id().is_none());
 
-        tracker.add_usage(0.01, 100);
-        tracker.add_usage(0.02, 23);
+        tracker.add_usage(Some(0.01), 100);
+        tracker.add_usage(Some(0.02), 23);
         assert_eq!(
             tracker.snapshot(),
             RunSpend {
@@ -3514,8 +3528,9 @@ mod tests {
             output_tokens: 1,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
-            cost_usd: cost,
+            cost_usd: Some(cost),
             session_id: session.map(str::to_string),
+            raw_usage: None,
         }
     }
 

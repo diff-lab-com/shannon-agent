@@ -2362,6 +2362,7 @@ pub async fn send_message(
                         cache_creation_tokens,
                         cache_read_tokens,
                         context_window_tokens,
+                        raw_usage,
                         ..
                     } => {
                         // P1-⑤ telemetry: attribute this usage frame to the
@@ -2372,6 +2373,8 @@ pub async fn send_message(
                         }
                         // Persist to the local usage ledger. Best-effort:
                         // a log write failure must never break the stream.
+                        // cost_usd: None (unknown rate) is recorded as absent
+                        // and excluded from every USD sum downstream.
                         let model_now = usage_model.clone();
                         let provider_now = usage_provider.clone();
                         let _ = usage_store_arc.append(&crate::commands_usage::record_event(
@@ -2383,6 +2386,7 @@ pub async fn send_message(
                                 cache_creation_tokens,
                                 cache_read_tokens,
                                 cost_usd,
+                                raw_usage,
                             },
                             Some(&session_id.to_string()),
                         ));
@@ -2390,6 +2394,8 @@ pub async fn send_message(
                             query_id: qid_str.clone(),
                             input_tokens,
                             output_tokens,
+                            // Verbatim: None (unknown rate) is omitted on
+                            // the wire — the UI hides it (absent = hidden).
                             cost_usd,
                             session_id: Some(session_id_str.clone()),
                             // 02-chat 状态条缓存段: read/(read+input),无输入
@@ -2819,7 +2825,7 @@ pub(crate) fn enforce_mid_turn_usage<R: tauri::Runtime>(
     guard: &mut Option<crate::cost_commands::BudgetTurnGuard>,
     cancel_token: &CancellationToken,
     session_id: &uuid::Uuid,
-    cost_usd: f64,
+    cost_usd: Option<f64>,
 ) {
     let Some(g) = guard.as_mut() else {
         return;
@@ -3094,6 +3100,7 @@ pub async fn start_background_task(
                                 cost_usd,
                                 cache_creation_tokens,
                                 cache_read_tokens,
+                                raw_usage,
                                 ..
                             } => {
                                 // Persist to the local usage ledger. Best-effort: a log
@@ -3110,6 +3117,7 @@ pub async fn start_background_task(
                                         cache_creation_tokens,
                                         cache_read_tokens,
                                         cost_usd,
+                                        raw_usage,
                                     },
                                     None,
                                 ));
@@ -5018,7 +5026,8 @@ mod budget_enforcement_tests {
                     output_tokens: 1,
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
-                    cost_usd: cost,
+                    cost_usd: Some(cost),
+                    raw_usage: None,
                 },
                 Some(&session_id.to_string()),
             ))
@@ -5192,14 +5201,14 @@ mod budget_enforcement_tests {
         assert!(!turn_token.is_cancelled());
 
         // Event 1: 0.6 → spent 1.1 >= cap → exceeded + cancel.
-        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.6);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, Some(0.6));
         assert!(turn_token.is_cancelled(), "cap crossing must cancel");
         assert_eq!(counters.exceeded(), 1);
 
         // Events 2..n: already buffered when the cancel lands — the latch
         // must keep them silent, and the token stays cancelled.
-        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
-        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, 0.1);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, Some(0.1));
+        enforce_mid_turn_usage(&app, &mut guard, &cancel_token_clone, &sid, Some(0.1));
         assert_eq!(counters.exceeded(), 1, "exceeded is latched to one emit");
         assert_eq!(counters.warned(), 0);
         unlisten_all(&app, &counters);
@@ -5219,12 +5228,12 @@ mod budget_enforcement_tests {
 
         // Warning band: 7.0 (70%, quiet) → +1.5 (85%, warn once) → quiet.
         let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(10.0, 0.0));
-        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 7.0);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, Some(7.0));
         assert_eq!(counters.warned(), 0);
         assert!(!cancel.is_cancelled());
-        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 1.5);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, Some(1.5));
         assert_eq!(counters.warned(), 1, "one-shot warning at the 80% line");
-        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 0.5);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, Some(0.5));
         assert_eq!(counters.warned(), 1, "still under the cap: no re-warn");
         assert_eq!(counters.exceeded(), 0);
         assert!(!cancel.is_cancelled(), "under the cap: no cancel");
@@ -5233,8 +5242,8 @@ mod budget_enforcement_tests {
         let jump_counters = count_budget_events(&app, &sid.to_string());
         let jump_cancel = tokio_util::sync::CancellationToken::new();
         let mut guard = Some(crate::cost_commands::BudgetTurnGuard::new(1.0, 0.0));
-        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 2.0);
-        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, 0.5);
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, Some(2.0));
+        enforce_mid_turn_usage(&app, &mut guard, &jump_cancel, &sid, Some(0.5));
         assert_eq!(jump_counters.exceeded(), 1);
         assert_eq!(
             jump_counters.warned(),
@@ -5258,7 +5267,7 @@ mod budget_enforcement_tests {
         let cancel = tokio_util::sync::CancellationToken::new();
 
         let mut guard: Option<crate::cost_commands::BudgetTurnGuard> = None;
-        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, 999.0);
+        enforce_mid_turn_usage(&app, &mut guard, &cancel, &sid, Some(999.0));
         assert_eq!(counters.exceeded(), 0);
         assert_eq!(counters.warned(), 0);
         assert!(!cancel.is_cancelled());

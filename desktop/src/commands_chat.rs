@@ -1317,9 +1317,10 @@ fn persist_memory_bypass(
 //     engine's own `estimate_conversation_tokens()` over the restored
 //     session — the same number `/context` and the usage dialog display;
 //   * pricing   → `CostTracker::calculate_cost` (the `lookup_pricing` chain:
-//     declared providers.toml price > catalog > LiteLLM overlay > default
-//     fallback) — the exact arithmetic that writes `cost_usd` into
-//     `usage.jsonl` and the Usage page.
+//     declared providers.toml price > catalog > LiteLLM overlay; NO fallback
+//     estimate — an unpriced model yields `None` and the estimate is hidden)
+//     — the exact arithmetic that writes `cost_usd` into `usage.jsonl` and
+//     the Usage page.
 // The钉测 below pins the parity: same input → same numbers as calling the
 // shared implementations directly.
 
@@ -1347,9 +1348,14 @@ pub struct SendCostEstimate {
     /// lift `agent_loop` applies).
     pub max_output_tokens: u64,
     /// Input-only floor (0 output tokens) — the low end of the range.
-    pub cost_low: f64,
-    /// Input at the max-output ceiling — the high end of the range.
-    pub cost_high: f64,
+    /// `None` when the model has no known pricing: the UI hides the whole
+    /// range instead of rendering a fabricated figure (absent = hidden).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_low: Option<f64>,
+    /// Input at the max-output ceiling — the high end of the range. `None`
+    /// for an unpriced model, same contract as [`Self::cost_low`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_high: Option<f64>,
     /// This session's budget cap (`null` = uncapped). Drives the UI's
     /// ≥80% warning tint; purely informational.
     pub budget_usd: Option<f64>,
@@ -1726,41 +1732,41 @@ mod tests {
         let input: u64 = 123_456;
         let max_output: u64 = 8_192;
         let est = compose_send_cost_estimate(model, input, max_output, None, 0.0);
-        assert_eq!(
-            est.cost_low,
-            shannon_core::query_engine::CostTracker::calculate_cost(model, input, 0)
-        );
-        assert_eq!(
-            est.cost_high,
+        let cost_high = est.cost_high.expect("catalog model carries pricing");
+        let cost_low = est.cost_low.expect("catalog model carries pricing");
+        let expected_low = shannon_core::query_engine::CostTracker::calculate_cost(model, input, 0)
+            .expect("known-priced model");
+        let expected_high =
             shannon_core::query_engine::CostTracker::calculate_cost(model, input, max_output)
-        );
+                .expect("known-priced model");
+        assert!((cost_low - expected_low).abs() < 1e-9);
+        assert!((cost_high - expected_high).abs() < 1e-9);
         // The range is honest: floor ≤ ceiling, and the ceiling's output term
         // is billed at the SAME pricing chain the ledger writes cost_usd with.
-        assert!(est.cost_low <= est.cost_high);
+        assert!(cost_low <= cost_high);
         let pricing = shannon_core::query_engine::pricing_for_model_opt(model)
             .expect("catalog model carries pricing");
         let expected_high = input as f64 / 1_000_000.0 * pricing.input_price_per_mtok
             + max_output as f64 / 1_000_000.0 * pricing.output_price_per_mtok;
         assert!(
-            (est.cost_high - expected_high).abs() < 1e-9,
+            (cost_high - expected_high).abs() < 1e-9,
             "cost_high drifted from the declared pricing chain"
         );
     }
 
     #[test]
-    fn estimate_unknown_model_falls_back_like_billing() {
-        // A dynamic/custom model with no pricing entry: the ledger bills via
-        // the default fallback — the estimate must land on the same number,
-        // never error out or fabricate a different price.
+    fn estimate_unknown_model_is_hidden_not_fabricated() {
+        // A dynamic/custom model with no pricing entry: NO estimate is
+        // produced — cost_low/cost_high stay None (the frontend hides the
+        // range) instead of landing on a fabricated fallback number.
         let model = "shannon-desktop-no-such-model";
         let est = compose_send_cost_estimate(model, 10_000, 4_096, None, 0.0);
+        assert_eq!(est.cost_low, None);
+        assert_eq!(est.cost_high, None);
+        // Same None the billing chain itself yields — same-source holds.
         assert_eq!(
             est.cost_high,
             shannon_core::query_engine::CostTracker::calculate_cost(model, 10_000, 4_096)
-        );
-        assert!(
-            est.cost_high > 0.0,
-            "fallback pricing still produces a cost"
         );
     }
 

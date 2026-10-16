@@ -514,7 +514,13 @@ export interface ToolFrame {
 export interface UsageFrame {
   input_tokens: number;
   output_tokens: number;
-  cost_usd: number;
+  /**
+   * null/absent = unknown rate (engine pricing lookup missed; honest-pricing
+   * ruling 2026-10-15): the record must never be billed at a guessed rate.
+   * usageBudget already skips non-number values, so unknown-rate records
+   * stay out of the mobile budget sum.
+   */
+  cost_usd?: number | null;
 }
 
 // ── P2-9: agent.state push (gateway → phone, roster live status) ────────────

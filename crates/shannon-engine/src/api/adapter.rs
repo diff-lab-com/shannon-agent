@@ -936,18 +936,23 @@ pub fn normalize_response(
                     "stop" | "STOP" => "end_turn".to_string(),
                     other => other.to_string(),
                 }),
-                usage: resp
-                    .usage
-                    .map(|u| super::types::Usage {
-                        input_tokens: u.prompt_tokens.unwrap_or(0),
-                        output_tokens: u.completion_tokens.unwrap_or(0),
-                        ..Default::default()
-                    })
-                    .unwrap_or(super::types::Usage {
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        ..Default::default()
-                    }),
+                usage: {
+                    // Raw capture: the provider's usage object verbatim, for
+                    // the usage ledger's re-pricing record (honest-record
+                    // contract).
+                    let raw_usage: Option<Value> = serde_json::from_str::<Value>(json_str)
+                        .ok()
+                        .and_then(|v| v.get("usage").cloned())
+                        .filter(|v| v.is_object());
+                    resp.usage
+                        .map(|u| super::types::Usage {
+                            input_tokens: u.prompt_tokens.unwrap_or(0),
+                            output_tokens: u.completion_tokens.unwrap_or(0),
+                            raw: raw_usage,
+                            ..Default::default()
+                        })
+                        .unwrap_or_default()
+                },
             })
         }
         WireFormat::Ollama => {
@@ -1247,6 +1252,13 @@ fn normalize_openai_event(
             .and_then(|d| d.cached_tokens)
             .unwrap_or(0);
         if input > 0 || output > 0 || cached > 0 {
+            // Raw capture: the provider's usage object verbatim, so the usage
+            // ledger can re-price this frame when rates change (honest-record
+            // contract). Bounded cost: this branch runs once per stream.
+            let raw_usage: Option<Value> = serde_json::from_str::<Value>(json_str)
+                .ok()
+                .and_then(|v| v.get("usage").cloned())
+                .filter(|v| v.is_object());
             // Zhipu/GLM coding-plan (and other OpenAI-compatible gateways)
             // pack `finish_reason` AND the real usage into ONE terminal
             // chunk — unlike MiniMax, whose real usage arrives in a separate
@@ -1288,6 +1300,7 @@ fn normalize_openai_event(
                     input_tokens: input,
                     output_tokens: output,
                     cache_read_input_tokens: cached,
+                    raw: raw_usage,
                     ..Default::default()
                 },
             }));

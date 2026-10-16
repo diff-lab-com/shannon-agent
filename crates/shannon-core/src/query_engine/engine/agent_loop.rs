@@ -2507,6 +2507,9 @@ impl QueryEngine {
                                                     cache_creation_tokens,
                                                     cache_read_tokens,
                                                     context_window_tokens,
+                                                    // Verbatim provider usage JSON —
+                                                    // the ledger's re-pricing record.
+                                                    raw_usage: usage.raw.clone(),
                                                 }
                                             );
 
@@ -3857,6 +3860,12 @@ impl QueryEngine {
                                                                     .cache_read_input_tokens
                                                                     as u64,
                                                                 context_window_tokens,
+                                                                // Verbatim provider usage
+                                                                // JSON — the ledger's
+                                                                // re-pricing record.
+                                                                raw_usage: trailing
+                                                                    .raw
+                                                                    .clone(),
                                                             }
                                                         );
                                                         break;

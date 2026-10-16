@@ -1176,7 +1176,7 @@ pub struct ToolDefinition {
 }
 
 /// Usage information from API response
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -1186,6 +1186,43 @@ pub struct Usage {
     /// Tokens read from the prompt cache (Anthropic-specific)
     #[serde(default)]
     pub cache_read_input_tokens: u32,
+    /// Verbatim provider usage payload as received on the wire. The manual
+    /// `Deserialize` below captures the whole usage object before typed field
+    /// extraction, so frames normalized through serde (Anthropic) carry the
+    /// raw JSON and the usage ledger can re-price historic records when rates
+    /// change. `None` when the frame was synthesized in code (no provider
+    /// payload to keep). Never serialized — the ledger mirrors it explicitly.
+    #[serde(skip_serializing)]
+    pub raw: Option<Value>,
+}
+
+/// Typed projection of a usage object. `Usage`'s manual `Deserialize` parses
+/// through this so the raw capture never feeds back into itself.
+#[derive(Deserialize)]
+struct UsageFields {
+    input_tokens: u32,
+    output_tokens: u32,
+    #[serde(default)]
+    cache_creation_input_tokens: u32,
+    #[serde(default)]
+    cache_read_input_tokens: u32,
+}
+
+impl<'de> Deserialize<'de> for Usage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        let fields = UsageFields::deserialize(&raw).map_err(serde::de::Error::custom)?;
+        Ok(Usage {
+            input_tokens: fields.input_tokens,
+            output_tokens: fields.output_tokens,
+            cache_creation_input_tokens: fields.cache_creation_input_tokens,
+            cache_read_input_tokens: fields.cache_read_input_tokens,
+            raw: Some(raw),
+        })
+    }
 }
 
 /// API response (non-streaming)

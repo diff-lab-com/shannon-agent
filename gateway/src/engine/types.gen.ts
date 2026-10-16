@@ -34,7 +34,7 @@ export interface QueryResponse {
 }
 
 export interface UsageInfo {
-  cost_usd: number;
+  cost_usd: number | null;
   input_tokens: number;
   output_tokens: number;
 }
@@ -243,7 +243,7 @@ export interface WsServerMessageToolResult {
 }
 export interface WsServerMessageUsage {
   type: "usage";
-  cost_usd: number;
+  cost_usd?: number | null;
   input_tokens: number;
   output_tokens: number;
 }
