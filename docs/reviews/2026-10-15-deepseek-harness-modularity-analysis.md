@@ -1,7 +1,7 @@
 # DeepSeek Harness（dsh）模块化/插件体系调研 · 与 Shannon 对照分析（2026-10-15）
 
-> **状态:v2(2026-10-17 修订)**,原 v1(2026-10-15 落款系笔误)经对抗性审查(redteam,21 项发现)与方案裁决(D0-D4 按推荐)后原地修订;
-> **修订记录（v1→v2）**：**事实修正 4 处**——`CLIENT_UPGRADE_REQUIRED` 归因改指 `docs/user/guide/providers.md`（C3）、hook 事件变体数 ~32→30（F15）、npm"先发包后建仓"加注（F16）、落款笔误勘误（F17）。**论证重写 1 处**——§4.3 改为预防性叙事：N-4 缺陷已闭环（registry 级超时已默认接线），P0-1 改为"把已在发生的策略上移收编为显式命名契约"（F1）。**建议降级 3 处**——spill 降为前置调研项并入 9/21 复审 R1-5（D1）、ACP 子代理改为定位级假设+最小 spike（D2）、插件治理降 P2 并绑定触发条件（D3）。**精度与分级若干**——全文 A/B/C 证据分级（F2/F20/D4）、TL;DR 措辞与限定（F3/F11）、P0-2 锚定 CC 兼容底座（F4）、write-intent 拆待裁决子项+取消语义风险（F5）、WASM"必然"修正（F6）、P1-1 两轴调和附注（F10）、译文标"(译)"（F12）、config_dump 已核验表述（F13）、"未见直接对应"（F14）、P0-3 双暴露（F18）、P0 三条补 size/验收（F19）、P1-4 补条件面前置（F22）、§8 补 permalink（F21）。文件名保留 2026-10-15 以配对 redteam 文档，成文 2026-10-17。
+> **状态：v2（2026-10-17 修订）**，原 v1（2026-10-15 落款系笔误）经对抗性审查（redteam，21 项发现）与方案裁决（D0-D4 按推荐）后原地修订；
+> **修订记录（v1→v2）**：**事实修正 4 处**——`CLIENT_UPGRADE_REQUIRED` 归因改指 `docs/user/guide/providers.md`（C3）、hook 事件变体数 ~32→30（F15）、npm"先发包后建仓"加注（F16）、落款笔误勘误（F17）。**论证重写 1 处**——§4.3 改为预防性叙事：N-4 缺陷已闭环（registry 级超时已默认接线），P0-1 改为"把已在发生的策略上移收编为显式命名契约"（F1）。**建议降级 3 处**——spill 降为前置调研项并入 9/21 复审 R1.5 工具披露策略（D1）、ACP 子代理改为定位级假设+最小 spike（D2）、插件治理降 P2 并绑定触发条件（D3）。**精度与分级若干**——全文 A/B/C 证据分级（F2/F20/D4）、TL;DR 措辞与限定（F3/F11）、P0-2 锚定 CC 兼容底座（F4）、write-intent 拆待裁决子项+取消语义风险（F5）、WASM"必然"修正（F6）、P1-1 两轴调和附注（F10）、译文标"(译)"（F12）、config_dump 已核验表述（F13）、"未见直接对应"（F14）、P0-3 双暴露（F18）、P0 三条补 size/验收（F19）、P1-4 补条件面前置（F22）、§8 补 permalink（F21）。文件名保留 2026-10-15 以配对 redteam 文档，成文 2026-10-17。
 > **方法**：两路并行——（a）dsh 官方仓库/文档/npm/论文的一手核查；（b）本仓架构全量梳理。关键论断经本地代码逐条抽查（file:line 见文内，v2 已逐条复核）。
 > **配套阅读**：`docs/harness-arch-review-2026-09-21.md`（§4 竞品对标、§5 路线图）。本文不重复该报告的对标结论，专注其未覆盖的维度：**模块化/插件化机制、组合与治理、生态界面**；§7 给出两文建议的显式映射。
 
@@ -181,9 +181,9 @@ dsh 能把**真 Claude Code / 真 Codex** 当子代理（ACP / Agent SDK provide
 | # | 建议 | 落点 | 说明 |
 |---|---|---|---|
 | P1-1 | **agent_loop 阶段化**（吸收管线目标形态，不做"loop 即插件"） | 并入 9/21 复审 R2.1 engine 拆分 | 目标是"命名阶段的宿主"，阶段间以事件/节点通信；不是把 loop 拆成 Cordis 式动态插件。附注（F10）：R2.1 是状态机拆分（相位轴），本条是管线宿主（节点轴），需先一页纸调和再并入，阶段化为第二步。size L（两步走）。验收：一页纸目标形态调和文档 + 阶段化后既有 engine 测试全绿 |
-| P1-2 | **spill**——前置调研项，并入 9/21 复审 R1-5 工具输出策略统一设计；进入实现前须先取痛点证据（eval/场景日志中截断事件与后续失败率统计）（裁决 D1） | bash/exec/web 工具输出面（`system.rs:35,175-176` 现有 2MiB 截断即丢弃；后台任务另有 task store 输出路径 `task_output.rs`） | 价值未证：2MiB 上限远宽于同类（CC ~30k 字符量级），被丢尾多为噪声；成本面（磁盘生命周期/回读定位符/与 tool-result 缓存交互）见 redteam F7。size：调研 S（实现 M，若立项）。验收（调研）：截断事件与后续失败率统计报告，给出立项/放弃结论 |
+| P1-2 | **spill**——前置调研项，并入 9/21 复审 R1.5 工具披露策略统一设计；进入实现前须先取痛点证据（eval/场景日志中截断事件与后续失败率统计）（裁决 D1） | bash/exec/web 工具输出面（`system.rs:35,175-176` 现有 2MiB 截断即丢弃；后台任务另有 task store 输出路径 `task_output.rs`） | 价值未证：2MiB 上限远宽于同类（CC ~30k 字符量级），被丢尾多为噪声；成本面（磁盘生命周期/回读定位符/与 tool-result 缓存交互）见 redteam F7。size：调研 S（实现 M，若立项）。验收（调研）：截断事件与后续失败率统计报告，给出立项/放弃结论 |
 | P1-3 | **子代理 provider 注册表——定位级假设，先做最小 spike（裁决 D2）**：最小 spike = ACP client 骨架（会话/提示/流式结果）+ 真 Claude Code 子代理 round-trip + 凭据隔离方案（provider 自持凭据，Shannon 不透传自身凭据链）；out-of-scope：Codex app-server、teams、并发编排 | `shannon-agents` | 定位级机会（§4.5）；cross-model oracle（9/21 差距 #6）待 spike 通过后顺路评估。size S（spike）。验收：一次端到端委派 |
-| P1-4 | **first-party 工具 manifest 化注册**：注册数据（name/category/risk/default-on）从代码调用剥离为声明表，`register_all_tools` 变为解释器 | `shannon-tools/src/lib.rs:292-636` | 与 R1.5 工具披露收敛（默认核心集+ToolSearch 门控）共用同一张表；为未来 WASM 工具统一语义。**前置=条件面盘点（F22）**：`register_all_tools` ~90 个调用含条件注册与平台门控（remote world 相关 background 工具按 `is_remote` 条件注册，`lib.rs:438-447`；applescript/windows_platform 注册无条件、执行按 OS 门控，`lib.rs:584-601`），声明表必须能表达条件注册，否则静默回归。size M。验收：声明表与现注册面逐项对账零差异（含条件项）+ 注册顺序回归全绿 |
+| P1-4 | **first-party 工具 manifest 化注册**：注册数据（name/category/risk/default-on）从代码调用剥离为声明表，`register_all_tools` 变为解释器 | `shannon-tools/src/lib.rs:292-636` | 与 R1.5 工具披露策略（默认核心集+ToolSearch 门控）共用同一张表；为未来 WASM 工具统一语义。**前置=条件面盘点（F22）**：`register_all_tools` ~90 个调用含条件注册与平台门控（remote world 相关 background 工具按 `is_remote` 条件注册，`lib.rs:438-447`；applescript/windows_platform 注册无条件、执行按 OS 门控，`lib.rs:584-601`），声明表必须能表达条件注册，否则静默回归。size M。验收：声明表与现注册面逐项对账零差异（含条件项）+ 注册顺序回归全绿 |
 
 ### P2 · 观察 / 选配
 
@@ -224,9 +224,9 @@ dsh 能把**真 Claude Code / 真 Codex** 当子代理（ACP / Agent SDK provide
 | P0-2 事件语义表 | R2.3（hooks 事件面扩展） | 前置条件 |
 | P0-3 装配树 dump | 未见直接对应 | 新增；服务多装配点漂移治理 |
 | P1-1 agent_loop 阶段化 | R2.1（engine 拆分） | 两轴调和：R2.1 是状态机拆分（相位轴），本条是管线宿主（节点轴）；先一页纸调和，阶段化为第二步 |
-| P1-2 spill | §3.4 压缩有损关切、R1-5 工具输出策略 | 互补机制；前置调研项，并入 R1-5 统一设计（D1） |
+| P1-2 spill | §3.4 压缩有损关切、R1.5 工具披露策略 | 互补机制；前置调研项，并入 R1.5 统一设计（D1） |
 | P1-3 ACP 子代理 | 差距 #6 cross-model oracle | 实现路径（定位级假设，待 spike 验证） |
-| P1-4 工具 manifest 化 | R1.5 工具披露收敛 | 同一张声明表；前置=条件面盘点（F22） |
+| P1-4 工具 manifest 化 | R1.5 工具披露策略 | 同一张声明表；前置=条件面盘点（F22） |
 | P2-5 插件治理 | 未见直接对应 | 新增；触发条件=社区 index 上架首个第三方插件（D3） |
 | P2-3 评测披露 + tbench | R2.6 Terminal-Bench | 口径惯例 |
 | 不抄清单 #4 沙箱语义 | R2.2 沙箱默认化 | 防倒退护栏 |
@@ -243,7 +243,7 @@ dsh 能把**真 Claude Code / 真 Codex** 当子代理（ACP / Agent SDK provide
 
 **模型/API 一手**：arXiv:2512.02556（V3.2，§4.1 评测口径）<https://arxiv.org/abs/2512.02556>；api-docs.deepseek.com（双协议端点、thinking/reasoning_effort、news260910 V4.1-Flash）<https://api-docs.deepseek.com>
 
-**生态/第三方**（API 计数抓取端点=api.github.com 搜索/topic 页，**2026-10-14 快照**；redteam 2026-10-16 复测：topic 20,058、repo 251,080 star——量级不变，下列数字均为时点值）：awesome-dsh-plugin 18.8k（<https://github.com/search?q=awesome-dsh-plugin&type=repositories>）、anywhere-labs/dsh-desktop 30.9k（<https://github.com/anywhere-labs/dsh-desktop>）、dataelement/dsh-desktop 14.1k（<https://github.com/dataelement/dsh-desktop>）、learn-harness-engineering 19.9k（<https://github.com/search?q=learn-harness-engineering&type=repositories>）、awesome-deepseek-agent 6.2k（<https://github.com/search?q=awesome-deepseek-agent&type=repositories>）、dsh-plugin topic 19,325（<https://github.com/topics/dsh-plugin>）；DeepInfra 评测 <https://deepinfra.com/blog/deepseek-harness-review>（2026-09-09）；团队背景 <https://www.zhihu.com/question/2071331484284220938>（2026-08-13；二手，v1 §8 链接少一位数字，v2 以 §1.1 为准统一）。
+**生态/第三方**（API 计数抓取端点=api.github.com 搜索/topic 页，**2026-10-14 快照**；redteam 2026-10-16 复测：topic 20,058、repo 251,080 star——量级不变，下列数字均为时点值）：awesome-dsh-plugin 18.8k（<https://github.com/search?q=awesome-dsh-plugin&type=repositories>）、anywhere-labs/dsh-desktop 30.9k（<https://github.com/anywhere-labs/dsh-desktop>）、dataelement/dsh-desktop 14.1k（<https://github.com/dataelement/dsh-desktop>）、learn-harness-engineering 19.9k（<https://github.com/search?q=learn-harness-engineering&type=repositories>）、awesome-deepseek-agent 6.2k（<https://github.com/search?q=awesome-deepseek-agent&type=repositories>）、dsh-plugin topic 19,325（<https://github.com/topics/dsh-plugin>）；DeepInfra 评测 <https://deepinfra.com/blog/deepseek-harness-review>（2026-09-09）；团队背景 <https://www.zhihu.com/question/2071331484284220938>（2026-08-13；二手，v1 §8 链接少了几位数字，v2 以 §1.1 为准统一）。
 
 **Shannon 本仓**：`crates/shannon-core/src/query_engine/engine/agent_loop.rs`（5,966 行，头注释）；`crates/shannon-core/src/query_engine/guard_nodes.rs`（787 行）；`crates/shannon-core/src/tools.rs:190-233,307-318,581-582,737-741`；`crates/shannon-tool-interface/src/{lib.rs,sandbox.rs}`；`crates/shannon-tools/src/{lib.rs:259-276,292-636,438-447,584-601,task_output.rs,system.rs:23,126,175-176}`；`crates/shannon-core/src/plugin/{manifest.rs:478,registry.rs:573,ECOSYSTEM.md}`；`crates/shannon-core/src/config_dump.rs`；`crates/shannon-engine/src/{hooks/events.rs:9-70,permissions.rs,api/adapter.rs}`；`crates/shannon-ui/src/repl/mod.rs:321,449`；`crates/shannon-cli/src/commands_config_explain.rs`；`docs/metrics.md`；`docs/harness-arch-review-2026-09-21.md`。
 

@@ -2,7 +2,7 @@
 
 > **Track**: 调研报告修订(纯文档,零代码变更)
 > **Date**: 2026-10-17
-> **Status**: Approved(ericdong 2026-10-17 裁决:D0-D4 均按推荐项执行;执行记录见 task-1 报告)
+> **Status**: Approved(ericdong 2026-10-17 裁决:D0-D4 均按推荐项执行;执行记录见报告 v2 头部修订记录)
 > **输入**: [原报告](../reviews/2026-10-15-deepseek-harness-modularity-analysis.md) + [redteam](../reviews/2026-10-15-deepseek-harness-modularity-analysis-redteam.md)(P0×1、P1×9、P2×8、P3×3,另本方案补遗 F22)
 > **范围**: 仅修订原报告;redteam 文档保持原样作为历史记录;不触发任何代码工作
 > **前提**: 两份文档均未入 git(`??`),**原地修订无历史损失**——这是 D0 推荐项的依据
