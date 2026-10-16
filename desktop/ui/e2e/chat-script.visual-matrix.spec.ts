@@ -1,7 +1,10 @@
 // R5 chat-testing plan §6 — visual state MATRIX for the chat page
-// ("find unknown problems" machine, part 2): 6 conversation states ×
-// light+dark = 12 toHaveScreenshot baselines (maxDiffPixelRatio 0.05, the
-// visual-baseline.spec.ts headroom).
+// ("find unknown problems" machine, part 2): 6 conversation states × the
+// single shipped theme = 6 toHaveScreenshot baselines (maxDiffPixelRatio
+// 0.05, the visual-baseline.spec.ts headroom). H1 theme convergence
+// (2026-10-17 ruling): the light leg (material) walked the dormant themes
+// out — aurora-ink is the only renderable look, so the matrix is dark-only
+// and the six -light baselines were retired with it.
 //
 // State manufacturing reuses the R1/R2 pattern: loadChatScript + the
 // player's UI stop points (`waitFor: 'ui'` in the script, or the
@@ -27,16 +30,17 @@
 // testIgnore; run via playwright.chat-nightly.config.ts. Re-baseline after
 // an intentional visual change:
 //   pnpm exec playwright test e2e/chat-script.visual-matrix.spec.ts --update-snapshots
-//   (then commit the 12 new PNGs — baselines are append/replace-per-file,
+//   (then commit the new PNGs — baselines are append/replace-per-file,
 //   never wholesale-deleted).
 import { expect, test } from '@playwright/test'
 
 import { ChatPage } from './helpers/ChatPage'
 import { expectMockPhase, loadChatScript } from './helpers/scriptLoader'
 
+// H1: aurora-ink is the only user-visible theme (its stored-value migration
+// makes any other id resolve to it), so the matrix is single-theme dark.
 const THEMES = [
-  { mode: 'light', id: 'material' },
-  { mode: 'dark', id: 'tokyo-night' },
+  { mode: 'dark', id: 'aurora-ink' },
 ] as const
 
 const STOP_ANIMATIONS = '*, *::before, *::after { animation: none !important; transition: none !important; caret-color: transparent !important; }'

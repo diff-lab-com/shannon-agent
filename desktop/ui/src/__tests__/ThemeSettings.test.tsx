@@ -41,6 +41,35 @@ describe('ThemeSettings', () => {
     expect(screen.getByRole('heading', { name: 'Theme' })).toBeInTheDocument()
   })
 
+  // H1 theme convergence (2026-10-17 ruling): exactly ONE user-visible
+  // theme — a state card, not a picker. The card keeps the G4a real swatch
+  // and the ✓ current badge, and the muted line under it states the
+  // app-defined contract.
+  it('renders the single Aurora Ink card with swatch + current badge and the app-defined hint', () => {
+    render(wrap(<ThemeSettings />))
+    const card = screen.getByTestId('theme-card-aurora-ink')
+    expect(card).toBeInTheDocument()
+    expect(card).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByTestId('theme-swatch-aurora-ink')).toBeInTheDocument()
+    expect(screen.getByText('Current')).toBeInTheDocument()
+    // No other theme cards exist — the dormant themes stay out of the DOM.
+    expect(screen.getByTestId('theme-card-aurora-ink').parentElement!.children).toHaveLength(1)
+    expect(screen.getByText('The theme is defined centrally by the app.')).toBeInTheDocument()
+  })
+
+  it('the single card is not a picker: clicking never writes a theme or flips data-theme', () => {
+    localStorage.setItem('shannon-theme', 'tokyo-night') // pre-H1 leftover
+    render(wrap(<ThemeSettings />))
+    const card = screen.getByTestId('theme-card-aurora-ink')
+    // A plain div (no button role) — the picker affordance is gone.
+    expect(card.tagName).not.toBe('BUTTON')
+    fireEvent.click(card)
+    // Provider migration + no setTheme caller: aurora-ink both on <html> and
+    // in storage, and the click cannot commit anything else.
+    expect(document.documentElement.getAttribute('data-theme')).toBe('aurora-ink')
+    expect(localStorage.getItem('shannon-theme')).toBe('aurora-ink')
+  })
+
   it('renders active theme section', () => {
     render(wrap(<ThemeSettings />))
     expect(screen.getByText('Active Theme')).toBeInTheDocument()

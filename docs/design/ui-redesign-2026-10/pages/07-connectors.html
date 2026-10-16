@@ -226,13 +226,14 @@
         <!-- 3 Slack —— 按 2026-10-14 裁决回改(D8)+ 2026-10-15 R3 §4「去授权」文案顺笔:市场卡不画认证状态
              (实现 Featured.tsx F-11 诚实契约:后端无 connected/needs-auth API,卡面从不声称 已连接/去认证;
              未安装 OAuth 厂商只画「添加」—— 安装即授权,浏览器 loopback 一键完成),认证动作(重新认证 /
-             去认证)落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
+             去认证)落在已安装管理行,见页尾「已安装 · 管理行」注记。
+             2026-10-17 顺笔收口:顶行「未连接」mute 章撤除(§9「刻意不改」挂账清偿,F-11 同族——
+             市场卡不画任何连接态章,与 GitHub 卡 A4 对齐;装态唯一合法展示 = 卡足「添加」)。 -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-chat"/></svg></div>
             <b>Slack</b>
             <span class="spacer"></span>
-            <span class="st mute">未连接</span>
           </div>
           <p class="desc">频道消息摘要与定时播报</p>
           <div class="foot">
@@ -277,7 +278,9 @@
              (实现已支持 OAuth loopback:Featured.tsx installMcpOAuthLoopback 一键授权,P KCE 全程本机完成)。
              主操作对齐实现词汇(2026-10-15 R3 §4「去授权」文案顺笔):未安装 → 「添加」(安装即授权,
              loopback 回调后已安装 → 「管理」)。市场卡不画实时认证状态开关——认证动作的撤销(去认证)
-             落在已安装管理行,见页尾「已安装 · 管理行」注记。 -->
+             落在已安装管理行,见页尾「已安装 · 管理行」注记。
+             2026-10-17 顺笔收口:卡足「未连接」mute 章撤除(§9「刻意不改」挂账清偿,F-11 同族——
+             市场卡不画任何连接态章;顶行「OAuth」为技术标位非连接态,保留)。 -->
         <div class="card pad catcard">
           <div class="top">
             <div class="ico32 ok"><svg class="ic"><use href="#i-link"/></svg></div>
@@ -289,7 +292,6 @@
           <div class="foot">
             <span class="secured"><svg class="ic"><use href="#i-shield"/></svg>安装时扫描 · 发布者自声明</span>
             <span class="spacer"></span>
-            <span class="st mute">未连接</span>
             <button class="btn sm soft"><svg class="ic"><use href="#i-plus"/></svg>添加</button>
           </div>
         </div>
@@ -358,7 +360,9 @@
       <!-- 已安装 · 管理行 —— 按 2026-10-14 裁决回改(D8):「去认证」从市场卡移到已安装管理区。
            市场卡无实时认证状态(实现 F-11 诚实契约),认证动作落在「已安装」tab / 高级管理 → MCP 服务器 的行内:
            重新认证 = 登录过期时重放 OAuth loopback(McpServers.tsx W3-B 恢复动作);
-           去认证 = 撤销授权、清除本机 keyring 凭据,回到未连接;移除/重启/工具权限等行内操作照旧。 -->
+           去认证 = 撤销授权、清除本机 keyring 凭据,回到未连接;移除/重启/工具权限等行内操作照旧。
+           2026-10-17 顺笔收口:Slack 行状态章「已连接」→「在线」(§9「刻意不改」挂账清偿——该区 app 侧
+           真实存在状态章,措辞逐字对齐 McpServers.tsx statusBadge connected → extensions.mcp.statusOnline)。 -->
       <div style="padding:0 24px 24px">
         <div class="card">
           <div class="row" style="padding:10px 16px;border-bottom:1px solid var(--hair)">
@@ -370,7 +374,7 @@
           <div class="itemrow">
             <div class="ico ok"><svg class="ic"><use href="#i-chat"/></svg></div>
             <div class="body">
-              <div class="h"><span class="t">Slack</span><span class="st ok"><svg class="ic"><use href="#i-check"/></svg>已连接</span><span class="st mute">12 个工具</span></div>
+              <div class="h"><span class="t">Slack</span><span class="st ok"><svg class="ic"><use href="#i-check"/></svg>在线</span><span class="st mute">12 个工具</span></div>
               <div class="src-chain" style="margin-top:4px">OAuth · 凭据存本机 keyring · 上次授权 9-30</div>
             </div>
             <div class="ops">

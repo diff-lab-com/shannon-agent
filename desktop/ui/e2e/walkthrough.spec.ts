@@ -1,7 +1,8 @@
 // Visual walkthrough + full-rules axe audit.
 //
-// Captures a screenshot of every main route (default + a dark theme) and runs
-// a FULL axe rule set per route, writing a markdown report. Also a CI gate
+// Captures a screenshot of every main route under the single shipped theme
+// (H1: aurora-ink) and runs a FULL axe rule set per route, writing a
+// markdown report. Also a CI gate
 // (ci.yml desktop-visual-audit) — the per-test assertion fails the suite when
 // a route introduces a critical/serious violation. Run locally:
 //   VITE_MOCK_MODE=1 pnpm build
@@ -43,28 +44,17 @@ const ROUTES: { path: string; name: string }[] = [
   { path: '/settings/theme', name: 'settings-theme' },
 ]
 
-// Default pair keeps the historical default run (light material + one dark).
-// G7 (UI review 2026-09-29): any subset can be walked per theme via
-//   WALKTHROUGH_THEMES=material,ember,slate,solarized-light,gruvbox-light,...
-// (theme ids; label = id) — used for the light-theme glass legibility sweep.
+// H1 (2026-10-17 ruling): Aurora Ink is the only user-visible theme — the
+// walkthrough walks that single look. The 12 sibling themes stay in
+// theme-source.json as dormant infrastructure (UI-unreachable), so the old
+// light-theme sweep list (WALKTHROUGH_THEMES=material,ember,...) has nothing
+// left to walk; re-importing a theme re-adds its entry here.
 const ALL_THEMES: { id: string; label: string }[] = [
-  { id: 'material', label: 'material' },
   { id: 'aurora-ink', label: 'aurora-ink' },
-  { id: 'tokyo-night', label: 'dark-tokyo-night' },
-  { id: 'tokyo-night-light', label: 'tokyo-night-light' },
-  { id: 'catppuccin', label: 'catppuccin' },
-  { id: 'nord', label: 'nord' },
-  { id: 'ember', label: 'ember' },
-  { id: 'slate', label: 'slate' },
-  { id: 'solarized', label: 'solarized' },
-  { id: 'dracula', label: 'dracula' },
-  { id: 'gruvbox', label: 'gruvbox' },
-  { id: 'solarized-light', label: 'solarized-light' },
-  { id: 'gruvbox-light', label: 'gruvbox-light' },
 ]
 const THEMES = process.env.WALKTHROUGH_THEMES
   ? ALL_THEMES.filter(t => process.env.WALKTHROUGH_THEMES!.split(',').includes(t.id))
-  : ALL_THEMES.slice(0, 2)
+  : ALL_THEMES
 
 const findings: string[] = []
 

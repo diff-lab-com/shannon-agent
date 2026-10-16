@@ -232,6 +232,13 @@
 
 **截图**:本批改动 17 页(§9-1 的 17 页含 07 与 12-settings-security)全部用 `assets/shot.mjs`(1440×900 @2x)重出同名 PNG;未改动页一律不出图。
 
+### 9.1 2026-10-17 顺笔收口(§9「刻意不改」挂账清偿:F-11 同族余量 + 管理行措辞)
+
+1. **A5 · 07 Slack / Claude 远程连接 两张市场卡「未连接」mute 章撤除(F-11 同族收口)**:§9 挂账的第 1 项按同批授权清偿——市场卡不画任何连接态章(实现 Featured.tsx F-11),装态唯一合法展示 = 卡足「添加」;Claude 卡顶行「OAuth」为技术标位非连接态,保留。code-reviewer「已安装」、本地 Ollama「未运行」章仍不在授权(市场卡自绘装态/运行态,另行挂账)。
+2. **A6 · 07「已安装 · 管理行」Slack 行状态章「已连接」→「在线」**:§9 挂账的第 2 项清偿——该区 app 侧真实存在状态章(McpServers.tsx statusBadge:connected → `extensions.mcp.statusOnline`),措辞逐字对齐 shipped 词汇;Notion「登录已过期」行 app 侧同构(statusNeedsAuth 琥珀),不动。
+
+**截图**:07 一页用 `assets/shot.mjs`(1440×900 @2x)重出 `screenshots/07-connectors.png`;其余页无改动不出图。
+
 ---
 
 ## 10. 2026-10-16/17 parity 收敛五批(G0-G4,评审 docs/reviews/2026-10-15-parity-cost-competitor-review.md 裁决落地)
