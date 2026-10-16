@@ -27,6 +27,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 // drift), and the content column narrows max-w-medium → max-w-narrow — the
 // design pane is ~720px, and every pane component (General/Theme/Models)
 // already assumed the 48rem reading width internally.
+// G1-B S6: 48rem → the design's exact 720px content column.
 
 const SECTIONS: Array<{ to: string; labelId: string; icon: string }> = [
   { to: '/settings/general', labelId: 'nav.general', icon: 'tune' },
@@ -86,7 +87,7 @@ export default function Settings() {
         ))}
       </nav>
       <div className="flex-1 overflow-y-auto min-h-0 min-w-0">
-        <div className="max-w-narrow mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
+        <div className="max-w-[720px] mx-auto px-lg py-xl animate-in fade-in duration-(--duration-slower) pb-xl">
           <ErrorBoundary key={location.pathname} pane>
             <Outlet />
           </ErrorBoundary>

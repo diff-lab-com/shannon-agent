@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
+import { Command as CommandPrimitive } from 'cmdk'
 import { useT } from '@/i18n'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
@@ -12,7 +13,6 @@ import {
   CommandDialog,
   CommandEmpty,
   CommandGroup,
-  CommandInput,
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
@@ -175,12 +175,33 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   }, [intl, navigate, sessions, currentSessionId, models, status, tasks, agents, refreshConfig, switchSession, t])
 
   return (
+    // G1-A parity batch (2026-10-15 review §1.2, design 14-palette): the
+    // panel anchors at top 14vh (was the 1/3 vertical center) at the design's
+    // 560px width; the aurora top line stays OFF this surface (the signature
+    // belongs to the composer and main glass panels only).
     <CommandDialog
       open={open}
       onOpenChange={(o) => { if (!o) onClose() }}
       title={t('palette.search.placeholder')}
+      className="top-[14vh] w-[560px] sm:max-w-[560px]"
     >
-      <CommandInput placeholder={t('palette.search.placeholder')} />
+      {/* Flush pin row (design .palette .pin): [search icon] [typed text,
+          14px] … [esc keycap] on ONE line, no boxed input; the hairline below
+          separates it from the list. Typing filters exactly as before — the
+          cmdk Input keeps the whole keyboard contract (uncontrolled, focused
+          on open). */}
+      <div
+        data-testid="palette-input-row"
+        className="flex items-center gap-sm px-md py-[13px] border-b border-outline-variant/20 shrink-0"
+      >
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">search</span>
+        <CommandPrimitive.Input
+          data-testid="palette-input"
+          placeholder={t('palette.search.placeholder')}
+          className="flex-1 min-w-0 bg-transparent border-none outline-none p-0 text-body-sm text-on-surface placeholder:text-muted-foreground"
+        />
+        <span className="kbd shrink-0" aria-hidden="true">esc</span>
+      </div>
       <CommandList>
         <CommandEmpty>{t('palette.noResults')}</CommandEmpty>
         {Object.entries(grouped).map(([category, items]) =>
@@ -208,7 +229,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                   value={`${item.label} ${category} ${(item.synonyms ?? []).join(' ')}`}
                   onSelect={() => { item.action(); onClose() }}
                 >
-                  <span className="material-symbols-outlined icon-md">{item.icon}</span>
+                  <span className="material-symbols-outlined icon-sm text-muted-foreground group-data-[selected=true]/command-item:text-primary">{item.icon}</span>
                   <span className="font-label-md truncate flex-1 min-w-0">{item.label}</span>
                   {item.meta && (
                     <span
@@ -222,22 +243,34 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                       {item.meta}
                     </span>
                   )}
+                  {/* The design row's right-edge enter keycap — visible on the
+                      keyboard-selected row only. */}
+                  <span className="kbd hidden shrink-0 group-data-[selected=true]/command-item:inline-flex" aria-hidden="true">↵</span>
                 </CommandItem>
               ))}
             </CommandGroup>
           ),
         )}
       </CommandList>
-      {/* Aurora 2026-10 (14 页 P2): the design's bottom key-hint bar — the
-          palette.footer.shortcuts copy existed in every locale but was never
-          rendered (dead key). The design's "tab 切组" stays OUT: the
-          implementation has no group-cycling binding, and hint copy must not
-          promise what the keys don't do. */}
+      {/* G1-A parity batch: the design's bottom key-hint bar as keycaps —
+          ↑↓ navigate · ↵ select · esc close, with the
+          muted product signature at the right edge. (The pre-G1-A rendering
+          was plain text via palette.footer.shortcuts; that key is retired.
+          The design mockup also advertises tab 切组 — no group-cycling
+          handler exists, so the cap is NOT rendered: caps only advertise
+          bindings that work.) */}
       <div
         data-testid="palette-footer"
-        className="flex items-center gap-sm px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant shrink-0"
+        className="flex items-center gap-xs px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant shrink-0"
       >
-        {t('palette.footer.shortcuts')}
+        <span className="kbd" aria-hidden="true">↑</span>
+        <span className="kbd" aria-hidden="true">↓</span>
+        <span className="mr-sm">{t('palette.footer.navigate')}</span>
+        <span className="kbd" aria-hidden="true">↵</span>
+        <span className="mr-sm">{t('palette.footer.select')}</span>
+        <span className="kbd" aria-hidden="true">esc</span>
+        <span>{t('palette.footer.close')}</span>
+        <span className="ml-auto font-label-xs text-muted-foreground">{t('app.brandName')}</span>
       </div>
     </CommandDialog>
   )

@@ -418,7 +418,7 @@ export default function Skills() {
                     type="button"
                     onClick={() => setRemoveTarget(skill.name)}
                     disabled={busyId === `uninstall:${skill.name}`}
-                    className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                    className="bg-error-container/40 text-on-error-container hover:bg-error/10/70"
                   >
                     {busyId === `uninstall:${skill.name}` ? "…" : t('extensions.skills.remove')}
                   </Button>
@@ -512,9 +512,11 @@ function SkillCard({
         </p>
       </Button>
       {entry.author && (
-        <div className="text-label-xs text-on-surface-variant mb-xs font-mono">
+        // G1-B: meta reads in the body font — only the version number stays
+        // mono (name/author in mono was the "everything is code" look).
+        <div className="text-label-xs text-on-surface-variant mb-xs">
           {entry.author}
-          {entry.version && <span className="ml-xs">· v{entry.version}</span>}
+          {entry.version && <span className="ml-xs font-mono">· v{entry.version}</span>}
         </div>
       )}
       {feedback && (

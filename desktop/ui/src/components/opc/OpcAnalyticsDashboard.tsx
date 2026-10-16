@@ -176,7 +176,7 @@ export default function OpcAnalyticsDashboard() {
                 <div key={d.date} className="flex-1 flex flex-col items-center gap-xs h-full justify-end">
                   <div className="w-full flex items-end justify-center gap-0.5 h-24">
                     <div
-                      className="w-3 bg-primary/70 rounded-t hover:bg-primary transition-colors"
+                      className="w-3 bg-primary-container rounded-t hover:bg-primary transition-colors"
                       style={{ height: `${Math.max(createdH, d.created > 0 ? 6 : 0)}%` }}
                       title={intl.formatMessage({ id: 'opc.analytics.created' }, { count: d.created })}
                     />
@@ -195,7 +195,7 @@ export default function OpcAnalyticsDashboard() {
           </div>
         )}
         <div className="flex items-center gap-md mt-sm font-label-sm text-label-xs text-on-surface-variant">
-          <span className="flex items-center gap-xs"><span className="w-2 h-2 bg-primary/70 inline-block rounded-sm" /> {t('opc.analytics.createdLegend')}</span>
+          <span className="flex items-center gap-xs"><span className="w-2 h-2 bg-primary-container inline-block rounded-sm" /> {t('opc.analytics.createdLegend')}</span>
           <span className="flex items-center gap-xs"><span className="w-2 h-2 bg-tertiary/70 inline-block rounded-sm" /> {t('opc.analytics.completedLegend')}</span>
         </div>
       </div>
@@ -217,7 +217,7 @@ export default function OpcAnalyticsDashboard() {
                   </span>
                   <div className="flex-1 bg-surface-container-low rounded-full h-2 overflow-hidden">
                     <div
-                      className="h-full bg-primary/60"
+                      className="h-full bg-primary-container"
                       style={{ width: `${metrics.total === 0 ? 0 : (s.count / metrics.total) * 100}%` }}
                     />
                   </div>

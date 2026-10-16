@@ -151,7 +151,7 @@ export default function NlRoutineQuickCreate({ onActivate, onAdjust, onOpenForm 
           type="button"
           onClick={tryParse}
           disabled={!input.trim()}
-          className="px-md py-sm rounded-lg font-label-md text-label-sm hover:bg-primary/90"
+          className="px-md py-sm rounded-lg font-label-md text-label-sm hover:bg-primary/10"
         >
           {t('tasks.nl.parse')}
         </Button>

@@ -88,13 +88,12 @@ export function pathExtension(path: string): string {
  * stay Settings-only (lib/approvalModes).
  */
 
-/** Last path segment, no extension — used by the contextual placeholder so a
- *  repo named "shannon-desktop" reads as "Working in shannon-desktop …". */
-function basename(p: string): string {
-  const trimmed = p.replace(/\\/g, '/').replace(/\/+$/, '')
-  const last = trimmed.split('/').pop() ?? ''
-  return last || trimmed
-}
+/* G1-A parity batch (2026-10-15 review §1.2 chat): the contextual
+ * "Working in {dir}" placeholder (and its basename helper) is retired — the
+ * design's composer carries a plain-text placeholder only, and the working
+ * directory already has its own surface in the ChatStatusBar's directory
+ * segment, so nothing semantic is lost. The session name/dir is NOT re-homed
+ * elsewhere for the composer; it stays in the status bar alone. */
 
 /* Char-count thresholds.
  *   showAt — start showing the live counter
@@ -1280,7 +1279,7 @@ export default function ChatInput({
       {isDragging && (
         // Scrim-style drag veil (遮罩) over the composer while a file drag is
         // in flight — intentional direct backdrop-blur, G1 exempt.
-        <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
+        <div className="absolute inset-0 z-raised flex items-center justify-center bg-primary-container rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
@@ -1324,7 +1323,7 @@ export default function ChatInput({
       )}
 
       {voice.state !== 'idle' && (
-        <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
+        <div className="flex items-center justify-center py-sm bg-primary-container rounded-t-2xl">
           <VoiceOrb state={voice.state} />
         </div>
       )}
@@ -1341,7 +1340,7 @@ export default function ChatInput({
           <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]">folder_off</span>
           <div className="flex-1 min-w-0">
             <div className="font-label-sm">{t('chat.attach.noWorkingDir.banner')}</div>
-            <div className="font-label-xs text-on-warning-container/80 mt-[1px]">
+            <div className="font-label-xs text-warning/80 mt-[1px]">
               {t('chat.attach.reason.noWorkingDir')}
             </div>
           </div>
@@ -1350,7 +1349,7 @@ export default function ChatInput({
             size="sm"
             data-testid="no-working-dir-open-settings"
             onClick={() => navigate('/settings')}
-            className="rounded-sm hover:bg-warning/20 shrink-0"
+            className="rounded-sm hover:bg-warning/10 shrink-0"
           >
             <span className="material-symbols-outlined icon-sm">settings</span>
             {t('chat.attach.noWorkingDir.openSettings')}
@@ -1369,7 +1368,7 @@ export default function ChatInput({
           <span className="material-symbols-outlined icon-sm shrink-0 mt-[2px]">info</span>
           <div className="flex-1 min-w-0">
             <div className="font-label-sm">{t('chat.input.attach.unsupportedType')}</div>
-            <div className="font-label-xs text-on-warning-container/80 mt-[1px]">
+            <div className="font-label-xs text-warning/80 mt-[1px]">
               {t('chat.input.attach.unsupportedHint')}
             </div>
           </div>
@@ -1379,7 +1378,7 @@ export default function ChatInput({
             onClick={() => setUnparsedDismissed(true)}
             aria-label={t('chat.message.attachment.close')}
             title={t('chat.message.attachment.close')}
-            className="rounded-sm hover:bg-warning/20 shrink-0"
+            className="rounded-sm hover:bg-warning/10 shrink-0"
           >
             <span className="material-symbols-outlined icon-sm">close</span>
           </Button>
@@ -1407,19 +1406,18 @@ export default function ChatInput({
           </div>
         )}
 
+        {/* G1-A (2026-10-15 review §1.2 chat): no sparkle icon and no session
+            name in the placeholder row — a plain textarea whose placeholder
+            (queued variant while streaming) reads at the design's composer
+            size/weight: body-sm 14px text, t3-muted placeholder. */}
         <div className="flex items-start px-sm">
-          <span className="material-symbols-outlined p-md text-primary shrink-0">
-            {isQuerying ? 'hourglass_empty' : 'auto_awesome'}
-          </span>
           <textarea
             ref={textareaRef}
-            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-on-surface-variant/70 text-on-surface resize-none min-h-[24px] max-h-[200px]"
+            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-sm py-md px-sm placeholder:text-muted-foreground text-on-surface resize-none min-h-[24px] max-h-[200px]"
             placeholder={
               isQuerying
                 ? t('chat.input.queued.placeholder')
-                : sessionWorkingDir
-                  ? intl.formatMessage({ id: 'chat.input.placeholder.project' }, { dir: basename(sessionWorkingDir) })
-                  : t('chat.input.placeholder.empty')
+                : t('chat.input.placeholder.empty')
             }
             aria-label={t('chat.input.ariaLabel')}
             // P2-3: names the open menu's listbox (absent when both are
@@ -1517,13 +1515,20 @@ export default function ChatInput({
               >
                 <span className="material-symbols-outlined icon-md">add_circle_outline</span>
               </Button>
-              {/* 临时会话激活时的角标(裁决 D4:状态点提示,横幅仍完整说明)。 */}
-              {memoryBypassed && (
-                <span
-                  aria-hidden="true"
-                  className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-secondary"
-                />
-              )}
+              {/* G1-A (2026-10-15 review §1.2 chat): the design's attach-dot —
+                  a 6px aurora-cyan bead on the ⊕'s top-right corner
+                  (shannon-ui.css .attach-dot, --aur). The temporary-chat dot
+                  shares the slot: the bypass state is the more urgent signal,
+                  so it takes the bead over while active (its banner above the
+                  input still spells the full state out). */}
+              <span
+                aria-hidden="true"
+                data-testid={memoryBypassed ? 'composer-bypass-dot' : 'composer-attach-dot'}
+                className={cn(
+                  'absolute right-1 top-1 size-1.5 rounded-full',
+                  memoryBypassed ? 'bg-secondary' : 'bg-[var(--aurora-cyan)]',
+                )}
+              />
               {plusOpen && (
                 <DropdownMenu
                   open
@@ -1549,7 +1554,11 @@ export default function ChatInput({
                 data-testid="approval-mode-pill"
                 aria-label={t('chat.input.mode.label')}
                 title={`${selectedMode.rawLabel ? selectedMode.rawLabel : t(selectedMode.descriptionKey)} · ${t('chat.input.mode.highRiskNote')}`}
-                className={cn('rounded-full border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
+                // G1-A S1 chip geometry (28px / radius 8 / 12px label) from the
+                // .chip utility; the risk-ladder border tone (amber ask /
+                // auto-edit, red full-auto, green plan) is the design's r4 §E.4
+                // ruling and stays. fill stays transparent (quiet chip).
+                className={cn('chip border', selectedMode.tone, 'bg-transparent hover:bg-surface-container-low/50 transition-colors')}
               >
                 <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 {/* Render the matched mode's local label, not the raw value
@@ -1605,17 +1614,20 @@ export default function ChatInput({
               data-testid="usage-chip"
               aria-label={t('chat.input.usage.aria')}
               title={t('chat.input.usage.title')}
+              // G1-A S1 chip geometry; with a resolved window the chip wears
+              // the quiet token chrome (≈ white 7% border / 4% fill on dark),
+              // icon-only stays borderless (the honesty contract is untouched).
               className={cn(
-                'flex items-center gap-[4px] shrink-0 rounded-full border transition-colors px-sm py-[3px]',
+                'chip border',
                 contextPct != null
-                  ? 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50'
-                  : 'border-transparent text-on-surface-variant hover:text-primary',
+                  ? 'border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50'
+                  : 'border-transparent bg-transparent text-on-surface-variant hover:text-primary',
               )}
               onClick={() => setUsageOpen(true)}
             >
               <span className="material-symbols-outlined icon-sm" aria-hidden="true">data_usage</span>
               {contextPct != null && (
-                <span className="font-label-sm text-label-sm tabular-nums">{contextPct}%</span>
+                <span className="tabular-nums">{contextPct}%</span>
               )}
             </Button>
 
@@ -1650,7 +1662,8 @@ export default function ChatInput({
                       { model: currentModel?.name ?? sessionOverride.model },
                     )} ${t('chat.input.model.sessionPinNote')}`
                   : t('chat.input.model.title')}
-                className="max-w-[170px] rounded-full border border-outline-variant/50 bg-transparent hover:bg-surface-container-low/50 transition-colors"
+                // G1-A S1 chip geometry + quiet token chrome.
+                className="chip max-w-[170px] border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container-low/50 transition-colors"
               >
                 <span className="material-symbols-outlined icon-sm">smart_toy</span>
                 {/* Render the effective model NAME — the session override's
@@ -1804,11 +1817,14 @@ export default function ChatInput({
                     data-testid="effort-gauge"
                     aria-label={intl.formatMessage({ id: 'chat.input.effort.gauge.aria' }, { label: currentEffortLabel })}
                     title={t('chat.input.effort.title')}
+                    // G1-A S1 chip geometry. Active (non-standard) wears the
+                    // vio-dim container pair + violet border (the design's
+                    // 激活态紫); the standard default rests dim/quiet.
                     className={cn(
-                      'inline-flex shrink-0 items-center gap-[4px] rounded-full border px-sm py-[3px] font-label-sm transition-colors cursor-pointer',
+                      'chip shrink-0 border transition-colors cursor-pointer',
                       currentEffort !== 'standard'
-                        ? 'border-transparent bg-secondary-container/70 font-bold text-on-secondary-container hover:bg-secondary-container'
-                        : 'border-outline-variant/50 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50',
+                        ? 'border-primary/40 bg-primary-container text-on-primary-container hover:border-primary/60'
+                        : 'border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:text-primary hover:bg-surface-container-low/50',
                     )}
                   >
                     <span className="material-symbols-outlined icon-sm" aria-hidden="true">speed</span>
@@ -1819,7 +1835,10 @@ export default function ChatInput({
                           className={cn(
                             'size-[5px] rounded-full',
                             effortOptions.findIndex(x => x.value === currentEffort) >= effortOptions.findIndex(x => x.value === e.value)
-                              ? currentEffort !== 'standard' ? 'bg-secondary' : 'bg-on-surface-variant/50'
+                              // G1-A: lit dots go VIOLET (--color-primary) on the
+                              // active gauge; the standard default keeps its
+                              // low-contrast dim state.
+                              ? currentEffort !== 'standard' ? 'bg-primary' : 'bg-on-surface-variant/50'
                               : 'bg-on-surface-variant/20',
                           )}
                         />
@@ -1856,7 +1875,7 @@ export default function ChatInput({
                           value={effort.value}
                           data-testid={`effort-gauge-option-${effort.value}`}
                           label={t(effort.descKey)}
-                          className="flex items-center gap-xs rounded-lg px-md py-xs font-label-md cursor-pointer outline-none text-on-surface-variant data-[highlighted]:bg-primary/10 data-[highlighted]:text-on-surface"
+                          className="flex items-center gap-xs rounded-lg px-md py-xs font-label-md cursor-pointer outline-none text-on-surface-variant data-[highlighted]:bg-primary-container data-[highlighted]:text-on-surface"
                         >
                           <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                             {currentEffort === effort.value ? 'radio_button_checked' : 'radio_button_unchecked'}
@@ -1918,7 +1937,7 @@ export default function ChatInput({
                     visual readout now; a static sr-only note about limits
                     replaces the per-key announcements. */}
                 <span
-                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant/70')}
+                  className={cn('font-mono text-label-xs tabular-nums px-xs', isOverSoftWarn ? 'text-error' : 'text-on-surface-variant')}
                 >
                   {charCount.toLocaleString()}
                 </span>
@@ -1936,7 +1955,10 @@ export default function ChatInput({
                   <Button
                     aria-label={t('chat.input.queue.aria')}
                     title={t('chat.input.queue.title')}
-                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-e2 transition-all"
+                    // G1-A: the send-slot CTA geometry (design .send: 32px /
+                    // radius 10 / --vio-deep fill, white glyph; hover lifts to
+                    // the light violet --vio).
+                    className="bg-[var(--vio-deep)] text-white size-8 rounded-[10px] active:scale-95 hover:bg-[var(--vio)] transition-all"
                     onClick={onSend}
                   >
                     <span className="material-symbols-outlined icon-md">low_priority</span>
@@ -1963,7 +1985,7 @@ export default function ChatInput({
                 <Button
                   aria-label={t(cancelInFlight ? 'chat.input.stop.cancelling.aria' : 'chat.input.stop.aria')}
                   title={t(cancelInFlight ? 'chat.input.stop.cancelling.title' : 'chat.input.stop.aria')}
-                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait"
+                  className="bg-error-container text-on-error p-3 rounded-xl active:scale-95 transition-all disabled:opacity-60 disabled:cursor-wait"
                   onClick={onCancelQuery}
                   disabled={cancelInFlight}
                 >
@@ -1975,7 +1997,11 @@ export default function ChatInput({
             ) : (
               <Button
                 aria-label={t('chat.input.send.aria')}
-                className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                // G1-A (2026-10-15 review S4): 32px / radius 10 / solid
+                // --vio-deep with the white arrow (design .send); hover lifts
+                // to the light violet --vio (only a hover color in the design
+                // system). Disabled keeps the base cva's gray fill.
+                className="bg-[var(--vio-deep)] text-white size-8 rounded-[10px] active:scale-95 hover:bg-[var(--vio)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 onClick={onSend}
                 disabled={!value.trim() && attachedFiles.length === 0}
               >

@@ -298,7 +298,7 @@ export default function PermissionsSettings() {
     // underlying values were forwarded verbatim, so the copy must never
     // read as "blocked" (commands_security.rs honesty contract).
     return (
-      <span className={cn(badge, 'border border-solid border-primary/30 bg-primary/5 text-on-surface')} data-testid={testid}>
+      <span className={cn(badge, 'border border-solid border-primary/30 bg-primary-container text-on-surface')} data-testid={testid}>
         <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">verified_user</span>
         <span className="font-semibold">{outboundModeLabel(state.mode)}</span>
         <span className="text-on-surface-variant">
@@ -425,9 +425,9 @@ export default function PermissionsSettings() {
     )
 
   return (
-    <div className="space-y-xl" data-testid="permissions-settings">
+    <div className="space-y-3" data-testid="permissions-settings">
       <div>
-        <h2 className="font-headline-md text-on-surface font-bold">{t('settings.permissions.title')}</h2>
+        <h2 className="text-headline-sm font-bold text-on-surface leading-tight">{t('settings.permissions.title')}</h2>
         <p className="text-body-sm text-on-surface-variant mt-xs">{t('settings.permissions.intro')}</p>
       </div>
 
@@ -457,7 +457,7 @@ export default function PermissionsSettings() {
             <section
               aria-label={t('settings.permissions.scope.filterLabel')}
               data-testid="permissions-scope-panel"
-              className="space-y-sm p-md rounded-xl border border-primary/30 bg-primary/5"
+              className="space-y-sm p-md rounded-xl border border-primary/30 bg-primary-container"
             >
               <div className="flex items-center gap-sm flex-wrap">
                 <h3 className="font-title-sm text-on-surface font-semibold">
@@ -472,7 +472,7 @@ export default function PermissionsSettings() {
                     type="button"
                     aria-label={t('settings.permissions.scope.clear')}
                     title={t('settings.permissions.scope.clear')}
-                    className="ml-xs inline-flex items-center justify-center rounded-full hover:bg-primary/20 cursor-pointer"
+                    className="ml-xs inline-flex items-center justify-center rounded-full hover:bg-primary/10 cursor-pointer"
                     onClick={clearScope}
                   >
                     <span className="material-symbols-outlined icon-sm" aria-hidden="true">
@@ -521,7 +521,7 @@ export default function PermissionsSettings() {
               the execution mode (the composer's approval-mode pill owns
               that). Labels/icons come from the shared approvalModes table. */}
           <section aria-label={t('settings.permissions.builtin.aria')} className="space-y-sm">
-            <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.builtin.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.builtin.title')}</h3>
             <p
               className="text-body-sm text-on-surface-variant flex items-start gap-xs"
               data-testid="permissions-preset-hint"
@@ -547,7 +547,7 @@ export default function PermissionsSettings() {
           {/* Custom profiles */}
           <section aria-label={t('settings.permissions.custom.aria')} className="space-y-sm">
             <div className="flex items-center justify-between">
-              <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.custom.title')}</h3>
+              <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.custom.title')}</h3>
               <Button
                 className="flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary font-label-md"
                 onClick={() => setEditor({ ...EMPTY_EDITOR })}
@@ -656,7 +656,7 @@ export default function PermissionsSettings() {
             data-testid="permissions-outbound-card"
           >
             <div className="flex items-center justify-between gap-sm">
-              <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.outbound.title')}</h3>
+              <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.outbound.title')}</h3>
               <Button
                 variant="ghost"
                 aria-label={t('settings.permissions.outbound.refresh')}
@@ -707,25 +707,33 @@ export default function PermissionsSettings() {
 
           {/* Command sandbox (P1-3) */}
           <section aria-label={t('settings.permissions.sandbox.aria')} className="space-y-sm p-md rounded-xl border border-outline-variant/20 bg-surface-container-low">
-            <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.sandbox.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.sandbox.title')}</h3>
             <p className="text-body-sm text-on-surface-variant">{t('settings.permissions.sandbox.desc')}</p>
-            <div className="flex flex-wrap gap-sm" role="radiogroup" aria-label={t('settings.permissions.sandbox.aria')}>
+            {/* G1-B S1 (设计 `.seg`): container seg — hairline shell +
+                radius-9, selected option is a violet dim chip (was a solid
+                primary pill). */}
+            <div
+              className="inline-flex flex-wrap p-[2px] gap-[2px] rounded-[9px] border border-outline-variant/30 bg-surface-container-low"
+              role="radiogroup"
+              aria-label={t('settings.permissions.sandbox.aria')}
+            >
               {(['off', 'local', 'landlock'] as const).map((mode) => (
-                <Button
+                <button
                   key={mode}
+                  type="button"
                   role="radio"
                   aria-checked={sandboxMode === mode}
-                  className={cn(
-                    'px-md py-sm rounded-lg font-label-md border',
-                    sandboxMode === mode
-                      ? 'bg-primary text-on-primary border-primary'
-                      : 'bg-transparent text-on-surface border-outline-variant/30 hover:bg-surface-container',
-                  )}
                   disabled={sandboxBusy}
                   onClick={() => void handleSandboxMode(mode)}
+                  className={cn(
+                    'h-7 px-3 rounded-[7px] font-label-md text-label-sm transition-colors cursor-pointer disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                    sandboxMode === mode
+                      ? 'bg-primary-container text-on-primary-container font-semibold'
+                      : 'text-on-surface-variant hover:text-on-surface',
+                  )}
                 >
                   {t(`settings.permissions.sandbox.${mode}`)}
-                </Button>
+                </button>
               ))}
             </div>
             <p className="text-label-md text-on-surface-variant flex items-center gap-xs">
@@ -739,7 +747,7 @@ export default function PermissionsSettings() {
 
           {/* Rule syntax guide */}
           <section aria-label={t('settings.permissions.rules.title')} className="space-y-xs">
-            <h3 className="font-title-md text-on-surface font-semibold">{t('settings.permissions.rules.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.rules.title')}</h3>
             <p className="text-body-sm text-on-surface-variant">{t('settings.permissions.rules.intro')}</p>
             <ul className="text-body-sm text-on-surface-variant list-disc pl-lg space-y-xs">
               <li><code className="font-mono">Bash</code> — {t('settings.permissions.rules.bare')}</li>

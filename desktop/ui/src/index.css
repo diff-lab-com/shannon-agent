@@ -148,9 +148,9 @@
   --spacing-xl: 32px;
   --spacing-gutter: 24px;
   --spacing-sidebar-width: 280px;
-  /* U9: single source for the app footer's height; main padding and the
-     chat composer's bottom offset derive from it (was h-8 / bottom-6/12). */
-  --spacing-footer: 32px;
+  /* (U9's --spacing-footer was removed with the Layout footer itself —
+     parity review 2026-10-15 裁决 D: the app has a single status line, the
+     chat page's ChatStatusBar, and no bottom chrome to size.) */
 
   /* Fonts */
   --font-body-md: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
@@ -190,6 +190,14 @@
   --text-label-sm--line-height: 1;
   --text-label-sm--letter-spacing: 0.04em;
   --text-label-sm--font-weight: 500;
+
+  /* Design-spec card-title role (shannon-ui.css: 卡片小节标题 13px/600) —
+     sits deliberately between label-sm and label-md; added with the G1
+     parity batch instead of scattering text-[13px] literals. */
+  --text-label-lg: 13px;
+  --text-label-lg--line-height: 1.35;
+  --text-label-lg--letter-spacing: 0.01em;
+  --text-label-lg--font-weight: 600;
 
   --text-label-md: 14px;
   --text-label-md--line-height: 1;
@@ -332,6 +340,17 @@
   /* (UI review 2026-09-29 T1: the --duration-* overrides + --duration-base
      that used to live in this block were removed — the @theme values above
      are the single source of truth. --duration-base had zero references.) */
+  /* G1-A parity batch (2026-10-15 review, S4 button direction): brand-fixed
+     aurora constants from the design spec (assets/shannon-ui.css --vio-deep
+     and --aur). Deliberately NOT theme tokens — the deep violet is the CTA
+     fill in every theme (#6d5ce8 reads 4.8:1 under white text) and #8b7cf7
+     is only its hover lift; the cyan anchors the composer attach-dot. Same
+     treatment as the aurora signature hues above: identical across all 12
+     themes, declared in the entry stylesheet's :root constants area. */
+  --vio-deep: #6d5ce8;
+  --vio: #8b7cf7;
+  --aurora-mid: #6fa8e8;
+  --aurora-cyan: #56c8dd;
 }
 
 [data-theme-mode="dark"] {
@@ -374,10 +393,12 @@
 /* ── Aurora signature: hairline gradient light (docs/design/ui-redesign-2026-10
    §1 签名) ── The app's ONLY decorative element: a 1px violet→cyan light on
    the TOP EDGE of a glass panel — "the signal leaving this machine for the
-   model". RESTRICTED to four surfaces: the composer, the command palette,
-   the activated card, the mission hero. Do not spread it to ordinary
-   cards/rows. Purely static paint — no animation, so prefers-reduced-motion
-   needs no (and has no) fallback path. */
+   model". RESTRICTED to three surfaces: the composer, the activated card,
+   the mission hero (G1-A parity batch, 2026-10-15 review §1.2: the command
+   palette was carrying this line without design sanction — the mockup gives
+   the signature to the composer and main glass panels only; removed there).
+   Do not spread it to ordinary cards/rows. Purely static paint — no
+   animation, so prefers-reduced-motion needs no (and has no) fallback path. */
 @utility aurora-line {
   position: relative;
   &::before {
@@ -476,6 +497,66 @@
 
   html.reduce-glass & {
     background-image: none;
+  }
+}
+
+/* ── G1-A parity batch (2026-10-15 review §1.1 S1/S3; design
+   assets/shannon-ui.css .chip / .progress / .kbd) ── Shared
+   micro-geometries for the composer control row, meters and key hints.
+   Plain classes in an entry-file @layer utilities block ON PURPOSE, not
+   @utility: they must out-rank the core utilities that leak in from the
+   Button/SelectTrigger base cva (h-7 px-2.5 rounded-lg …), and a block
+   sourced after the tailwindcss import wins that same-specificity tie by
+   authoring order — @utility registration order gives no such guarantee.
+   Colors are NOT baked in: semantic chips keep their token color utilities
+   at the call site (border-warning/50, bg-primary-container …), which any
+   (0,1,0) call-site class applies after these geometry-only declarations. */
+@layer utilities {
+  /* S1 chip geometry: 28px tall, radius 8, 12px label. Border/fill stay
+     call-site token utilities (≈ white 7%/4% on dark themes via
+     border-outline-variant/40 + bg-surface-container/30; the same pair
+     degrades gracefully on light themes). */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  /* S3 aurora fill: the design's progress/meter/underline signature gradient,
+     as a paint-it-yourself background-image (pair with a height, radius and
+     overflow at the call site). Fixed brand hues, same triple as aurora-tab
+     above — identical across all 12 themes. */
+  .aurora-bar {
+    background-image: linear-gradient(90deg, #8b7cf7, #6fa8e8, #56c8dd);
+  }
+
+  /* Keycap (palette pin/footer, nav hints): mono 11px, hairline border with
+     the design's 2px bottom lip, radius 5. Colors are theme tokens so light
+     themes keep the keycap legible (design's white-10% border ≈
+     outline-variant/60 on dark). */
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, var(--color-outline-variant) 60%, transparent);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--color-surface-container) 30%, transparent);
+    /* Full-strength on-surface — a muted/alpha color fails 4.5:1 on light
+       themes once the keycap's translucent bg composites; the active nav
+       row forgoes .kbd entirely (see Sidebar NavRow). */
+    color: var(--color-on-surface);
+    white-space: nowrap;
   }
 }
 

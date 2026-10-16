@@ -121,7 +121,7 @@ export default function OPCTask() {
                       return (
                         <div key={agent.id} className="relative z-raised flex flex-col items-center gap-sm shrink-0">
                           <div className={cn('w-12 h-12 rounded-full flex items-center justify-center shrink-0',
-                            isActive ? 'bg-primary/10' : 'border border-outline-variant bg-surface-container-lowest'
+                            isActive ? 'bg-primary-container' : 'border border-outline-variant bg-surface-container-lowest'
                           )}>
                             {isActive ? (
                               <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-e2">
@@ -258,7 +258,7 @@ export default function OPCTask() {
                         onChange={e => setRevisionNote(e.target.value)}
                       />
                       <Button
-                        className="self-end px-md py-xs rounded-lg bg-primary-container text-on-primary-container font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="self-end px-md py-xs rounded-lg bg-primary-container text-on-primary-container font-label-sm hover:bg-primary/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         disabled={!revisionNote.trim() || responding}
                         onClick={() => {
                           // P0-1: keyed by the pending request's id, awaited
@@ -291,12 +291,12 @@ export default function OPCTask() {
 
               {/* Task Completion Rate */}
               {agents.length > 0 && (
-                <div className="bg-primary/5 rounded-xl p-md border border-primary/10">
+                <div className="bg-primary-container rounded-xl p-md border border-primary/10">
                   <div className="flex items-center justify-between mb-sm">
                     <span className="font-label-sm text-on-surface-variant uppercase tracking-wider">{t('opcTask.taskCompletion')}</span>
                     <span className="font-headline-md text-primary font-bold">{tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0}%</span>
                   </div>
-                  <div className="w-full h-2 bg-primary/10 rounded-full overflow-hidden">
+                  <div className="w-full h-2 bg-primary-container rounded-full overflow-hidden">
                     <div className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-(--duration-slower)" style={{ width: `${tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'completed').length / tasks.length) * 100) : 0}%` }} />
                   </div>
                 </div>

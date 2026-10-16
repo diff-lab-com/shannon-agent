@@ -178,7 +178,7 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     // while non-default.
     const gauge = screen.getByTestId('effort-gauge')
     expect(gauge).toHaveTextContent(/deep/i)
-    expect(gauge.className).toContain('bg-secondary-container')
+    expect(gauge.className).toContain('bg-primary-container')
     // The chip label is the bare model name — `name · Deep` is dead (P2-19).
     expect(screen.getByTestId('model-chip-trigger')).toHaveTextContent('Claude Sonnet 4.6')
     expect(screen.getByTestId('model-chip-trigger').textContent).not.toContain('Deep')
@@ -196,7 +196,7 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     view.rerender(<ChatInput value="" onChange={vi.fn()} onSend={vi.fn()} onExecuteSlash={vi.fn()} attachedFiles={[]} onAttach={vi.fn()} onDetachAll={vi.fn()} isQuerying={false} onCancelQuery={vi.fn()} onOpenQuickFix={vi.fn()} onOpenEditor={vi.fn()} />)
     const resting = screen.getByTestId('effort-gauge')
     expect(resting).toHaveTextContent(/standard/i)
-    expect(resting.className).not.toContain('bg-secondary-container')
+    expect(resting.className).not.toContain('bg-primary-container')
   })
 
   it('normalizes the legacy medium alias to standard (gauge chip rests dim)', () => {
@@ -205,7 +205,7 @@ describe('ChatInput effort sub-tier (S3-5)', () => {
     // No crash; the gauge chip shows the normalized default, unlit.
     const gauge = screen.getByTestId('effort-gauge')
     expect(gauge).toHaveTextContent(/standard/i)
-    expect(gauge.className).not.toContain('bg-secondary-container')
+    expect(gauge.className).not.toContain('bg-primary-container')
     openModelMenu()
     expect(optionByTestId('effort-option-standard')).toHaveTextContent('radio_button_checked')
   })

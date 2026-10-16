@@ -63,13 +63,15 @@ export function useSidebarMode(): [SidebarMode, () => void] {
  * moved onto the row). Every row is zoom-safe by construction: icon shrink-0,
  * label flex-1 min-w-0 truncate, whitespace-nowrap — page zoom (Ctrl+=) can
  * never wrap or collide the row (the old fixed-px rows broke into two lines
- * and shoved the kbd chips out of the rail). Shortcuts live in tooltips. */
+ * and shoved the kbd chips out of the rail). Bound rows surface their
+ * shortcut as a right-aligned kbd chip (G1-B parity: design 02-chat rail);
+ * unbound rows (文件/收件箱) show nothing rather than a dead hint. */
 
 const getNavClass = ({ isActive }: { isActive: boolean }) =>
   cn(
     "flex items-center gap-2.5 px-3 py-sm rounded-xl font-label-md text-label-sm transition-all duration-(--duration-normal) whitespace-nowrap min-w-0",
     isActive
-      ? "text-on-surface bg-primary/10 font-bold"
+      ? "text-on-primary-container bg-primary-container font-bold"
       : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary"
   );
 
@@ -82,7 +84,10 @@ function matchesPathPrefix(pathname: string, prefix: string): boolean {
 
 /** One flat nav row: fixed icon + truncating label + optional trailing slot.
  *  Batch B3: `kbd` surfaces the row's shortcut in the tooltip/aria label
- *  (ZCode 顶部动作区 pattern — shortcuts discoverable in place). */
+ *  (ZCode 顶部动作区 pattern — shortcuts discoverable in place). G1-B: the
+ *  chip is now also rendered right-aligned in the row (design `.nav-item
+ *  .kbd { margin-left: auto }`, shannon-ui.css:156) — only genuinely bound
+ *  rows pass `kbd`, so a chip is always a live binding. */
 function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate, activeMatch }: {
   to: string
   icon: string
@@ -109,13 +114,31 @@ function NavRow({ to, icon, labelId, titleId, kbd, trail, onNavigate, activeMatc
       aria-label={titleId ? `${intl.formatMessage({ id: titleId })}${kbd ? ` · ${kbd}` : ''}` : hint}
       onClick={onNavigate}
     >
-      {({ isActive: navIsActive }) => (
-        <>
-          <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: (isActive ?? navIsActive) ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
-          <span className="flex-1 min-w-0 truncate">{label}</span>
-          {trail}
-        </>
-      )}
+      {({ isActive: navIsActive }) => {
+        const active = isActive ?? navIsActive
+        return (
+          <>
+            <span className="material-symbols-outlined icon-md shrink-0" style={{ fontVariationSettings: active ? "'FILL' 1" : undefined }} aria-hidden="true">{icon}</span>
+            <span className="flex-1 min-w-0 truncate">{label}</span>
+            {kbd && (
+              /* On the active (accent-container) row the keycap's own
+                 translucent surface bg breaks 4.5:1 on light themes (.kbd
+                 outranks call-site bg-* by authoring order), so the active
+                 chip forgoes .kbd and rides the row's own contrast. */
+              <kbd
+                className={cn(
+                  'shrink-0 font-mono text-label-2xs leading-none px-1.5 rounded-[5px] border border-b-2',
+                  active ? 'border-current/40' : 'kbd',
+                )}
+                aria-hidden="true"
+              >
+                {kbd}
+              </kbd>
+            )}
+            {trail}
+          </>
+        )
+      }}
     </NavLink>
   )
 }
@@ -279,7 +302,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         onDoubleClick={resetWidth}
         onKeyDown={handleResizeKey}
       >
-        <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/30 group-focus-visible:bg-primary/30 group-active:bg-primary/50" />
+        <div className="absolute right-0 top-0 bottom-0 w-1 transition-colors group-hover:bg-primary/10 group-focus-visible:bg-primary/10 group-active:bg-primary-container" />
       </div>
       <div className="flex items-center gap-3 mb-xl px-sm min-w-0">
         {/* U8: brand mark `hub` (filled) — a knowledge-graph knot reads as
@@ -308,7 +331,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <Button
           aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
           title={`${intl.formatMessage({ id: 'nav.newChat' })} · ${mod}N`}
-          className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-sm hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
+          className="flex-1 min-w-0 py-2.5 px-3 bg-[var(--vio-deep)] text-white rounded-xl font-bold flex items-center justify-center gap-sm hover:bg-[var(--vio)] hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
           // B1-13 (review P1-8): align with Mod+N — creation must also LAND
           // on /chat. From /settings the old create-only behavior looked
           // like a dead button.
@@ -356,19 +379,21 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
       {/* Batch B4 (ZCode 顶部动作区): 搜索 opens the command palette. The
           sibling 自动化 button was retired by IA 2026-10 — /tasks is a
           first-class nav row below, so the shortcut (⌘2) moved there and the
-          duplicate entry point is gone. */}
-      <div className="mb-xs w-full flex gap-xs">
-        <Button
-          variant="ghost"
-          aria-label={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
-          title={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
-          className="flex-1 min-w-0 py-sm px-sm text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-sm flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
-          onClick={() => window.dispatchEvent(new Event('shannon:toggle-palette'))}
-        >
-          <span className="material-symbols-outlined icon-sm shrink-0">search</span>
-          <span className="truncate">{intl.formatMessage({ id: 'nav.search' })}</span>
-        </Button>
-      </div>
+          duplicate entry point is gone. G1-B parity (design `.searchbox`,
+          shannon-ui.css:131): the bare text row is a box again — subtle fill,
+          hairline border, radius-10, magnifier left + ⌘K kbd chip right. The
+          focus behavior is unchanged: clicking still opens the palette. */}
+      <button
+        type="button"
+        aria-label={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
+        title={`${intl.formatMessage({ id: 'nav.search' })} · ${mod}K`}
+        className="mb-xs w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[10px] bg-surface-container-low/60 border border-outline-variant/30 font-label-md text-label-sm text-on-surface-variant hover:bg-surface-container-low hover:text-on-surface cursor-pointer transition-all min-w-0 text-left"
+        onClick={() => window.dispatchEvent(new Event('shannon:toggle-palette'))}
+      >
+        <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">search</span>
+        <span className="flex-1 min-w-0 truncate">{intl.formatMessage({ id: 'nav.search' })}</span>
+        <kbd className="kbd shrink-0 font-mono" aria-hidden="true">{mod}K</kbd>
+      </button>
 
       {/* U1: the session rail is the app's only session list — organized by
           project folder or by time (the toggle lives inside the rail, ZCode

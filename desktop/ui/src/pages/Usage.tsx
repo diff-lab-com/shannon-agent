@@ -20,7 +20,6 @@ import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
-import StatCard from '@/components/ui/stat-card'
 import { cn } from '@/lib/utils'
 import { useSessions } from '@/context/SessionContext'
 import type { UsageStats, UsageBucket, SessionUsageRow } from '@/types'
@@ -108,8 +107,47 @@ function buildUsageCsv(byDay: UsageBucket[], bySession: SessionUsageRow[]): stri
   return lines.join('\n')
 }
 
-/** Card wrapper for a chart — title + subtitle on top, the SVG below. */
-function ChartCard({
+/** G1-B S5 (design `.stat .v` / `.money`): the Usage KPI band is the page's
+ *  numeric identity, so the value reads mono + tabular-nums. Page-local twin
+ *  of ui/stat-card (shared with Memory/OPC, which stay sans) — same layout,
+ *  mono value only. Keep testids on the outer card like StatCard's rest
+ *  props did. */
+function KpiCard({
+  icon,
+  label,
+  value,
+  hint,
+  testid,
+}: {
+  icon: string
+  label: string
+  value: string
+  hint?: string
+  testid?: string
+}) {
+  return (
+    <div
+      data-testid={testid}
+      className="flex items-center gap-sm px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 h-full"
+    >
+      <span className="material-symbols-outlined text-primary icon-lg">{icon}</span>
+      <div className="min-w-0">
+        <div className="font-headline-sm font-bold text-on-surface leading-none font-mono tabular-nums">{value}</div>
+        <div className="font-label-xs text-on-surface-variant mt-[2px]">{label}</div>
+      </div>
+      {hint && (
+        <span
+          className="ml-auto shrink-0 font-label-xs text-label-xs text-on-surface-variant truncate max-w-[40%] text-right"
+          title={hint}
+        >
+          {hint}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Card wrapper for a chart — title + subtitle on top, the SVG below. */function ChartCard({
   title,
   subtitle,
   icon,
@@ -571,26 +609,26 @@ export default function Usage() {
         </div>
       )}
 
+      {/* G1-B S1 (design `.chip`): the view + range toggles are chips —
+          28px/radius-8 geometry from the shared `.chip`, hairline border on
+          EVERY item via call-site tokens, active = violet dim (design's
+          `.chip.acc`, spelled out inline since the shared class is
+          geometry-only), never the solid primary pill. B6-37 contract
+          unchanged: toggle buttons with aria-pressed, not a tablist. */}
       <div className="flex items-center gap-xs mb-lg flex-wrap">
-        {/* 2026-09: two-mode toggle — Overview (charts) is the default;
-            Audit (tables) sits next to it for precise reconciliation.
-            B6-37: these are toggle buttons (aria-pressed), not a tablist —
-            the two buttons were always independently focusable/clickable and
-            never implemented the tab keyboard pattern (no roving focus, no
-            aria-controls/tabpanels), so the tab roles misannounced them. */}
-        <div className="flex items-center gap-xs mr-md p-xs bg-surface-container-low/60 rounded-full border border-outline-variant/20">
+        <div className="flex items-center gap-xs mr-md">
           <button
             type="button"
             aria-pressed={mode === 'overview'}
             onClick={() => setMode('overview')}
             className={cn(
-              'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+              'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
               mode === 'overview'
-                ? 'bg-primary text-on-primary font-bold'
-                : 'text-on-surface-variant hover:text-primary',
+                ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
             )}
           >
-            <span className="material-symbols-outlined icon-sm align-middle mr-xs" aria-hidden="true">monitoring</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">monitoring</span>
             {t('usage.view.overview')}
           </button>
           <button
@@ -599,32 +637,31 @@ export default function Usage() {
             title={t('usage.view.audit.aria')}
             onClick={() => setMode('audit')}
             className={cn(
-              'px-md py-xs rounded-full font-label-md text-label-md transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+              'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
               mode === 'audit'
-                ? 'bg-primary text-on-primary font-bold'
-                : 'text-on-surface-variant hover:text-primary',
+                ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
             )}
           >
-            <span className="material-symbols-outlined icon-sm align-middle mr-xs" aria-hidden="true">table</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">table</span>
             {t('usage.view.audit')}
           </button>
         </div>
         {RANGES.map((r) => (
-          <Button
+          <button
             key={r}
             type="button"
-            variant="outline"
             onClick={() => setDays(r)}
             aria-pressed={days === r}
             className={cn(
-              'px-md py-xs rounded-full font-label-md text-label-md border transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+              'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
               days === r
-                ? 'bg-primary text-on-primary border-primary font-bold'
-                : 'bg-surface-container-lowest/60 text-on-surface-variant border-outline-variant/30 hover:bg-surface-container-low hover:text-primary',
+                ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
             )}
           >
             {intl.formatMessage({ id: 'usage.range' }, { days: r })}
-          </Button>
+          </button>
         ))}
         {/* M5a (设计 06:158): page-head export action — the current filter
             range's by_day + per-session detail as one CSV via the native
@@ -709,47 +746,47 @@ export default function Usage() {
               fourth design card 上下文峰值 (M4, session-index maximum).
               2×4 grid to match the design's four-across KPI band. */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
-            <StatCard
+            <KpiCard
               icon="token"
               label={t('usage.stat.tokens')}
               value={fmtTokens(intl.locale, stats!.totals.input_tokens + stats!.totals.output_tokens)}
             />
-            <StatCard
+            <KpiCard
               icon="cached"
               label={t('usage.stat.cache')}
               value={fmtTokens(intl.locale, stats!.totals.cache_creation_tokens + stats!.totals.cache_read_tokens)}
               hint={t('usage.stat.cacheHint')}
             />
-            <StatCard
+            <KpiCard
               icon="payments"
               label={t('usage.stat.cost')}
               value={fmtCost(intl.locale, stats!.totals.cost_usd)}
             />
-            <StatCard
+            <KpiCard
               icon="chat_bubble"
               label={t('usage.stat.requests')}
               value={String(stats!.totals.requests)}
             />
-            <StatCard
+            <KpiCard
               icon="today"
               label={t('usage.stat.todayCost')}
               value={fmtCost(intl.locale, todayCostUsd ?? 0)}
               hint={vsYesterdayHint}
-              data-testid="usage-stat-today-cost"
+              testid="usage-stat-today-cost"
             />
-            <StatCard
+            <KpiCard
               icon="speed"
               label={t('usage.stat.cacheHitRate')}
               value={cacheHitRate != null ? `${cacheHitRate.toFixed(1)}%` : '—'}
               hint={cacheHitRate != null ? undefined : t('usage.stat.cacheHitRate.none')}
-              data-testid="usage-stat-cache-hit-rate"
+              testid="usage-stat-cache-hit-rate"
             />
-            <StatCard
+            <KpiCard
               icon="target"
               label={t('usage.stat.contextPeak')}
               value={contextPeak != null ? fmtTokens(intl.locale, contextPeak.tokens) : '—'}
               hint={contextPeakHint}
-              data-testid="usage-stat-context-peak"
+              testid="usage-stat-context-peak"
             />
           </div>
 
@@ -772,10 +809,13 @@ export default function Usage() {
             icon="calendar_month"
             empty={dailyBars.length === 0}
             headerExtra={
+              // G1-B S1 (design `.seg`): a contained segmented control —
+              // subtle fill + hairline border + radius-9 shell, the selected
+              // option is a violet dim chip, not a solid primary pill.
               <div
                 role="group"
                 aria-label={t('usage.chart.mode.aria')}
-                className="flex items-center rounded-full border border-outline-variant/30 overflow-hidden"
+                className="flex items-center gap-0.5 p-0.5 rounded-[9px] border border-outline-variant/30 bg-surface-container-lowest/60"
               >
                 {(['tokens', 'cost'] as const).map(metric => (
                   <button
@@ -784,10 +824,10 @@ export default function Usage() {
                     aria-pressed={chartMetric === metric}
                     onClick={() => setChartMetric(metric)}
                     className={cn(
-                      'px-sm py-xs font-label-sm text-label-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer',
+                      'h-6 px-2.5 rounded-[7px] font-label-sm text-label-sm transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                       chartMetric === metric
-                        ? 'bg-primary text-on-primary font-bold'
-                        : 'bg-surface-container-lowest/60 text-on-surface-variant hover:text-primary',
+                        ? 'bg-primary-container text-on-primary-container font-semibold'
+                        : 'text-on-surface-variant hover:text-on-surface',
                     )}
                   >
                     {t(`usage.chart.mode.${metric}`)}
@@ -800,6 +840,10 @@ export default function Usage() {
               data={chartMetric === 'cost' ? dailyCostBars : dailyBars}
               series={chartMetric === 'cost' ? costSeries : tokenSeries}
               formatValue={(n) => (chartMetric === 'cost' ? fmtCost(intl.locale, n) : fmtTokens(intl.locale, n))}
+              // G1-B S3 (设计 06 柱图): the latest day is the reading the user
+              // came for — it gets the aurora gradient signature while the
+              // history stays dim.
+              highlightLastColumn
             />
           </ChartCard>
 

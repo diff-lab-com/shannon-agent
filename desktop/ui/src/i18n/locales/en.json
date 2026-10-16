@@ -510,8 +510,6 @@
   "settings.notifications.webhook.title": "Webhook Notifications",
   "settings.notifications.webhook.subtitle": "Configure outbound webhook delivery for desktop notifications.",
   "nav.mainNav.aria": "Main navigation",
-  "footer.tokens": "{count, plural, =1 {{count, number} token} other {{count, number} tokens}}",
-  "footer.tasks": "{count, plural, =1 {{count} task} other {{count} tasks}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.openCompanion": "Open Quick Capture window",
   "palette.action.newTask": "Create scheduled task",
@@ -538,7 +536,6 @@
   "palette.category.switchModel": "Switch model",
   "palette.toast.switched": "Switched to {name}",
   "palette.toast.switchFailed": "Failed to switch model",
-  "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
   "tasks.status.completed.label": "Completed",
   "tasks.status.completed.tip": "Task finished successfully",
@@ -3851,7 +3848,6 @@
   "extensions.installed.disabledCtaHint": "Disabled items can be enabled from the {tab} tab",
   "extensions.installed.manage": "Manage",
   "chat.input.placeholder.empty": "Reply to Shannon, or type / for skills and @ to reference files…",
-  "chat.input.placeholder.project": "Working in {dir}",
   "chat.input.overrideFallback.toast": "The pinned model {provider}/{model} is no longer available — this query used the global default instead.",
   "chat.tool.input.expand": "Show full payload",
   "chat.tool.input.collapse": "Collapse",
@@ -4499,5 +4495,8 @@
   "welcome.envDetected.badge": "Local keys detected: {providers}",
   "welcome.privacy.keysLocal": "Keys stay local in ~/.shannon — never sent anywhere.",
   "companion.footer.hint": "Writes to the main window draft only — never auto-sends.",
-  "companion.history.label": "Recent captures"
+  "companion.history.label": "Recent captures",
+  "palette.footer.navigate": "navigate",
+  "palette.footer.select": "select",
+  "palette.footer.close": "close"
 }

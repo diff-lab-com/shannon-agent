@@ -134,7 +134,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
         />
         <Button
           aria-label={t('opc.kanban.createTaskAria')}
-          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
+          className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/10 transition-colors"
           onClick={handleQuickTask}
         >
           <span className="material-symbols-outlined icon-sm">add</span>
@@ -344,7 +344,7 @@ function ActiveCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType
             {task.progress != null ? (
               <div className="h-full bg-primary rounded-full transition-all duration-(--duration-slower)" style={{ width: `${Math.min(100, Math.max(0, task.progress))}%` }} />
             ) : (
-              <div className="h-full w-1/3 bg-primary/60 rounded-full animate-pulse" />
+              <div className="h-full w-1/3 bg-primary-container rounded-full animate-pulse" />
             )}
           </div>
           <div className="flex justify-between items-center">

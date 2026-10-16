@@ -531,7 +531,7 @@ export default function RightDock({
               e.preventDefault()
               setWidth(w => clampWidth(w + (widen ? RESIZE_STEP_PX : -RESIZE_STEP_PX)))
             }}
-            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40 transition-colors z-raised"
+            className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/10 focus-visible:bg-primary-container focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/40 transition-colors z-raised"
           />
           {!hintDismissed && (
             <div
@@ -983,7 +983,7 @@ function CheckpointChips({ checkpoints, onRewind }: {
               title={`${label} · ${t('chat.dock.checkpoint.rewind.aria')}`}
               aria-label={`${t('chat.dock.checkpoint.rewind.aria')}: ${label}`}
               onClick={() => onRewind(cp.turn_index)}
-              className="inline-flex items-center gap-[4px] px-sm py-[2px] rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant hover:text-primary hover:border-primary/40 hover:bg-primary/5 text-label-xs whitespace-nowrap cursor-pointer transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              className="inline-flex items-center gap-[4px] px-sm py-[2px] rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant hover:text-primary hover:border-primary/40 hover:bg-primary/10 text-label-xs whitespace-nowrap cursor-pointer transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             >
               <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">history</span>
               <span className="max-w-40 truncate">{label}</span>

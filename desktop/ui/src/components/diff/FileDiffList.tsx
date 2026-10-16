@@ -162,7 +162,7 @@ export default function FileDiffList({
                     // §3.2): 当前文件高亮从纯底色改为极光线(aurora-line, 上缘
                     // 1px 紫青渐变;「激活卡」允许面, 03 页 tab-on 形态), 保留
                     // 淡底色作辅助。
-                    isActive ? 'aurora-line bg-secondary-container/40 hover:bg-secondary-container/40' : 'hover:bg-surface-container-high'
+                    isActive ? 'aurora-line bg-secondary-container/40 hover:bg-secondary/10/40' : 'hover:bg-surface-container-high'
                   )}
                   aria-label={intl.formatMessage({ id: 'diff.multi.file.aria' }, { path })}
                   aria-current={isActive ? 'true' : undefined}

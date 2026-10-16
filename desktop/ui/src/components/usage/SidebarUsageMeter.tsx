@@ -77,11 +77,14 @@ export default function SidebarUsageMeter({ onNavigate }: { onNavigate?: () => v
           className="block w-full h-1 rounded-full bg-surface-container overflow-hidden"
           aria-hidden="true"
         >
+          {/* G1-B S3 (design `.meter > i`, shannon-ui.css:203): the healthy
+              fill is the aurora gradient signature, not flat primary; the
+              80/100% threshold steps keep their amber/red semantics. */}
           <span
             data-testid="sidebar-usage-meter-fill"
             className={cn(
               'block h-full rounded-full transition-all',
-              overCap ? 'bg-error' : overWarn ? 'bg-warning' : 'bg-primary',
+              overCap ? 'bg-error' : overWarn ? 'bg-warning' : 'aurora-bar',
             )}
             style={{ width: `${Math.min(100, Math.max(0, governance.percent!))}%` }}
           />

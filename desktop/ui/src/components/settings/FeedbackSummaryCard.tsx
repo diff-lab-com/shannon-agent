@@ -27,10 +27,10 @@ export function FeedbackSummaryCard() {
   }, [])
 
   return (
-    <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
+    <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
       <div className="flex items-center gap-md mb-xs">
-        <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>thumb_up</span>
-        <h3 className="font-headline-md text-headline-md">{t('settings.feedback.title')}</h3>
+        <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">thumb_up</span>
+        <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.feedback.title')}</h3>
       </div>
       <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.feedback.help')}</p>
       {rows === null ? (

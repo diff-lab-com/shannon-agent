@@ -1411,7 +1411,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                     'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px]',
                     // E10: a stalled run (repeated no-progress strikes) gets a
                     // red badge so the user can spot it on the rail itself.
-                    (goalRun.stallStrikes ?? 0) > 0 && 'bg-error/15',
+                    (goalRun.stallStrikes ?? 0) > 0 && 'bg-error-container',
                   )}
                 >
                   <span
@@ -1443,7 +1443,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   title={t('sidebar.sessions.queue.title', { n: queueDepth })}
                   className={cn(
                     'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px] whitespace-nowrap',
-                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                    isActive ? 'text-primary' : 'text-secondary',
                   )}
                 >
                   <span className="material-symbols-outlined icon-xs" aria-hidden="true">low_priority</span>
@@ -1464,7 +1464,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   data-testid={`session-context-peak-${session.id}`}
                   className={cn(
                     'flex items-center gap-[2px] shrink-0 rounded-sm px-[3px] whitespace-nowrap',
-                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                    isActive ? 'text-primary' : 'text-secondary',
                   )}
                 >
                   <span className="material-symbols-outlined icon-xs" aria-hidden="true">data_usage</span>
@@ -1484,7 +1484,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                   // text-secondary on the rail surface (≥6.2:1).
                   className={cn(
                     'font-mono text-label-2xs tabular-nums shrink-0',
-                    isActive ? 'text-on-primary-container' : 'text-secondary',
+                    isActive ? 'text-primary' : 'text-secondary',
                   )}
                   aria-hidden="true"
                 >
@@ -1561,7 +1561,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
         </span>
         <span className="truncate flex-1 min-w-0 text-left">{routine.name}</span>
         {soon ? (
-          <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+          <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning-container text-on-warning-container shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
             {t('sidebar.automations.soon')}
           </span>
         ) : when ? (
@@ -1665,7 +1665,7 @@ export function SessionsSection({ sessions, sessionActivity, goalRunsBySession =
                 <span className={cn('material-symbols-outlined icon-xs shrink-0', soon ? 'text-warning' : 'text-on-surface-variant')} aria-hidden="true">schedule</span>
                 <span className="truncate flex-1 min-w-0 text-left">{r.name}</span>
                 {soon && (
-                  <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning/15 text-warning shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
+                  <span className="font-label-xs px-xs py-[1px] rounded-sm bg-warning-container text-on-warning-container shrink-0" role="img" aria-label={t('sidebar.automations.soon')}>
                     {t('sidebar.automations.soon')}
                   </span>
                 )}

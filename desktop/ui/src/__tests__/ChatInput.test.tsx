@@ -485,20 +485,23 @@ describe('ChatInput', () => {
     expect(textarea).not.toBeDisabled()
   })
 
-  it('shows hourglass icon when querying', () => {
-    renderChatInput({ isQuerying: true })
-
-    // Look for hourglass_empty icon text
-    const hourglassIcons = screen.getAllByText('hourglass_empty')
-    expect(hourglassIcons.length).toBeGreaterThan(0)
-  })
-
-  it('shows auto_awesome icon when not querying', () => {
+  it('renders no sparkle/hourglass icon in the placeholder row (G1-A 2026-10-15: plain-text placeholder)', () => {
     renderChatInput({ isQuerying: false })
 
-    // Look for auto_awesome icon text
-    const autoAwesomeIcons = screen.getAllByText('auto_awesome')
-    expect(autoAwesomeIcons.length).toBeGreaterThan(0)
+    // The design's composer carries a bare textarea — the auto_awesome /
+    // hourglass_empty status icons are gone with the "Working in …" session
+    // placeholder (the working dir lives in the ChatStatusBar alone).
+    expect(screen.queryByText('auto_awesome')).not.toBeInTheDocument()
+    expect(screen.queryByText('hourglass_empty')).not.toBeInTheDocument()
+  })
+
+  it('uses the plain-text placeholder (no session dir interpolation) even with a working dir', () => {
+    renderChatInput({ sessionWorkingDir: '/home/alice/code/myproject' })
+
+    // G1-A: the contextual "Working in {dir}" placeholder is retired; the
+    // composer always shows the plain placeholder copy.
+    expect(screen.getByPlaceholderText(/Reply to Shannon/)).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText(/Working in/)).not.toBeInTheDocument()
   })
 
   it('surfaces a toast when plan mode toggle fails (was silently swallowed)', async () => {

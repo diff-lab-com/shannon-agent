@@ -72,7 +72,7 @@ export default function StreamingResponse({
     <div className="relative" role="presentation">
       <div className="flex gap-md max-w-[90%] pt-lg">
         <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-e2">
-          <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
+          <span className="material-symbols-outlined text-primary">smart_toy</span>
         </div>
         <div className="space-y-md flex-1">
           {showThinking && thinkingText && (

@@ -55,18 +55,18 @@ export default function PermissionsPane() {
   }
 
   return (
-    <div className="space-y-lg">
+    <div className="space-y-3">
       {/* 默认执行模式 (design 12-settings-security.html:163-173) — the
           entity card. Segment styling mirrors the retired GeneralSettings
           control (equal flex segments, short label only; the selected mode's
           description moves to a helper line below). */}
       <section
-        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
         data-testid="permissions-execution-mode-card"
       >
         <div className="flex items-center gap-md mb-xs">
           <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>shield</span>
-          <h2 className="font-headline-md text-headline-md">{t('settings.permissions.executionMode.title')}</h2>
+          <h2 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.executionMode.title')}</h2>
           {saving && <Spinner className="text-primary text-body-lg" />}
         </div>
         <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.permissions.executionMode.desc')}</p>

@@ -373,7 +373,7 @@ export default function ScheduleForm({ onSubmit, onCancel, initial }: ScheduleFo
           and have the cron expression filled automatically. Parsing is
           best-effort; unmatched input falls through to the manual fields
           below. */}
-      <div className="flex flex-col gap-xs p-md bg-primary/5 border border-primary/20 rounded-lg">
+      <div className="flex flex-col gap-xs p-md bg-primary-container border border-primary/20 rounded-lg">
         <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.naturalLanguage')}</span>
         <div className="flex gap-xs items-end">
           <input
@@ -389,7 +389,7 @@ export default function ScheduleForm({ onSubmit, onCancel, initial }: ScheduleFo
             type="button"
             onClick={tryParseNl}
             disabled={!nlInput.trim()}
-            className="px-md py-sm rounded-lg font-label-md text-label-sm hover:bg-primary/90"
+            className="px-md py-sm rounded-lg font-label-md text-label-sm hover:bg-primary/10"
           >
             {t('tasks.scheduleForm.parse')}
           </Button>
@@ -444,7 +444,7 @@ export default function ScheduleForm({ onSubmit, onCancel, initial }: ScheduleFo
                 onClick={() => setTriggerType(opt.value)}
                 className={cn('h-auto flex-col items-start gap-xs p-sm rounded-lg text-left whitespace-normal',
                   selected
-                    ? 'border-primary bg-primary/10 text-on-surface hover:bg-primary/10'
+                    ? 'border-primary bg-primary-container text-on-surface hover:bg-primary/10'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
                 )}
               >

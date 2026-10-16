@@ -1,7 +1,7 @@
 // Status filter chips row — toggles between All / Pending / Running / Completed.
 //
 // MD3 tokens. Active chip uses bg-primary-container text-on-primary-container
-// font-bold (G7 2026-09-30: accent-tint chips `bg-primary/10 text-primary`
+// font-bold (G7 2026-09-30: accent-tint chips `bg-primary-container text-on-primary-container`
 // failed AA on the non-default light themes — see check-design-tokens guard).
 
 import { Button } from '@/components/ui/button'

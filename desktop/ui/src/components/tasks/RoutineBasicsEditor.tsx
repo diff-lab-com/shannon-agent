@@ -111,7 +111,7 @@ export default function RoutineBasicsEditor({ routine, onUpdated }: RoutineBasic
   }, [step])
 
   return (
-    <div className="rounded-xl border border-primary/20 bg-primary/5 p-md flex flex-col gap-sm">
+    <div className="rounded-xl border border-primary/20 bg-primary-container p-md flex flex-col gap-sm">
       {step === 'review' ? (
         /* W3-1: the edit path confirms too — this preview is built from the
             same live state Activate submits to update_scheduled_task. */
@@ -212,7 +212,7 @@ export default function RoutineBasicsEditor({ routine, onUpdated }: RoutineBasic
                 onClick={() => setTriggerType(opt.value)}
                 className={cn('h-auto px-sm py-xs rounded-lg gap-xs',
                   selected
-                    ? 'border-primary bg-primary/10 text-on-surface hover:bg-primary/10'
+                    ? 'border-primary bg-primary-container text-on-surface hover:bg-primary/10'
                     : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
                 )}
               >

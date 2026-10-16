@@ -55,11 +55,11 @@ function CommandDialog({
           // Explicit width — never rely on the theme's container scale here
           // (see index.css --container-* note): the palette collapsed to 8px
           // when `sm:max-w-sm` silently lost its variable (2026-09-16).
-          // Aurora-line (裁决 B6): the palette is one of the four sanctioned
-          // "signal leaving" surfaces — the aurora hairline rides its top
-          // edge (index.css @utility; the index.css comment already named
-          // the palette).
-          "w-[36rem] sm:max-w-[36rem] max-w-[calc(100%-2rem)] top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0 aurora-line",
+          // G1-A parity batch (2026-10-15 review §1.2): the aurora hairline
+          // was REMOVED here — the design gives that signature to the
+          // composer and main glass panels only; positioning (14vh) and
+          // width are call-site concerns, passed via className.
+          "w-[36rem] sm:max-w-[36rem] max-w-[calc(100%-2rem)] top-1/3 translate-y-0 overflow-hidden rounded-xl! p-0",
           className
         )}
         showCloseButton={showCloseButton}
@@ -170,15 +170,18 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "group/command-item relative flex cursor-default items-center gap-sm rounded-sm px-sm py-1.5 text-sm outline-hidden select-none in-data-[slot=dialog-content]:rounded-lg! data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-muted data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-foreground",
+        // G1-A parity batch (2026-10-15 review §1.2, palette): rows are
+        // FULL-BLEED — no inset rounded block (design .palette .pi: square
+        // rows, 8px/14px padding). Selection is the design's vio-dim fill —
+        // the primary-container token, which lands within a hair of the
+        // mock's dark violet-dim swatch — with the row's text promoted to
+        // t1; the leading icon turns violet via the data-selected hook.
+        "group/command-item relative flex cursor-default items-center gap-sm px-md py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-primary/10 data-selected:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-selected:*:[svg]:text-primary",
         className
       )}
       {...props}
     >
       {children}
-      <span className="material-symbols-outlined icon-sm ml-auto opacity-0 group-has-data-[slot=command-shortcut]/command-item:hidden group-data-[checked=true]/command-item:opacity-100" aria-hidden="true">
-        check
-      </span>
     </CommandPrimitive.Item>
   )
 }

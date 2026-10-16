@@ -204,7 +204,7 @@ export function MemoryEditor({ initial, onCancel, onSave }: MemoryEditorProps) {
                     setConfirmDiscard(false)
                     onCancel()
                   }}
-                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold hover:bg-error/90"
+                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold hover:bg-error/10"
                 >
                   {t('memory.editor.discard.confirm')}
                 </Button>

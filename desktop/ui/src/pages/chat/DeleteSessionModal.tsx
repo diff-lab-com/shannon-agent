@@ -51,7 +51,7 @@ export default function DeleteSessionModal({ t, target, pending, onCancel, onCon
           {t('chat.delete.cancel')}
         </Button>
         <Button
-          className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 disabled:opacity-60"
+          className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/10 disabled:opacity-60"
           disabled={pending}
           aria-busy={pending || undefined}
           data-testid="delete-session-confirm"

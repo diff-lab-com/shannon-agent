@@ -34,7 +34,9 @@ export function MemoryCard({ entry, onEdit, onDelete, onOpenMemorySource }: Memo
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-sm mb-xs flex-wrap">
-            <span className="text-label-xs px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant font-bold uppercase">
+            {/* G1-B: the category chip wears the semantic four-color pair
+                (constants.CATEGORY_COLOR) instead of the flat grey pill. */}
+            <span className={cn('text-label-xs px-sm py-[2px] rounded-full font-bold uppercase', CATEGORY_COLOR[entry.category])}>
               {t(`memory.category.${entry.category}`)}
             </span>
             <span className="text-label-xs text-on-surface-variant">{entry.project}</span>

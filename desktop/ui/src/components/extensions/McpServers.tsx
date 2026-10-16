@@ -306,7 +306,7 @@ export default function McpServers() {
         <Button
           type="button"
           onClick={() => setDialogOpen(true)}
-          className="px-lg py-sm rounded-xl hover:bg-primary/90 cursor-pointer"
+          className="px-lg py-sm rounded-xl hover:bg-primary/10 cursor-pointer"
         >
           <span className="material-symbols-outlined icon-md">add</span>
           {t("extensions.mcp.addDialog.cta")}
@@ -433,9 +433,11 @@ function InstalledSection({
                 );
               }
               if (srv.connected) {
+                // G1-B S2 (设计 07): Online is the GREEN semantic — the blue
+                // container pill read as "info", not "healthy".
                 return (
                   <span
-                    className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-primary-container text-on-primary-container"
+                    className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-success-container text-on-success-container"
                     title={srv.last_error ?? undefined}
                   >
                     {t("extensions.mcp.statusOnline")}
@@ -506,9 +508,11 @@ function InstalledSection({
                         the server is up, the chip says *what* it offers. */}
                     {statusBadge}
                     {/* Tool count chip — its own element next to the
-                        status pill (was fused into it before W2-A). */}
+                        status pill (was fused into it before W2-A).
+                        G1-B (设计 07): muted grey, not a solid blue pill —
+                        it's metadata, not a status. */}
                     {srv.enabled && srv.connected && (
-                      <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-secondary-container text-on-secondary-container">
+                      <span className="text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 bg-on-surface-variant/10 text-on-surface-variant tabular-nums">
                         {t("extensions.mcp.toolCount", {
                           count: srv.tool_count,
                         })}

@@ -508,8 +508,6 @@
   "settings.notifications.webhook.title": "Webhook 通知",
   "settings.notifications.webhook.subtitle": "デスクトップ通知の送信 Webhook を設定します。",
   "nav.mainNav.aria": "メインナビゲーション",
-  "footer.tokens": "{count, plural, other {{count, number} トークン}}",
-  "footer.tasks": "{count, plural, other {{count} 件のタスク}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.openCompanion": "クイックキャプチャウィンドウを開く",
   "palette.action.newTask": "Create scheduled task",
@@ -536,7 +534,6 @@
   "palette.category.switchModel": "モデルを切り替え",
   "palette.toast.switched": "Switched to {name}",
   "palette.toast.switchFailed": "モデルの切り替えに失敗しました",
-  "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
   "tasks.status.completed.label": "完了",
   "tasks.status.completed.tip": "タスクが正常に完了しました",
@@ -3709,7 +3706,6 @@
   "extensions.installed.disabledCtaHint": "無効化した項目は「{tab}」タブから有効化できます",
   "extensions.installed.manage": "管理",
   "chat.input.placeholder.empty": "Shannon に何でも聞いてください… 例：「このリポジトリを解説して」「src/foo.rs のリファクタリングを計画して」",
-  "chat.input.placeholder.project": "{dir} で作業中",
   "chat.input.overrideFallback.toast": "セッションで固定したモデル {provider}/{model} は利用できなくなったため、このクエリはグローバルデフォルトを使用しました。",
   "chat.tool.input.expand": "ペイロード全体を表示",
   "chat.tool.input.collapse": "折りたたむ",
@@ -4499,5 +4495,8 @@
   "chat.streaming.thought": "Thought",
   "chat.streaming.thoughtSeconds": "Thought for {seconds, plural, one {# second} other {# seconds}}",
   "chat.message.turnMeta.cost": "{cost}",
-  "chat.message.turnMeta.done": "Done"
+  "chat.message.turnMeta.done": "Done",
+  "palette.footer.navigate": "移動",
+  "palette.footer.select": "選択",
+  "palette.footer.close": "閉じる"
 }

@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Outlet, useLocation, useNavigate, NavLink } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { usePendingSkillCandidates } from "@/hooks/usePendingSkillCandidates";
 
@@ -100,6 +99,10 @@ export default function Extensions() {
           </div>
         </div>
         <div className="flex items-center gap-xs flex-wrap min-w-0">
+          {/* G1-B S1 (设计 07): the primary destinations are chips — shared
+              `.chip` geometry + call-site hairline border, active = violet
+              dim; the count badge rides violet dim too instead of a solid
+              primary pill. */}
           <nav aria-label={t('extensions.tabs.aria')} className="flex items-center gap-xs flex-wrap min-w-0">
             {primaryTabs.map(tab => {
               // IA X1: the 待处理 tab's accessible name carries the badge
@@ -111,18 +114,18 @@ export default function Extensions() {
                 to={tab.to}
                 aria-label={badged ? intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount }) : undefined}
                 className={({ isActive }) =>
-                  `flex items-center gap-xs px-md py-xs rounded-xl font-label-md text-label-md transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
+                  `chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-surface ${
                     isActive
-                      ? 'bg-primary-container text-on-primary-container font-bold'
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-low'
+                      ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                      : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface'
                   }`
                 }
               >
                 {({ isActive }) => (
                   <>
                     <span
-                      className="material-symbols-outlined icon-md"
-                      style={{ fontVariationSettings: isActive ? "'FILL' 1" : undefined }}
+                      className="material-symbols-outlined"
+                      style={{ fontSize: 13, fontVariationSettings: isActive ? "'FILL' 1" : undefined }}
                       aria-hidden="true"
                     >
                       {tab.icon}
@@ -132,7 +135,7 @@ export default function Extensions() {
                       <span
                         aria-hidden="true"
                         title={intl.formatMessage({ id: 'extensions.pending.tabBadge.aria' }, { count: pendingCount })}
-                        className="ml-xs px-[7px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary text-on-primary font-label-sm text-label-xs font-bold leading-none"
+                        className="px-[6px] min-w-[18px] h-[18px] inline-flex items-center justify-center rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-xs font-bold tabular-nums leading-none"
                       >
                         {pendingCount}
                       </span>
@@ -146,23 +149,25 @@ export default function Extensions() {
           <span className="relative">
             {/* X4 管理瘦身: the five type-specific managers are labelled
                 「高级管理」 (advanced) — novices work from the three primary
-                tabs + Installed jump chips; power users keep every route. */}
-            <Button
-              variant="ghost"
-              size="sm"
+                tabs + Installed jump chips; power users keep every route.
+                G1-B (设计 07): the trigger stays a quiet ghost/chip — the
+                solid violet pill used to out-shout the primary tabs; while a
+                manager route is active it reads violet dim, never solid. */}
+            <button
+              type="button"
               aria-haspopup="menu"
               aria-expanded={manageOpen}
-              className={`flex items-center gap-xs px-md py-xs rounded-xl font-label-md text-label-md whitespace-nowrap transition-all ${
+              className={`chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 manageActive
-                  ? 'bg-primary-container text-on-primary-container font-bold'
-                  : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-low'
+                  ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                  : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface'
               }`}
               onClick={() => setManageOpen(v => !v)}
             >
-              <span className="material-symbols-outlined icon-md" aria-hidden="true">tune</span>
+              <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">tune</span>
               <span>{t('extensions.manage')}</span>
-              <span className="material-symbols-outlined icon-sm transition-transform" style={{ transform: manageOpen ? 'rotate(180deg)' : undefined }} aria-hidden="true">expand_more</span>
-            </Button>
+              <span className="material-symbols-outlined transition-transform" style={{ fontSize: 12, opacity: 0.6, transform: manageOpen ? 'rotate(180deg)' : undefined }} aria-hidden="true">expand_more</span>
+            </button>
             {manageOpen && (
               <DropdownMenu
                 open

@@ -424,10 +424,20 @@ export default function Tasks() {
 
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
             only shows the two universal tabs; the dev-only surfaces move
-            behind the sidebar Dev-mode toggle. */}
+            behind the sidebar Dev-mode toggle. G1-B (设计 04): tabs carry a
+            count badge where this component actually owns the data (active
+            catalog tasks / routines / background runs); History and
+            Worktrees keep their counts inside their panels, so no badge
+            rather than a fabricated number. */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
           {(mode === 'dev' ? DEV_TABS : SIMPLE_TABS).map(tabId => {
             const selected = tab === tabId
+            // Data-有则显示: a badge only when the count lives at this level.
+            const tabCount =
+              tabId === 'active' ? tasks.length
+              : tabId === 'routines' ? scheduledTasks.length
+              : tabId === 'pipelines' ? backgroundTasks.length
+              : null
             return (
               <Button
                 key={tabId}
@@ -437,7 +447,7 @@ export default function Tasks() {
                 onClick={() => setTab(tabId)}
                 title={t(`tasks.tab.${tabId}.title`)}
                 className={cn(
-                  'h-auto px-md py-sm font-label-md text-label-sm font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none',
+                  'h-auto px-md py-sm font-label-md text-label-sm font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded-none gap-xs',
                   // G7: text-link — selected accent tab must clear AA on every
                   // theme (bare text-primary fails 4.5:1 on light surfaces in
                   // gruvbox-light / solarized-light / solarized).
@@ -449,6 +459,17 @@ export default function Tasks() {
                 )}
               >
                 {t(`tasks.tab.${tabId}`)}
+                {tabCount != null && tabCount > 0 && (
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      'inline-grid place-items-center min-w-[18px] h-[18px] px-1 rounded-full text-label-2xs font-bold tabular-nums',
+                      selected ? 'bg-primary-container text-link' : 'bg-on-surface-variant/10 text-on-surface-variant',
+                    )}
+                  >
+                    {tabCount}
+                  </span>
+                )}
               </Button>
             )
           })}

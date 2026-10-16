@@ -216,7 +216,7 @@ describe('TurnTimeline — reason badges and locale (B4 §7-28)', () => {
     getTraceTimeline.mockResolvedValue(fixtureWithReason('failed'))
     renderAt()
     const badge = await screen.findByText('Failed')
-    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 tint).
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error-container tint).
     expect(badge.className).toContain('bg-error-container')
   })
 
@@ -407,7 +407,7 @@ describe('toolKind (B7 coarse frontend binning)', () => {
     renderAt()
     await screen.findByText('Turn 1')
     const bashBar = screen.getByTitle('Bash · 3.0s')
-    expect(bashBar.className).toContain('bg-error/15')
+    expect(bashBar.className).toContain('bg-error-container')
     const readBar = screen.getByTitle('Read · 6.0s')
     expect(readBar.className).toContain('bg-info/15')
     expect(readBar.className).not.toContain('bg-error')
@@ -500,7 +500,7 @@ describe('TurnTimeline — budget comparison chip (R2 10:176)', () => {
     // USD as "US$1.00", browsers as "$1.00"; anchor on the digits + percent.
     expect(chip.textContent).toMatch(/Budget .*1\.00 · 3\.4% used/)
     // Under budget — no error tone.
-    expect(chip.className).not.toContain('text-error')
+    expect(chip.className).not.toContain('text-on-error-container')
   })
 
   it('takes the error tone once the spend passes 100% of the cap', async () => {
@@ -509,7 +509,7 @@ describe('TurnTimeline — budget comparison chip (R2 10:176)', () => {
     renderAt()
     const chip = await screen.findByTestId('timeline-budget-chip')
     expect(chip).toHaveTextContent('341% used')
-    expect(chip.className).toContain('text-error')
+    expect(chip.className).toContain('text-on-error-container')
   })
 
   it('shows the bare budget chip when no cost was measured', async () => {

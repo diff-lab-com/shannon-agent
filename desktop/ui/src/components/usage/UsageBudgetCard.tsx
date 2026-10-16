@@ -83,7 +83,8 @@ export default function UsageBudgetCard({
       {budgeted ? (
         <>
           <div className="flex items-baseline justify-between gap-md mb-xs min-w-0">
-            <span className="font-body-lg font-bold text-on-surface tabular-nums truncate">
+            {/* G1-B S5 (design `.money`): budget numbers read mono. */}
+            <span className="font-body-lg font-bold text-on-surface tabular-nums font-mono truncate">
               {fmtUsd(intl.locale, governance.monthCostUsd)}
               <span className="font-label-sm font-normal text-on-surface-variant">
                 {' '} / {fmtUsd(intl.locale, governance.budgetUsd!)}
@@ -91,7 +92,7 @@ export default function UsageBudgetCard({
             </span>
             <span
               className={cn(
-                'font-label-md font-bold tabular-nums shrink-0',
+                'font-label-md font-bold tabular-nums font-mono shrink-0',
                 overCap ? 'text-error' : overWarn ? 'text-warning' : 'text-on-surface-variant',
               )}
               data-testid="usage-budget-percent"
@@ -99,7 +100,9 @@ export default function UsageBudgetCard({
               {Math.round(percent)}%
             </span>
           </div>
-          {/* The bar with the 80% warn line marked (Notion threshold style). */}
+          {/* The bar with the 80% warn line marked (Notion threshold style).
+              G1-B S3 (design `.meter > i`): the healthy fill is the aurora
+              gradient signature; the 80/100% steps keep amber/red. */}
           <div
             className="relative w-full h-2 rounded-full bg-surface-container overflow-hidden"
             role="progressbar"
@@ -112,7 +115,7 @@ export default function UsageBudgetCard({
               data-testid="usage-budget-fill"
               className={cn(
                 'h-full rounded-full transition-all',
-                overCap ? 'bg-error' : overWarn ? 'bg-warning' : 'bg-primary',
+                overCap ? 'bg-error' : overWarn ? 'bg-warning' : 'aurora-bar',
               )}
               style={{ width: `${Math.min(100, Math.max(0, percent))}%` }}
             />
@@ -162,7 +165,7 @@ export default function UsageBudgetCard({
           )}
         </label>
         <Button
-          className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-body-sm font-bold hover:bg-primary/90 shadow-e1 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
+          className="px-xl py-md bg-primary text-on-primary rounded-lg font-label-md text-body-sm font-bold hover:bg-primary/10 shadow-e1 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer disabled:opacity-50"
           onClick={() => void save()}
           disabled={saving || invalid}
           aria-label={t('usage.governance.save')}

@@ -2,8 +2,9 @@
 // placeholder interpolation. Guards:
 //  - artifact.kind.* / artifact.fallback.* exist in en + zh-CN (the two
 //    maintained locales; others fall back to en at runtime)
-//  - chat.input.placeholder.project carries the {dir} interpolation instead
-//    of the old broken "正在 —" concatenation
+//  - chat.input.placeholder.project (the {dir} interpolation) STAYS removed —
+//    G1-A 2026-10-15 retired the "Working in {dir}" composer placeholder for
+//    the design's plain-text copy (the working dir lives in ChatStatusBar)
 //  - the removed dead time-bucket keys stay removed
 
 import { describe, expect, it } from 'vitest'
@@ -20,6 +21,8 @@ const DEAD_KEYS = [
   'sidebar.sessions.group.earlier',
   'sidebar.sessions.grouping.time',
   'sidebar.sessions.grouping.session.desc',
+  // G1-A 2026-10-15 (composer placeholder parity): see header comment.
+  'chat.input.placeholder.project',
 ]
 
 const t = (id: string) => {
@@ -32,12 +35,6 @@ describe('artifact label i18n', () => {
     for (const table of [en, zh] as Record<string, string>[]) {
       expect(table[`artifact.kind.${kind}`], kind).toBeTruthy()
       expect(table[`artifact.fallback.${kind}`], kind).toBeTruthy()
-    }
-  })
-
-  it('placeholder.project uses {dir} interpolation in both locales', () => {
-    for (const table of [en, zh] as Record<string, string>[]) {
-      expect(table['chat.input.placeholder.project']).toContain('{dir}')
     }
   })
 

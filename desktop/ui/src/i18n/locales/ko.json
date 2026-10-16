@@ -508,8 +508,6 @@
   "settings.notifications.webhook.title": "웹훅 알림",
   "settings.notifications.webhook.subtitle": "데스크톱 알림의 발신 웹훅 전송을 설정합니다.",
   "nav.mainNav.aria": "기본 탐색",
-  "footer.tokens": "{count, plural, =1 {{count, number} token} other {{count, number} tokens}}",
-  "footer.tasks": "{count, plural, =1 {{count} task} other {{count} tasks}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.openCompanion": "빠른 캡처 창 열기",
   "palette.action.newTask": "Create scheduled task",
@@ -536,7 +534,6 @@
   "palette.category.switchModel": "모델 전환",
   "palette.toast.switched": "Switched to {name}",
   "palette.toast.switchFailed": "Failed to switch model",
-  "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
   "tasks.status.completed.label": "완료",
   "tasks.status.completed.tip": "Task finished successfully",
@@ -3710,7 +3707,6 @@
   "extensions.installed.disabledCtaHint": "비활성화된 항목은 \"{tab}\" 탭에서 활성화할 수 있습니다",
   "extensions.installed.manage": "관리",
   "chat.input.placeholder.empty": "Shannon에게 무엇이든 물어보세요... 예: \"이 저장소 설명해 줘\" 또는 \"src/foo.rs 리팩터링 계획 세워 줘\"",
-  "chat.input.placeholder.project": "{dir}에서 작업 중",
   "chat.input.overrideFallback.toast": "세션에 고정된 모델 {provider}/{model}을(를) 더 이상 사용할 수 없어 이번 쿼리는 전역 기본값으로 대체되었습니다.",
   "chat.tool.input.expand": "전체 페이로드 표시",
   "chat.tool.input.collapse": "접기",
@@ -4499,5 +4495,8 @@
   "chat.streaming.thought": "Thought",
   "chat.streaming.thoughtSeconds": "Thought for {seconds, plural, one {# second} other {# seconds}}",
   "chat.message.turnMeta.cost": "{cost}",
-  "chat.message.turnMeta.done": "Done"
+  "chat.message.turnMeta.done": "Done",
+  "palette.footer.navigate": "이동",
+  "palette.footer.select": "선택",
+  "palette.footer.close": "닫기"
 }

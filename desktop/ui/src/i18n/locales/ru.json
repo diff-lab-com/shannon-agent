@@ -508,8 +508,6 @@
   "settings.notifications.webhook.title": "Уведомления через вебхук",
   "settings.notifications.webhook.subtitle": "Настраивает исходящую доставку уведомлений рабочего стола через вебхук.",
   "nav.mainNav.aria": "Основная навигация",
-  "footer.tokens": "{count, plural, =1 {{count, number} token} other {{count, number} tokens}}",
-  "footer.tasks": "{count, plural, =1 {{count} task} other {{count} tasks}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.openCompanion": "Открыть окно быстрой заметки",
   "palette.action.newTask": "Create scheduled task",
@@ -536,7 +534,6 @@
   "palette.category.switchModel": "Сменить модель",
   "palette.toast.switched": "Switched to {name}",
   "palette.toast.switchFailed": "Failed to switch model",
-  "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
   "tasks.status.completed.label": "Completed",
   "tasks.status.completed.tip": "Task finished successfully",
@@ -3710,7 +3707,6 @@
   "extensions.installed.disabledCtaHint": "Отключённые элементы включаются на вкладке «{tab}»",
   "extensions.installed.manage": "Управлять",
   "chat.input.placeholder.empty": "Спросите Shannon о чём угодно... Например: «Объясни этот репозиторий» или «Составь план рефакторинга src/foo.rs»",
-  "chat.input.placeholder.project": "Работаем в {dir}",
   "chat.input.overrideFallback.toast": "Закреплённая модель {provider}/{model} больше недоступна — этот запрос использовал глобальное значение по умолчанию.",
   "chat.tool.input.expand": "Show full payload",
   "chat.tool.input.collapse": "Collapse",
@@ -4499,5 +4495,8 @@
   "chat.streaming.thought": "Thought",
   "chat.streaming.thoughtSeconds": "Thought for {seconds, plural, one {# second} other {# seconds}}",
   "chat.message.turnMeta.cost": "{cost}",
-  "chat.message.turnMeta.done": "Done"
+  "chat.message.turnMeta.done": "Done",
+  "palette.footer.navigate": "Навигация",
+  "palette.footer.select": "Выбрать",
+  "palette.footer.close": "Закрыть"
 }

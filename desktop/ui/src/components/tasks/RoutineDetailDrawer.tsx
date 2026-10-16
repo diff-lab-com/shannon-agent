@@ -148,7 +148,7 @@ export default function RoutineDetailDrawer({
               data-testid="routine-last-error"
               data-error-flash={errorFlash ? 'true' : undefined}
               className={cn(
-                'rounded-xl border border-error/20 bg-error/10 px-md py-sm transition-shadow',
+                'rounded-xl border border-error/20 bg-error-container px-md py-sm transition-shadow',
                 errorFlash && 'border-error ring-2 ring-error/50',
               )}
             >

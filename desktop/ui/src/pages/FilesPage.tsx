@@ -339,35 +339,36 @@ export default function FilesPage() {
           </div>
         </div>
 
-        {/* 五支筛选 pills (design 11-files.html:163) — counts ride along so
-            each lens shows its own population up front. */}
+        {/* 五支筛选 chips (design 11-files.html:163) — G1-B S1: `.chip`
+            geometry (28px/radius-8/hairline border on EVERY lens, active =
+            violet dim `.chip.acc`), counts ride along so each lens shows its
+            own population up front. */}
         <div role="group" aria-label={t('office.files.title')} className="flex items-center gap-xs flex-wrap">
           {FILTERS.map(({ key, label }) => (
-            <Button
+            <button
               key={key}
-              variant="ghost"
-              size="sm"
+              type="button"
               aria-pressed={filter === key}
               onClick={() => setFilter(key)}
               className={cn(
-                'rounded-full font-label-sm gap-xs',
+                'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                 filter === key
-                  ? 'bg-primary-container text-on-primary-container'
-                  : 'text-on-surface-variant hover:text-primary hover:bg-surface-container',
+                  ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                  : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
               )}
             >
               {key === 'favorites' && (
                 <span
-                  className="material-symbols-outlined icon-sm"
-                  style={filter === 'favorites' ? { fontVariationSettings: "'FILL' 1" } : undefined}
+                  className="material-symbols-outlined"
+                  style={{ fontSize: 13, fontVariationSettings: filter === 'favorites' ? "'FILL' 1" : undefined }}
                   aria-hidden="true"
                 >
                   star
                 </span>
               )}
               {label}
-              <span className="tabular-nums opacity-70">{counts[key]}</span>
-            </Button>
+              <span className="font-mono tabular-nums opacity-70">{counts[key]}</span>
+            </button>
           ))}
         </div>
 

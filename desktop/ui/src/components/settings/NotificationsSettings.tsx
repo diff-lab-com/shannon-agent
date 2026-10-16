@@ -295,9 +295,9 @@ function WebhookSection({ onSaved }: { onSaved?: () => void } = {}) {
   const presetMeta = PRESET_META[preset]
 
   return (
-    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-e1 border border-outline-variant/30 space-y-md">
+    <div className="bg-surface-container-lowest p-4 rounded-xl shadow-e1 border border-outline-variant/30 space-y-md">
       <div>
-        <h4 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h4>
+        <h4 className="text-label-lg font-semibold text-on-surface">{t('settings.notifications.webhook.title')}</h4>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
       </div>
 
@@ -585,7 +585,7 @@ function DndSection({ onSaved }: { onSaved?: () => void } = {}) {
   }
 
   return (
-    <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-lg space-y-md">
+    <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-4 space-y-3">
       <div className="flex items-center justify-between gap-md">
         <div>
           <div className="font-label-md text-body-sm text-on-surface font-semibold mb-xs">
@@ -799,7 +799,7 @@ export default function NotificationsSettings() {
             </span>
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="font-headline-sm text-on-surface mb-xs">
+            <h3 className="text-label-lg font-semibold text-on-surface mb-xs">
               {t('settings.notifications.empty.title')}
             </h3>
             <p className="text-on-surface-variant font-body-sm mb-md max-w-prose">

@@ -176,7 +176,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 >
                   <div className="flex items-center justify-between mb-sm">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <div className="w-10 h-10 rounded-lg bg-primary-container flex items-center justify-center">
                         <span className="material-symbols-outlined icon-md text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
                       </div>
                       <div>

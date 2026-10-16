@@ -177,7 +177,7 @@ export function ProvidersSection({
           <p className="text-body-sm text-on-surface-variant">{t('settings.models.providers.subtitle')}</p>
         </div>
         <Button
-          className="px-md py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
+          className="px-md py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/10 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
           onClick={() => { setEditing(null); setModalOpen(true) }}
         >
           <span className="material-symbols-outlined icon-md">add</span>
