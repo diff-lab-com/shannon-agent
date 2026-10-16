@@ -5,8 +5,9 @@
 // FileCard mounts). This page lists that index newest-first with:
 //   * favorite star toggle (persisted via set_file_index_favorite),
 //   * missing detection via the existing path_exists probe (moved/deleted
-//     cells grey out with the office.files.missing badge — the index keeps
-//     the reference, it does not pretend the file is still there),
+//     cells carry the amber dashed lost form with the office.files.missing
+//     badge — the index keeps the reference, it does not pretend the file
+//     is still there),
 //   * open / reveal actions reusing FileCard's OS wrappers,
 //   * the five design lenses (design 11-files.html): 全部 / 附件 /
 //     Agent 产出 / 收藏 / 已丢失 — source tags and the missing probe are
@@ -399,10 +400,21 @@ export default function FilesPage() {
                     title={entry.path}
                     className={cn(
                       'relative flex flex-col gap-xs rounded-xl border p-sm transition-colors cursor-pointer',
+                      // R3 §4.1 (design 11:189 整卡琥珀虚线): a lost file's
+                      // identity sits on the WHOLE card — dashed amber border
+                      // (border-warning/50 border-dashed, the design's
+                      // rgba(245,184,61,.5) dashed outline) instead of the
+                      // old grey+opacity dimming, so the content stays
+                      // readable. Selection re-tints the same dashed outline
+                      // (warning/70 + warning container) rather than
+                      // replacing it with the primary form.
                       isSelected
-                        ? 'border-primary/60 bg-primary-container/25'
-                        : 'border-outline-variant/20 bg-surface-container-low hover:bg-surface-container hover:border-primary/30',
-                      isMissing && 'opacity-50',
+                        ? isMissing
+                          ? 'border-warning/70 border-dashed bg-warning-container/25'
+                          : 'border-primary/60 bg-primary-container/25'
+                        : isMissing
+                          ? 'border-warning/50 border-dashed bg-surface-container-low hover:bg-surface-container'
+                          : 'border-outline-variant/20 bg-surface-container-low hover:bg-surface-container hover:border-primary/30',
                     )}
                   >
                     {/* Favorite star — top-right corner of the cell. Kept in
@@ -437,8 +449,16 @@ export default function FilesPage() {
                       onClick={() => toggleSelection(entry)}
                       className="flex flex-col gap-xs text-left bg-transparent border-0 p-0 cursor-pointer rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                     >
-                      {/* Thumb: file-type glyph, language-neutral. */}
-                      <span className="material-symbols-outlined icon-2xl text-on-surface-variant" aria-hidden="true">
+                      {/* Thumb: file-type glyph, language-neutral. A lost
+                          file tints it amber (design 11:190 color:var(--warn)),
+                          matching the card's dashed amber identity. */}
+                      <span
+                        className={cn(
+                          'material-symbols-outlined icon-2xl',
+                          isMissing ? 'text-warning' : 'text-on-surface-variant',
+                        )}
+                        aria-hidden="true"
+                      >
                         {fileTypeIcon(entry.name)}
                       </span>
                       <span className="block font-label-sm text-on-surface truncate pr-lg">{entry.name}</span>
