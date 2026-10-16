@@ -76,12 +76,14 @@ pub use agent_loader::{
     discover_agent_directories, load_agents_from_directory, parse_agent_definition,
 };
 pub use bundled::{BundledSkillBuilder, BundledSkills, init_bundled_skills};
-pub use definition::{Skill, SkillContext, SkillId, SkillPermissions, SkillResult, SkillSource};
+pub use definition::{
+    Skill, SkillContext, SkillId, SkillMetadata, SkillPermissions, SkillResult, SkillSource,
+};
 pub use discovery::SkillDiscovery;
 pub use error::{SkillError, SkillResult as Result};
 pub use executor::{HookEmitter, NoopHookEmitter, SkillExecutor};
 pub use frontmatter::ParsedSkill;
-pub use registry::SkillRegistry;
+pub use registry::{SkillBudgetReport, SkillRegistry};
 pub use template::SkillTemplate;
 pub use watcher::SkillWatcher;
 

@@ -1,6 +1,7 @@
 //! Core skill definition and types
 
 use crate::frontmatter::{ArgumentConfig, EffortLevel, ExecutionContext, HooksConfig};
+use serde::Serialize;
 use shannon_types::Timestamp;
 use std::path::PathBuf;
 
@@ -12,7 +13,7 @@ pub type SkillId = String;
 /// Contains only the information extracted from YAML frontmatter, without
 /// the potentially large markdown body. Used for LLM context injection and
 /// skill listing where the full content is not needed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SkillMetadata {
     /// Unique identifier
     pub id: SkillId,
@@ -105,7 +106,7 @@ impl From<Skill> for SkillFull {
 }
 
 /// Where a skill was loaded from
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum SkillSource {
     /// Bundled with the application
     Bundled,

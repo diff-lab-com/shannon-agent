@@ -38,6 +38,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
 pub mod api_services;
+pub mod assembly_dump;
 pub mod attachments;
 pub mod away_summary;
 pub mod bridge_service;

@@ -191,6 +191,11 @@ pub struct ShannonApiServer {
     /// `POST /api/routines/:id/trigger` handler with its own state.
     /// They sit under the same auth/CORS middleware as the core routes.
     extra_routes: Vec<axum::Router<()>>,
+    /// P0-3: optional sources for `GET /api/assembly` beyond the tool
+    /// registry the server always holds. `None` (the default) degrades
+    /// hooks/skills/compaction/sandbox to `"unavailable"` in the response —
+    /// never an error. See [`AssemblySources`].
+    assembly_sources: Option<Arc<crate::assembly_dump::AssemblySources>>,
     /// Wall-clock budget for the aggregate `POST /api/query` handler
     /// (review §P2-2).
     query_budget: std::time::Duration,
@@ -232,6 +237,7 @@ impl ShannonApiServer {
             allowed_origins: Vec::new(),
             allow_nonloopback: false,
             extra_routes: Vec::new(),
+            assembly_sources: None,
             query_budget: Self::DEFAULT_QUERY_BUDGET,
             ambient_approval_mode: None,
         }
@@ -309,6 +315,18 @@ impl ShannonApiServer {
         self
     }
 
+    /// P0-3: supply the non-registry sources for `GET /api/assembly`.
+    ///
+    /// The tool registry always comes from [`Self::with_tools`]; hooks /
+    /// skills / engine config / sandbox come from here. Embedders that don't
+    /// call this still get the endpoint — with those sections degraded to
+    /// `"unavailable"` (`AssemblyDump::partial = true`), per the P0-3
+    /// degradation contract.
+    pub fn with_assembly_sources(mut self, sources: crate::assembly_dump::AssemblySources) -> Self {
+        self.assembly_sources = Some(Arc::new(sources));
+        self
+    }
+
     /// Build the `axum::Router` with all routes and middleware.
     fn build_router(&self) -> axum::Router<()> {
         let cors = build_cors_layer(&self.allowed_origins);
@@ -338,6 +356,20 @@ impl ShannonApiServer {
             // can merge with the (not yet state-applied) core router.
             router = router.merge(extra.clone().with_state(()));
         }
+        // P0-3: `GET /api/assembly` — same merge point as the embedder
+        // extras (same middleware semantics), but with its own dedicated
+        // state instead of `AppState`: the tools registry the server already
+        // holds plus the optional [`AssemblySources`]. AppState is untouched
+        // (it has many literal construction sites), and hosts that never
+        // call `with_assembly_sources` still serve the endpoint with the
+        // non-registry sections degraded to `"unavailable"`.
+        let assembly_router = axum::Router::new()
+            .route("/api/assembly", get(assembly_handler))
+            .with_state(AssemblyRouteState {
+                tools: self.tools.clone(),
+                sources: self.assembly_sources.clone(),
+            });
+        router = router.merge(assembly_router.with_state(()));
         let router = router
             .layer(
                 // axum 0.7 defaults to a 2 MiB request body limit, which
@@ -555,6 +587,47 @@ async fn health_handler() -> Json<HealthResponse> {
         status: "ok".to_string(),
         version: VERSION.to_string(),
     })
+}
+
+// ── GET /api/assembly (P0-3) ────────────────────────────────────────────
+
+/// Dedicated route state for `GET /api/assembly`: the server's tool
+/// registry (always present) plus the optional non-registry sources. Kept
+/// separate from `AppState` so the P0-3 endpoint needs no changes to the
+/// many existing `AppState` construction sites.
+#[derive(Clone)]
+struct AssemblyRouteState {
+    tools: Arc<ToolRegistry>,
+    sources: Option<Arc<crate::assembly_dump::AssemblySources>>,
+}
+
+/// `GET /api/assembly` — the effective-assembly dump, same JSON the
+/// `--dump-assembly` CLI flag prints. Sources the host did not wire degrade
+/// to `"unavailable"` (`partial: true`); this handler never errors.
+async fn assembly_handler(
+    State(state): State<AssemblyRouteState>,
+) -> Json<crate::assembly_dump::AssemblyDump> {
+    let (hooks, skills, config, sandbox, known_plugins) = match &state.sources {
+        Some(s) => (
+            s.hooks.as_deref(),
+            s.skills.as_deref(),
+            s.config.as_ref(),
+            s.sandbox.as_ref(),
+            s.known_plugins
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        ),
+        None => (None, None, None, None, Vec::new()),
+    };
+    Json(crate::assembly_dump::build_assembly_dump(
+        Some(&state.tools),
+        hooks,
+        skills,
+        config,
+        sandbox,
+        &known_plugins,
+    ))
 }
 
 async fn models_handler(State(state): State<AppState>) -> Json<ModelsResponse> {
@@ -3657,6 +3730,111 @@ mod tests {
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Assembly dump endpoint tests (P0-3)
+    // ══════════════════════════════════════════════════════════════════════
+
+    async fn get_assembly(app: Router<()>) -> serde_json::Value {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/assembly")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = read_body(response.into_body()).await;
+        serde_json::from_slice(&body).expect("assembly dump is valid JSON")
+    }
+
+    /// P0-3 degradation contract over the wire: a host that never wired
+    /// `with_assembly_sources` still serves `/api/assembly` — tools from the
+    /// registry, everything else the literal `"unavailable"` string and
+    /// `partial: true`.
+    #[tokio::test]
+    async fn test_assembly_endpoint_degrades_without_sources() {
+        let app = test_app();
+        let json = get_assembly(app).await;
+        assert_eq!(json["partial"], true);
+        assert_eq!(json["tools"]["count"], 0, "empty default registry");
+        assert_eq!(json["hooks"], "unavailable");
+        assert_eq!(json["skills"], "unavailable");
+        assert_eq!(json["compaction"], "unavailable");
+        assert_eq!(json["sandbox"], "unavailable");
+        assert!(json["generated_at"].is_string());
+    }
+
+    /// Wired sources render real sections; the tools section comes from the
+    /// server's registry with derived sources.
+    #[tokio::test]
+    async fn test_assembly_endpoint_renders_wired_sources() {
+        // Minimal tool fixture (api_server tests have no shared one).
+        struct FixtureTool {
+            name: String,
+        }
+        #[async_trait::async_trait]
+        impl shannon_tool_interface::Tool for FixtureTool {
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                "fixture"
+            }
+            fn input_schema(&self) -> serde_json::Value {
+                serde_json::json!({"type": "object"})
+            }
+            async fn execute(
+                &self,
+                _input: serde_json::Value,
+            ) -> Result<shannon_tool_interface::ToolOutput, shannon_tool_interface::ToolError>
+            {
+                Ok(shannon_tool_interface::ToolOutput::success("ok".into()))
+            }
+        }
+
+        let tools = ToolRegistry::new();
+        tools
+            .register(Box::new(FixtureTool {
+                name: "mcp__acme__widget".into(),
+            }))
+            .unwrap();
+
+        let sources = crate::assembly_dump::AssemblySources {
+            hooks: Some(Arc::new(shannon_engine::hooks::HookManager::new())),
+            skills: Some(Arc::new(shannon_skills::SkillRegistry::new())),
+            config: Some(crate::query_engine::QueryEngineConfig::default()),
+            sandbox: Some(crate::assembly_dump::SandboxSnapshot {
+                mode: "local".into(),
+                network: false,
+                extra_writable: vec![],
+                extra_readable: vec![],
+                extra_executable: vec![],
+                world_kind: Some("local".into()),
+                notices: vec![],
+            }),
+            known_plugins: vec!["acme".to_string()],
+        };
+
+        let app = ShannonApiServer::new(test_config())
+            .with_tools(tools)
+            .with_assembly_sources(sources)
+            .build_router();
+
+        let json = get_assembly(app).await;
+        assert_eq!(json["partial"], false);
+        assert_eq!(json["tools"]["count"], 1);
+        assert_eq!(json["tools"]["tools"][0]["name"], "mcp__acme__widget");
+        assert_eq!(json["tools"]["tools"][0]["source"]["kind"], "plugin");
+        // HookManager::new() without load() → real (empty) mount table.
+        assert_eq!(json["hooks"]["mount_count"], 0);
+        assert!(json["hooks"]["configured_events"].is_array());
+        assert_eq!(json["skills"]["budget"], 2000);
+        assert_eq!(
+            json["compaction"]["thresholds"].as_array().unwrap().len(),
+            4
+        );
+        assert_eq!(json["sandbox"]["world_kind"], "local");
     }
 
     #[tokio::test]

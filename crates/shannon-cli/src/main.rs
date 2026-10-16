@@ -24,6 +24,7 @@ use shannon_core::{
     unified_config::{ConfigBuilder, ShannonConfig},
 };
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
+use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_tools::register_default_tools_with_project_dir_ex_with_providers;
 use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::ProviderModelConfig;
@@ -554,6 +555,181 @@ struct ShannonTomlConfig {
     presets: HashMap<String, ConversationPreset>,
 }
 
+/// --dump-assembly (P0-3): assemble the effective runtime surface exactly as
+/// a live session would mount it — without connecting MCP servers — and
+/// project it into one JSON dump.
+///
+/// Why the early-exit landing (plan Task 3 ruling): everything the dump
+/// needs is buildable without the LLM engine — the tool registry comes from
+/// the same `register_default_tools_*` assembly the REPL/headless paths use,
+/// hooks load straight from the config paths, skills load from the standard
+/// dirs, and the sandbox world is re-`detect()`-ed and re-`assemble()`-ed
+/// (world handles are consumed by tool registration and not retained). So
+/// the early exit yields a *full* dump with the least plumbing — no engine,
+/// no client, no network. Degradations stay honest: every assembly failure
+/// drops its section to `"unavailable"` and sets `partial`, never panics.
+fn run_dump_assembly() -> shannon_core::assembly_dump::AssemblyDump {
+    use shannon_core::assembly_dump::{SandboxSnapshot, build_assembly_dump, known_plugin_names};
+
+    let project_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    // ── Sandbox: resolve settings, then re-assemble the world to recover
+    // its identity (kind + degrade notices) before mounting it. Mode
+    // matched by token so this crate needs no direct tool-interface dep.
+    let detected = shannon_tools::sandbox::SandboxSettings::detect();
+    let mut sandbox_notices: Vec<String> = Vec::new();
+    let mut world_kind: Option<String> = None;
+    let assembled = match detected.mode.as_str() {
+        "local" => {
+            let a = shannon_tools::sandbox::assemble_local(&detected, &project_dir);
+            world_kind = Some(a.kind.to_string());
+            Some(a)
+        }
+        "landlock" => match shannon_tools::sandbox::assemble(&detected, &project_dir) {
+            Ok(a) => {
+                world_kind = Some(a.kind.to_string());
+                Some(a)
+            }
+            Err(e) => {
+                // Same loud-degrade the `_ex` registration entry performs:
+                // fall back to the unrestricted legacy world, never fake it.
+                sandbox_notices.push(format!("landlock-unavailable: {e}"));
+                None
+            }
+        },
+        _ => None, // off → legacy passthrough, no world assembled
+    };
+    for notice in assembled
+        .as_ref()
+        .map(|a| a.notices.clone())
+        .unwrap_or_default()
+    {
+        sandbox_notices.push(format!("{}: {}", notice.tag, notice.detail));
+    }
+
+    // ── Tools: the standard assembly (sandboxed to the project dir when a
+    // world was assembled), plus the skill-as-tool mounting real runs do.
+    let mut tools = shannon_core::tools::ToolRegistry::new();
+    let registered = match assembled.as_ref() {
+        Some(a) => register_default_tools_with_project_dir_ex_with_providers(
+            &mut tools,
+            &project_dir,
+            &a.providers,
+        ),
+        None => register_default_tools_with_project_dir_ex(&mut tools, &project_dir),
+    };
+    let tools = match registered {
+        Ok(_) => {
+            let _ = shannon_ui::skill_bridge::register_skills_as_tools(&mut tools);
+            Some(tools)
+        }
+        Err(e) => {
+            eprintln!("warning: tool registration failed; tools section degraded: {e}");
+            None
+        }
+    };
+
+    // ── Hooks: load from the standard user/project paths (same manager a
+    // live session builds; load failures degrade the section).
+    let mut hook_manager = shannon_engine::hooks::HookManager::new();
+    let hooks = match hook_manager.load() {
+        Ok(()) => Some(hook_manager),
+        Err(e) => {
+            eprintln!("warning: hooks config failed to load; hooks section degraded: {e}");
+            None
+        }
+    };
+
+    // ── Skills: budget registry loaded from the same default dirs
+    // shannon_ui::skill_bridge mounts (its dir list is private there).
+    let skill_registry = shannon_skills::SkillRegistry::new();
+    if let Some(home) = dirs::home_dir() {
+        for (dir, source) in [
+            (
+                home.join(".shannon").join("skills"),
+                shannon_skills::SkillSource::User,
+            ),
+            (
+                project_dir.join(".shannon").join("skills"),
+                shannon_skills::SkillSource::Project,
+            ),
+            (
+                project_dir.join(".claude").join("skills"),
+                shannon_skills::SkillSource::Project,
+            ),
+        ] {
+            if !dir.exists() {
+                continue;
+            }
+            match shannon_skills::loader::load_skills_from_directory(&dir, source) {
+                Ok(skills) => {
+                    let _ = skill_registry.register_all(skills);
+                }
+                Err(e) => {
+                    eprintln!("warning: skills dir {dir:?} skipped: {e}");
+                }
+            }
+        }
+    }
+
+    // ── Config: the compaction knobs run on engine defaults in production
+    // (nothing overrides compression_threshold today), so the default
+    // config IS the effective projection source.
+    let config = shannon_core::query_engine::QueryEngineConfig::default();
+
+    let sandbox = SandboxSnapshot {
+        mode: detected.mode.as_str().to_string(),
+        network: detected.network,
+        extra_writable: detected
+            .extra_writable
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        extra_readable: detected
+            .extra_readable
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        extra_executable: detected
+            .extra_executable
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        world_kind,
+        notices: sandbox_notices,
+    };
+
+    // ── Plugin attribution set: installed-plugin names from the standard
+    // plugins dir (manifest-presence heuristic — see
+    // `assembly_dump::known_plugin_names`).
+    let plugins_dir = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".shannon")
+        .join("plugins");
+    let known_plugins = known_plugin_names(&plugins_dir);
+
+    let known_plugin_refs: Vec<&str> = known_plugins.iter().map(String::as_str).collect();
+    let mut dump = build_assembly_dump(
+        tools.as_ref(),
+        hooks.as_ref(),
+        Some(&skill_registry),
+        Some(&config),
+        Some(&sandbox),
+        &known_plugin_refs,
+    );
+    dump.notes.push(format!(
+        "plugin attribution set: {} installed name(s) from {} (name-presence heuristic)",
+        known_plugins.len(),
+        plugins_dir.display()
+    ));
+    dump.notes.push(
+        "MCP servers are not connected in dump mode; mcp__* tools from \
+         .mcp.json / plugins are absent"
+            .to_string(),
+    );
+    dump
+}
+
 /// Load TOML config from disk, merging global + project-local files.
 fn load_toml_config() -> ShannonTomlConfig {
     let mut merged = ShannonTomlConfig::default();
@@ -825,6 +1001,15 @@ struct Cli {
     /// → cli-overlay (this invocation's flags).
     #[arg(long)]
     dump_config: bool,
+
+    /// Print the effective assembly tree (P0-3) as JSON and exit: mounted
+    /// tools with name-derived sources and deferred flags, the hook mount
+    /// table, the skill budget trim (including what got cut), the three
+    /// coexisting compaction thresholds with provenance, and the sandbox
+    /// mode / world kind. MCP servers are NOT connected in this mode —
+    /// `mcp__*` tools from `.mcp.json` are absent (noted in the output).
+    #[arg(long)]
+    dump_assembly: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -5794,6 +5979,19 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
+    // ── --dump-assembly: effective assembly tree (P0-3) ──
+    // Same early-exit shape as --dump-config: stdout carries the pretty
+    // JSON payload only (warnings go to stderr), and we return before any
+    // engine/model setup.
+    if cli.dump_assembly {
+        let dump = run_dump_assembly();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&dump).expect("AssemblyDump always serializes")
+        );
+        return Ok(());
+    }
+
     // ── Team agent mode: JSON-RPC over stdin/stdout ──
     // Must be handled before anything else — stdout is reserved for JSON-RPC.
     if cli.team_agent {
@@ -7288,6 +7486,31 @@ def456  shannon-x86_64-unknown-linux-gnu.tar.gz
 
         let cli = Cli::try_parse_from(["shannon"]).unwrap();
         assert!(!cli.dump_config);
+    }
+
+    #[test]
+    fn test_cli_parse_dump_assembly_flag() {
+        // P0-3: --dump-assembly parses standalone and alongside config-dump /
+        // model overlay flags; default is off. Same early-exit family as
+        // --dump-config.
+        let cli = Cli::try_parse_from(["shannon", "--dump-assembly"]).unwrap();
+        assert!(cli.dump_assembly);
+        assert!(cli.command.is_none());
+
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "--dump-assembly",
+            "--dump-config",
+            "--model",
+            "claude-sonnet-4",
+        ])
+        .unwrap();
+        assert!(cli.dump_assembly);
+        assert!(cli.dump_config);
+        assert_eq!(cli.model.as_deref(), Some("claude-sonnet-4"));
+
+        let cli = Cli::try_parse_from(["shannon"]).unwrap();
+        assert!(!cli.dump_assembly);
     }
 
     #[test]

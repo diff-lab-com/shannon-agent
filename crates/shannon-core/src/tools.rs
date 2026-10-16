@@ -177,6 +177,25 @@ where
 /// Default threshold above which MCP server tools are deferred (not sent to LLM schema).
 pub const DEFER_THRESHOLD: usize = 50;
 
+/// P0-3 assembly dump: one tool's runtime-visible mounting flags, as
+/// returned by [`ToolRegistry::list_tools_runtime`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolRuntimeInfo {
+    /// Registered tool name.
+    pub name: String,
+    /// Tool category (`general` when the tool does not override).
+    pub category: String,
+    /// No side effects — cacheable, parallelizable, retry-eligible.
+    pub read_only: bool,
+    /// May perform irreversible changes — always requires confirmation.
+    pub destructive: bool,
+    /// Schema excluded from the LLM tool list; still callable by name.
+    pub hidden_from_llm: bool,
+    /// Registered and executable but excluded from the LLM schema;
+    /// discovered on demand via `mcp__tool_search`.
+    pub deferred: bool,
+}
+
 /// Registry for managing available tools
 pub struct ToolRegistry {
     tools: std::sync::RwLock<HashMap<String, std::sync::Arc<dyn Tool>>>,
@@ -521,6 +540,33 @@ impl ToolRegistry {
     /// Returns the number of deferred tools.
     pub fn deferred_count(&self) -> usize {
         Self::recover_lock(self.deferred.read()).len()
+    }
+
+    /// P0-3 assembly dump: per-tool runtime entries — exactly the flags that
+    /// decide how a tool is mounted (schema visibility, parallelism, approval
+    /// surface, deferred discovery) — plus the deferred marker.
+    ///
+    /// Unlike [`Self::list_tools_info`] this deliberately does NOT apply the
+    /// `allowed_tools` filter: a dump of "what is actually mounted" must show
+    /// registered-but-filtered tools too (they stay executable via direct
+    /// dispatch). Mirrors [`Self::tool_read_only_flags`] /
+    /// [`Self::destructive_tool_names`], the other diagnostic listings.
+    pub fn list_tools_runtime(&self) -> Vec<ToolRuntimeInfo> {
+        let deferred = Self::recover_lock(self.deferred.read());
+        Self::recover_lock(self.tools.read())
+            .values()
+            .map(|t| {
+                let name = t.name();
+                ToolRuntimeInfo {
+                    name: name.to_string(),
+                    category: t.category().to_string(),
+                    read_only: t.is_read_only(),
+                    destructive: t.is_destructive(),
+                    hidden_from_llm: t.hidden_from_llm(),
+                    deferred: deferred.contains(name),
+                }
+            })
+            .collect()
     }
 
     /// Get a tool by name (respects the allowed_tools filter).
@@ -1792,6 +1838,69 @@ mod tests {
             .register_deferred(Box::new(DummyTool { name: "D2".into() }))
             .unwrap();
         assert_eq!(registry.deferred_count(), 2);
+    }
+
+    /// P0-3: `list_tools_runtime` reports every registered tool with its
+    /// mounting flags, including deferred marking, and ignores the
+    /// allowed_tools filter (a mount dump must show filtered tools too).
+    #[test]
+    fn test_list_tools_runtime_reports_flags_and_deferred() {
+        struct ReadOnlyTool {
+            name: &'static str,
+        }
+        #[async_trait]
+        impl Tool for ReadOnlyTool {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn description(&self) -> &str {
+                "read-only"
+            }
+            fn category(&self) -> &str {
+                "fs"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            fn is_read_only(&self) -> bool {
+                true
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(ReadOnlyTool { name: "Read" }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool { name: "D1".into() }))
+            .unwrap();
+
+        // Filter one tool out: it must still appear in the runtime listing.
+        registry.set_allowed_tools(Some(vec!["Read".to_string()]));
+
+        let mut infos = registry.list_tools_runtime();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(infos.len(), 2, "filter must not hide mounted tools");
+
+        let read = infos
+            .iter()
+            .find(|t| t.name == "Read")
+            .expect("Read listed");
+        assert_eq!(read.category, "fs");
+        assert!(read.read_only);
+        assert!(!read.destructive);
+        assert!(!read.hidden_from_llm);
+        assert!(!read.deferred);
+
+        let deferred = infos
+            .iter()
+            .find(|t| t.name == "D1")
+            .expect("deferred tool listed");
+        assert!(!deferred.read_only);
+        assert!(deferred.deferred);
     }
 
     #[test]
