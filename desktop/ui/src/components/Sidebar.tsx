@@ -316,7 +316,7 @@ export const Sidebar = memo(function Sidebar({ mobile, open = true }: { mobile?:
         <Button
           aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
           title={`${intl.formatMessage({ id: 'nav.newChat' })} · ${mod}N`}
-          className="flex-1 min-w-0 py-2.5 px-3 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-sm hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
+          className="flex-1 min-w-0 py-2.5 px-3 bg-[var(--vio-deep)] text-white rounded-xl font-bold flex items-center justify-center gap-sm hover:bg-[var(--vio)] hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
           // B1-13 (review P1-8): align with Mod+N — creation must also LAND
           // on /chat. From /settings the old create-only behavior looked
           // like a dead button.
