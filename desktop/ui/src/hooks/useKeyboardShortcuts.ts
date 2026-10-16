@@ -55,6 +55,16 @@ export function useKeyboardShortcuts(
       // as `?`) instead of advertising a dead binding.
       'mod+/': () => onToggleHelp?.(),
       '?': () => onToggleHelp?.(),
+      // H3 (导航批, plan §2.3-1): in-app history back/forward over the React
+      // Router stack — ⌘[/⌘] on macOS, Ctrl+[ / Ctrl+] elsewhere (the shared
+      // `mod` mapping covers both, same as every binding above). When the
+      // stack cannot move (index 0 / at the forward edge) navigate() is a
+      // no-op by React Router semantics, so no reachability check is needed.
+      // The INPUT/TEXTAREA/contentEditable bail-out below also covers
+      // xterm's hidden helper textarea, so Ctrl+[ keeps its terminal ESC
+      // meaning while a terminal drawer has focus.
+      'mod+[': () => navigate(-1),
+      'mod+]': () => navigate(1),
       'escape': () => {
         if (isQuerying && !overlayOwnsEscape()) cancelQuery()
       },

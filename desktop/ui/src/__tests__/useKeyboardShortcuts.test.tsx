@@ -68,6 +68,34 @@ describe('useKeyboardShortcuts', () => {
     window.removeEventListener('shannon:change-wd', handler)
   })
 
+  // H3 (导航批, plan §2.3-1): in-app history back/forward over the React
+  // Router stack — mod+[ / mod+] (⌘ on mac, Ctrl elsewhere). Reachability
+  // is React Router's job: navigate(±1) is a no-op at the stack edges.
+  it('navigates back on mod+[', () => {
+    renderHook(() => useKeyboardShortcuts())
+    fireKeyDown('[', { metaKey: true })
+    expect(mockNavigate).toHaveBeenCalledWith(-1)
+  })
+
+  it('navigates back on ctrl+[', () => {
+    renderHook(() => useKeyboardShortcuts())
+    fireKeyDown('[', { ctrlKey: true })
+    expect(mockNavigate).toHaveBeenCalledWith(-1)
+  })
+
+  it('navigates forward on mod+]', () => {
+    renderHook(() => useKeyboardShortcuts())
+    fireKeyDown(']', { metaKey: true })
+    expect(mockNavigate).toHaveBeenCalledWith(1)
+  })
+
+  it('ignores history shortcuts when focus is in input', () => {
+    renderHook(() => useKeyboardShortcuts())
+    const input = document.createElement('input')
+    fireKeyDown('[', { metaKey: true, target: input })
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
   it('ignores shortcuts when focus is in input', () => {
     renderHook(() => useKeyboardShortcuts())
     const input = document.createElement('input')

@@ -37,6 +37,11 @@ const SECTIONS: ShortcutSection[] = [
       // U6: complete the list — this binding exists in useKeyboardShortcuts
       // but was missing from the help overlay.
       { keys: formatShortcutShift('N'), actionKey: 'shortcuts.help.goChat' },
+      // H3 (导航批): in-app history back/forward, same family as the
+      // browser/Cherry-Studio binding (⌘[/⌘] mac, Ctrl+[ / Ctrl+] elsewhere
+      // via the shared mod display).
+      { keys: formatShortcut('['), actionKey: 'shortcuts.help.goBack' },
+      { keys: formatShortcut(']'), actionKey: 'shortcuts.help.goForward' },
     ],
   },
   {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, createContext, useContext, Suspense } from 'react';
+import { useState, useCallback, useEffect, useRef, createContext, useContext, Suspense } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useIntl } from 'react-intl';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -12,10 +12,36 @@ import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { shouldShowWelcome } from '@/pages/Welcome';
 import { listen } from '@tauri-apps/api/event';
-import { SESSION_WINDOW_REVEAL_EVENT } from '@/lib/windowSession';
+import { SESSION_WINDOW_REVEAL_EVENT, parseWindowSession } from '@/lib/windowSession';
 import { dispatchPaletteVisibility } from '@/lib/paletteVisibility';
+
+// H3 (导航批, plan §2.3-4): restart-restore of the last visited route —
+// the Slack/Discord/Obsidian implicit contract. The main window records
+// its settled location under this key (debounced); on the next boot the
+// stored route replaces the default /chat landing. Session windows never
+// participate (they are pinned to one session and share this localStorage).
+const LAST_ROUTE_KEY = 'shannon.lastRoute'
+const LAST_ROUTE_WRITE_DEBOUNCE_MS = 300
+
+/**
+ * Routes that must never be recorded — and never restored into (defensive
+ * on read, so a stale pre-exclusion value can't resurrect them either):
+ *  - `/` — the transient RootRedirect hop, never a real destination
+ *  - `/welcome` — first-run onboarding; must not shadow the default landing
+ *  - `/timeline/:id` — in-turn deep page tied to a session that is gone
+ *    after restart
+ *  - `/companion` — the Quick Capture window's chrome-less page; a main
+ *    window only ever shows it as a manual fallback
+ */
+function isTransientRoute(pathname: string): boolean {
+  return pathname === '/'
+    || pathname === '/welcome'
+    || pathname.startsWith('/timeline/')
+    || pathname === '/companion'
+}
 
 interface SidebarContextValue {
   open: boolean
@@ -89,6 +115,71 @@ export function Layout() {
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const handleNewSession = useCallback(() => { void createSession() }, [createSession]);
   useKeyboardShortcuts(togglePalette, toggleHelp, handleNewSession);
+
+  // H3 (导航批, plan §2.3-3): window document.title follows the route —
+  // same page-context string the Header renders (lib/pageTitle + U2 chat
+  // session title), suffixed with the app.brandName brand. Mounted here
+  // once, at the same layer as the Header, never per page.
+  useDocumentTitle();
+
+  // H3 (导航批, plan §2.3-4): record the settled route for next-launch
+  // restore. Debounced so a rapid nav chain (boot redirects, palette hops)
+  // only lands the LAST location; transient routes and session windows are
+  // skipped (see isTransientRoute — localStorage is shared across windows,
+  // and a pinned session window must never overwrite the main window's slot).
+  useEffect(() => {
+    if (isWindowMode) return
+    if (parseWindowSession(location.search)) return
+    if (isTransientRoute(location.pathname)) return
+    const { pathname, search } = location
+    const timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(LAST_ROUTE_KEY, pathname + search)
+      } catch { /* storage unavailable (private mode) — restore is best-effort */ }
+    }, LAST_ROUTE_WRITE_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [location, isWindowMode])
+
+  // H3 (导航批, plan §2.3-4): boot-time restore. Runs AFTER the declarative
+  // redirect chain (RootRedirect / legacy redirects / wildcard) — those are
+  // child-route <Navigate>s that commit before this parent effect re-fires,
+  // and the restore is keyed to the DEFAULT LANDING only: an explicit deep
+  // link (/settings, /quickfix → /tasks, anything else) always wins.
+  // Priority vs. existing startup behavior: first-run onboarding still wins
+  // — the shouldShowWelcome effect below replaces this navigation when the
+  // provider setup hasn't been completed.
+  const restoreDoneRef = useRef(false);
+  useEffect(() => {
+    if (restoreDoneRef.current) return
+    // Session windows (/?windowSession=<uuid>) are pinned to one session —
+    // never restore a main-window route into them.
+    if (isWindowMode || parseWindowSession(location.search)) {
+      restoreDoneRef.current = true
+      return
+    }
+    // `/` = RootRedirect hasn't committed yet — wait for it to land on
+    // /chat before deciding. Any other non-default path is a deliberate
+    // deep link: mark attempted and stand down.
+    if (location.pathname !== '/' && location.pathname !== '/chat') {
+      restoreDoneRef.current = true
+      return
+    }
+    if (location.pathname === '/') return
+    restoreDoneRef.current = true
+    let stored: string | null = null
+    try {
+      stored = window.localStorage.getItem(LAST_ROUTE_KEY)
+    } catch { /* ignore — restore is best-effort */ }
+    if (!stored || !stored.startsWith('/')) return
+    // Defensive: never restore INTO a transient route (a value written
+    // before the exclusion list shipped).
+    const queryIndex = stored.indexOf('?')
+    const storedPath = queryIndex === -1 ? stored : stored.slice(0, queryIndex)
+    if (isTransientRoute(storedPath)) return
+    // replace:true — the stored route takes over the boot entry, so the
+    // back arrow doesn't offer a return to the bare /chat hop.
+    navigate(stored, { replace: true })
+  }, [location.pathname, location.search, isWindowMode, navigate])
 
   useEffect(() => {
     const handler = () => setHelpOpen(p => !p)
