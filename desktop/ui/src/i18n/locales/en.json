@@ -4075,6 +4075,8 @@
   "diff.dialog.conflict": "File changed since the diff was loaded",
   "diff.dialog.conflict.desc": "The file was modified while you were reviewing (mtime mismatch). Close and re-open the diff to review the latest content before applying.",
   "diff.review.deleteWarning": "This change deletes all file content while the original file is not empty. Apply is disabled to protect the existing file.",
+  "diff.review.workspace.aria": "Diff review workspace",
+  "diff.review.workspace.close": "Close review",
   "editor.discard.title": "Discard unsaved changes?",
   "editor.discard.message": "The editor has unsaved changes. Closing or switching files now will discard them.",
   "editor.discard.confirm": "Discard changes",

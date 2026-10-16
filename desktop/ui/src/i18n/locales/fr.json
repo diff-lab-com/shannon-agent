@@ -4032,6 +4032,8 @@
   "diff.dialog.conflict": "Le fichier a changé depuis le chargement du diff",
   "diff.dialog.conflict.desc": "Le fichier a été modifié pendant votre revue (mtime différent). Fermez et rouvrez le diff pour examiner le contenu le plus récent avant d'appliquer.",
   "diff.review.deleteWarning": "Ce changement supprime tout le contenu du fichier alors que l'original n'est pas vide. Appliquer est désactivé pour protéger le fichier existant.",
+  "diff.review.workspace.aria": "Espace de revue de diff",
+  "diff.review.workspace.close": "Fermer la revue",
   "editor.discard.title": "Abandonner les modifications non enregistrées ?",
   "editor.discard.message": "L'éditeur contient des modifications non enregistrées. Fermer ou changer de fichier maintenant les abandonnera.",
   "editor.discard.confirm": "Abandonner les modifications",

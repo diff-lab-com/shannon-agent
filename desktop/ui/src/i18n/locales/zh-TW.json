@@ -4032,6 +4032,8 @@
   "diff.dialog.conflict": "檔案在差異載入後已有變更",
   "diff.dialog.conflict.desc": "檔案在您檢視期間被修改（mtime 不符）。請關閉並重新開啟差異，在套用前檢視最新內容。",
   "diff.review.deleteWarning": "此變更會刪除全部檔案內容，但原始檔案並非空白。為保護既有檔案，已停用套用。",
+  "diff.review.workspace.aria": "Diff 檢視工作區",
+  "diff.review.workspace.close": "關閉檢視",
   "editor.discard.title": "捨棄未儲存的變更？",
   "editor.discard.message": "編輯器有未儲存的變更。現在關閉或切換檔案將捨棄這些變更。",
   "editor.discard.confirm": "捨棄變更",

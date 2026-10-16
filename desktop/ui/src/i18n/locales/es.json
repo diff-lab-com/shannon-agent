@@ -4032,6 +4032,8 @@
   "diff.dialog.conflict": "El archivo cambió desde que se cargó el diff",
   "diff.dialog.conflict.desc": "El archivo se modificó mientras lo revisabas (mtime no coincide). Cierra y vuelve a abrir el diff para revisar el contenido más reciente antes de aplicar.",
   "diff.review.deleteWarning": "Este cambio borra todo el contenido del archivo siendo el original no vacío. Aplicar está deshabilitado para proteger el archivo existente.",
+  "diff.review.workspace.aria": "Espacio de revisión de diff",
+  "diff.review.workspace.close": "Cerrar revisión",
   "editor.discard.title": "¿Descartar los cambios sin guardar?",
   "editor.discard.message": "El editor tiene cambios sin guardar. Cerrar o cambiar de archivo ahora los descartará.",
   "editor.discard.confirm": "Descartar cambios",

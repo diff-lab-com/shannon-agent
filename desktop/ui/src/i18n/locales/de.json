@@ -4031,6 +4031,8 @@
   "diff.dialog.conflict": "Datei wurde seit dem Laden des Diffs geändert",
   "diff.dialog.conflict.desc": "Die Datei wurde während Ihrer Prüfung geändert (mtime stimmt nicht überein). Schließen und öffnen Sie das Diff erneut, um den aktuellen Inhalt vor dem Anwenden zu prüfen.",
   "diff.review.deleteWarning": "Diese Änderung löscht den gesamten Dateiinhalt, obwohl die Originaldatei nicht leer ist. Apply ist deaktiviert, um die bestehende Datei zu schützen.",
+  "diff.review.workspace.aria": "Diff-Review-Arbeitsbereich",
+  "diff.review.workspace.close": "Review schließen",
   "editor.discard.title": "Ungespeicherte Änderungen verwerfen?",
   "editor.discard.message": "Der Editor enthält ungespeicherte Änderungen. Das jetzige Schließen oder der Dateiwechsel verwirft sie.",
   "editor.discard.confirm": "Änderungen verwerfen",

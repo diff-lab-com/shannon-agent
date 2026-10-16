@@ -4032,6 +4032,8 @@
   "diff.dialog.conflict": "O arquivo mudou desde que o diff foi carregado",
   "diff.dialog.conflict.desc": "O arquivo foi modificado enquanto você revisava (mtime divergente). Feche e reabra o diff para revisar o conteúdo mais recente antes de aplicar.",
   "diff.review.deleteWarning": "Esta alteração exclui todo o conteúdo do arquivo, embora o original não esteja vazio. Aplicar está desativado para proteger o arquivo existente.",
+  "diff.review.workspace.aria": "Espaço de revisão de diff",
+  "diff.review.workspace.close": "Fechar revisão",
   "editor.discard.title": "Descartar alterações não salvas?",
   "editor.discard.message": "O editor tem alterações não salvas. Fechar ou trocar de arquivo agora as descartará.",
   "editor.discard.confirm": "Descartar alterações",
