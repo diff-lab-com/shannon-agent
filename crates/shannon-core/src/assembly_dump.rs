@@ -1,7 +1,7 @@
 //! P0-3: the effective-assembly dump — one JSON view of what is actually
 //! mounted at runtime, as opposed to what configuration *claims*.
 //!
-//! Four views, assembled by [`build_assembly_dump`]:
+//! Five views, assembled by [`build_assembly_dump`]:
 //!
 //! - **tools** — every registered tool with its mounting flags
 //!   ([`crate::tools::ToolRegistry::list_tools_runtime`]) plus a *derived*
@@ -24,6 +24,12 @@
 //! Degradation contract (P0-3): every source is `Option`; a missing source
 //! renders as the JSON string `"unavailable"` and sets
 //! [`AssemblyDump::partial`]. This function never panics on missing input.
+//!
+//! Exposure note: the HTTP face is `GET /api/assembly` on
+//! [`crate::api_server::ShannonApiServer`] (embedder-supplied sources via
+//! `ShannonApiServer::with_assembly_sources`) — the `shannon-server` axum
+//! stack behind `shannon serve` does NOT front this route. Sources a host
+//! never wired degrade to `"unavailable"`/`partial` rather than erroring.
 //!
 //! World-kind note: the sandbox world handles built by the §4.12 assemblies
 //! are consumed by tool registration and not retained
@@ -569,7 +575,11 @@ fn hooks_section(manager: &HookManager) -> HooksSection {
 fn skills_section(registry: &SkillRegistry) -> SkillsSection {
     let budget = SkillRegistry::DEFAULT_SKILL_TOKEN_BUDGET;
     let report = registry.available_skills_metadata_with_budget_report(budget);
-    let registered = report.included.len() + report.dropped.len() + report.truncated.len();
+    // Invariant (shannon-skills budget pass): `truncated ⊆ included` — a
+    // truncated skill IS mounted, just with a shortened description — and
+    // `dropped ∩ included = ∅`, so candidates = included + dropped.
+    // Counting `truncated` too would double-count every trimmed skill.
+    let registered = report.included.len() + report.dropped.len();
     let included = report
         .included
         .iter()
@@ -995,11 +1005,61 @@ mod tests {
         assert_eq!(section.budget, SkillRegistry::DEFAULT_SKILL_TOKEN_BUDGET);
         assert_eq!(section.registered, 6);
         assert_eq!(section.included_count, section.included.len());
-        let accounted = section.included_count + section.dropped.len() + section.truncated.len();
-        assert_eq!(accounted, 6, "every candidate lands in exactly one bucket");
         // Default budget (2000 tokens) fits six short skills — nothing cut.
         assert!(section.dropped.is_empty());
         assert!(section.truncated.is_empty());
+        // Accounting invariant: registered == included + dropped (a
+        // truncated skill counts once, in included).
+        assert_eq!(
+            section.registered,
+            section.included_count + section.dropped.len()
+        );
+    }
+
+    /// Truncating budget: `truncated` names must be a subset of `included`
+    /// (the skill IS mounted, description shortened) and must NOT inflate
+    /// `registered` — pre-fix, registered double-counted the truncated row.
+    #[test]
+    fn skills_section_truncated_skills_count_once() {
+        let registry = SkillRegistry::new();
+        // Two ~1000-token descriptions: the second overflows the default
+        // 2000-token budget with room to truncate (remaining > 0,
+        // max_chars > 10) — exactly the double-counting case.
+        let long_desc = "w".repeat(4000);
+        for name in ["fat_a", "fat_b"] {
+            let skill = Skill::new(
+                name.to_string(),
+                name.to_string(),
+                long_desc.clone(),
+                "Content".to_string(),
+            );
+            registry.register(skill).unwrap();
+        }
+
+        let section = skills_section(&registry);
+        assert_eq!(section.truncated, vec!["fat_b".to_string()]);
+        assert_eq!(section.included_count, 2, "truncated skill stays mounted");
+        // truncated ⊆ included
+        for name in &section.truncated {
+            assert!(
+                section.included.iter().any(|e| &e.name == name),
+                "truncated skill must also be included"
+            );
+            assert!(
+                section
+                    .included
+                    .iter()
+                    .any(|e| &e.name == name && e.description.ends_with("...")),
+                "truncated description carries the ... marker"
+            );
+        }
+        assert!(section.dropped.is_empty());
+        // registered = included + dropped (NOT + truncated) == 2, not 3.
+        assert_eq!(section.registered, 2);
+        assert_eq!(
+            section.registered,
+            section.included_count + section.dropped.len()
+        );
     }
 
     // ── Compaction section ──────────────────────────────────────────────

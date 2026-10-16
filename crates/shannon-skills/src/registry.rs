@@ -1529,15 +1529,65 @@ mod tests {
             "tight budget still includes some"
         );
 
-        let total = report.included.len() + report.dropped.len() + report.truncated.len();
+        // Real invariant of the budget pass: dropped ∩ included = ∅,
+        // truncated ⊆ included (a truncated skill IS mounted, description
+        // shortened), so registered candidates = included + dropped.
         assert_eq!(
-            total, 20,
-            "every registered skill must land in exactly one bucket"
+            report.included.len() + report.dropped.len(),
+            20,
+            "included + dropped must account for all registered skills"
         );
-        // No overlap between the three buckets.
         for name in &report.truncated {
             assert!(!report.dropped.contains(name));
+            assert!(
+                report.included.iter().any(|m| &m.name == name),
+                "truncated skill must also be included"
+            );
         }
+
+        // Truncation fixture: a mixed set where one skill overflows with
+        // truncation room — truncated must be non-empty, ⊆ included, and
+        // the registered accounting (included + dropped) must still hold.
+        let mixed = SkillRegistry::new();
+        let fat = Skill::new(
+            "fat".to_string(),
+            "fat".to_string(),
+            "w".repeat(4000), // ~1000 tokens: fits the 1500 budget…
+            "Content".to_string(),
+        );
+        mixed.register(fat).unwrap();
+        let over = Skill::new(
+            "over".to_string(),
+            "over".to_string(),
+            "x".repeat(4000), // ~1000 tokens: overflows with room to truncate
+            "Content".to_string(),
+        );
+        mixed.register(over).unwrap();
+        let tiny = Skill::new(
+            "tiny".to_string(),
+            "tiny".to_string(),
+            "z".repeat(4000), // ~1000 tokens: cut entirely after the break
+            "Content".to_string(),
+        );
+        mixed.register(tiny).unwrap();
+
+        let report = mixed.available_skills_metadata_with_budget_report(1500);
+        assert_eq!(report.truncated, vec!["over".to_string()]);
+        assert_eq!(
+            report.included.len(),
+            2,
+            "fat + truncated over stay mounted"
+        );
+        assert_eq!(report.dropped, vec!["tiny".to_string()]);
+        // registered accounting holds under truncation: 2 + 1 = 3.
+        assert_eq!(report.included.len() + report.dropped.len(), 3);
+        // truncated ⊆ included (and marked with "...")
+        let over_entry = report
+            .included
+            .iter()
+            .find(|m| m.name == "over")
+            .expect("truncated skill included");
+        assert!(over_entry.description.ends_with("..."));
 
         // A single over-budget skill under a budget that leaves truncation
         // room must be reported as truncated (and marked in its description).
@@ -1554,6 +1604,8 @@ mod tests {
         assert_eq!(report.truncated, vec!["verbose".to_string()]);
         assert!(report.dropped.is_empty());
         assert!(report.included[0].description.ends_with("..."));
+        // Even with a truncated row: registered = included + dropped = 1.
+        assert_eq!(report.included.len() + report.dropped.len(), 1);
 
         // A budget of zero cannot even truncate (remaining == 0) — the
         // skill is dropped, not silently vanished.
