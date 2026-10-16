@@ -12,7 +12,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-on-primary",
+        // S4 (parity review 2026-10-15: 主按钮明暗方向) — the solid primary
+        // CTA flips to the design's deep-violet fill with WHITE text
+        // (--vio-deep, 4.8:1 under white in every theme; #8b7cf7 stays only
+        // a hover lift, hover:bg-[var(--vio)]). Brand-fixed :root constants
+        // from index.css, not theme tokens, so all 12 themes render the same
+        // direction. Disabled reverts to the base cva's gray
+        // (disabled:bg-surface-container disabled:text-on-surface).
+        default:
+          "bg-[var(--vio-deep)] text-white hover:bg-[var(--vio)]",
         outline:
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:

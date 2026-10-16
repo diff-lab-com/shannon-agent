@@ -31,7 +31,7 @@ function batchStatusBadge(status: BatchRunStatus): {
   switch (status) {
     case 'running':
       return {
-        bg: 'bg-primary/10 text-on-surface border-primary/20',
+        bg: 'bg-primary-container text-on-surface border-primary/20',
         dot: 'bg-primary animate-pulse',
         icon: 'autorenew',
         labelId: 'batch.status.running',
@@ -52,7 +52,7 @@ function batchStatusBadge(status: BatchRunStatus): {
       }
     case 'failed':
       return {
-        bg: 'bg-error/10 text-on-surface border-error/20',
+        bg: 'bg-error-container text-on-surface border-error/20',
         dot: 'bg-error',
         icon: 'error',
         labelId: 'batch.status.failed',
@@ -83,11 +83,11 @@ function branchChipClasses(status: BatchBranch['status']): string {
   // maximum-margin surface pair.
   switch (status) {
     case 'running':
-      return 'bg-primary/10 text-on-surface border-primary/30'
+      return 'bg-primary-container text-on-surface border-primary/30'
     case 'completed':
       return 'bg-success/10 text-on-surface border-success/20'
     case 'failed':
-      return 'bg-error/10 text-on-surface border-error/20'
+      return 'bg-error-container text-on-surface border-error/20'
   }
 }
 
@@ -113,8 +113,10 @@ export function BatchRunCard({ run, onCompare, onDiscard }: BatchRunCardProps) {
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-tertiary-container flex items-center justify-center text-on-tertiary-container shrink-0">
-            <span className="material-symbols-outlined icon-lg">call_split</span>
+          {/* G1-B 图标 tile 语言 (设计 04b): the solid amber block becomes a
+              32px rounded-lg violet dim tile with a 16px thin-line icon. */}
+          <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined icon-sm">call_split</span>
           </div>
           <div className="min-w-0">
             <h3 className="font-body-lg font-semibold text-on-surface truncate">
@@ -223,11 +225,13 @@ export default function BatchRunPanel() {
 
   return (
     <section aria-labelledby="batch-runs-heading" className="mb-lg" data-testid="batch-run-panel">
+      {/* G1-B S6 (design `.group-label`): section titles are 10.5px/600
+          uppercase wide-tracked muted labels, not 16px headings. */}
       <h2
         id="batch-runs-heading"
-        className="font-label-lg font-bold text-on-surface mb-sm flex items-center gap-xs"
+        className="text-label-2xs font-semibold uppercase tracking-wider text-on-surface-variant mb-sm flex items-center gap-xs"
       >
-        <span className="material-symbols-outlined icon-md text-tertiary" aria-hidden="true">
+        <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">
           call_split
         </span>
         {intl.formatMessage({ id: 'batch.panel.heading' })}

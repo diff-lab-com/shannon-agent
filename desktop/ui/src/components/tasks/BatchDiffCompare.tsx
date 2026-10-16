@@ -531,7 +531,7 @@ export default function BatchDiffCompare({ run, onClose, onAdopt }: BatchDiffCom
             <div
               role="alert"
               data-testid="batch-conflict-banner"
-              className="mb-sm p-sm rounded-lg border border-error/30 bg-error/5 text-on-surface"
+              className="mb-sm p-sm rounded-lg border border-error/30 bg-error-container text-on-surface"
             >
               <p className="font-label-md font-bold text-error flex items-center gap-xs">
                 <span className="material-symbols-outlined icon-md" aria-hidden="true">

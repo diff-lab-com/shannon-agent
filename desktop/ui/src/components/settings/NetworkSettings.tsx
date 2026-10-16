@@ -91,15 +91,15 @@ export default function NetworkSettings() {
       {/* settings.network.title — the section lead-in (style aligned with
           GeneralSettings' subheader line). */}
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.network.title')}</p>
-      <div className="space-y-lg">
+      <div className="space-y-3">
       {/* ① HTTP proxy */}
       <section
-        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
         data-testid="network-proxy-card"
       >
         <div className="flex items-center gap-md mb-xs">
           <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">lan</span>
-          <h3 className="font-headline-md text-headline-md">{t('settings.network.proxy')}</h3>
+          <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.network.proxy')}</h3>
           <span className="flex-1" />
           <EffectBadge kind="restart-app" />
         </div>
@@ -134,12 +134,12 @@ export default function NetworkSettings() {
 
       {/* ② NO_PROXY exceptions */}
       <section
-        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
         data-testid="network-no-proxy-card"
       >
         <div className="flex items-center gap-md mb-xs">
           <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">block</span>
-          <h3 className="font-headline-md text-headline-md">{t('settings.network.noProxy')}</h3>
+          <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.network.noProxy')}</h3>
           <span className="flex-1" />
           <EffectBadge kind="restart-app" />
         </div>
@@ -160,12 +160,12 @@ export default function NetworkSettings() {
 
       {/* ③ Custom CA certificate */}
       <section
-        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+        className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
         data-testid="network-ca-card"
       >
         <div className="flex items-center gap-md mb-xs">
           <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">verified_user</span>
-          <h3 className="font-headline-md text-headline-md">{t('settings.network.ca')}</h3>
+          <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.network.ca')}</h3>
           <span className="flex-1" />
           <EffectBadge kind="restart-app" />
         </div>

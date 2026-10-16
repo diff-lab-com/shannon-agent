@@ -630,7 +630,7 @@ export default function MessageArea({
           onClick={scrollToBottom}
           // G1: solid — a transient affordance doesn't earn one of the four
           // per-screen backdrop-filter slots.
-          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e3 hover:bg-primary-container hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
+          className="sticky bottom-md left-full -translate-x-full ml-sm w-10 h-10 rounded-full bg-surface-container-lowest border border-outline-variant/30 shadow-e3 hover:bg-primary/10 hover:border-primary/40 text-on-surface hover:text-primary transition-all flex items-center justify-center"
         >
           <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_downward</span>
         </Button>

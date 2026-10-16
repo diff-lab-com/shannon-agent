@@ -214,7 +214,7 @@ export function DropdownMenu({
               "focus:bg-primary/10 focus:text-primary focus:outline-none",
               item.disabled
                 ? "opacity-40 cursor-not-allowed"
-                : "text-on-surface hover:bg-primary/5 hover:text-primary cursor-pointer",
+                : "text-on-surface hover:bg-primary/10 hover:text-primary cursor-pointer",
               item.destructive && "text-error hover:bg-error/10 hover:text-error focus:bg-error/10 focus:text-error"
             )}
             onClick={() => {

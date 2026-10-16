@@ -167,15 +167,18 @@ export default function GeneralPane() {
     setExportingAll(false)
   }
   return (
-    <div className="space-y-xl">
-      <section className="space-y-md" aria-labelledby="general-pane-general-heading">
-        <h2 id="general-pane-general-heading" className="text-headline-sm font-medium">
+    // G1-B S6 (design 12-settings-general): pane density — 12px between
+    // cards, the pane h2 at the design's 19px/700, group sections as
+    // 10.5px uppercase labels, cards pad 16px with 13px/600 headers.
+    <div className="space-y-3">
+      <section className="space-y-2" aria-labelledby="general-pane-general-heading">
+        <h2 id="general-pane-general-heading" className="text-headline-sm font-bold text-on-surface leading-tight">
           {t('nav.general')}
         </h2>
         <GeneralSettings />
       </section>
-      <section className="space-y-md" aria-labelledby="general-pane-session-heading">
-        <h2 id="general-pane-session-heading" className="text-headline-sm font-medium">
+      <section className="space-y-2" aria-labelledby="general-pane-session-heading">
+        <h2 id="general-pane-session-heading" className="text-label-2xs font-semibold uppercase tracking-wider text-on-surface-variant px-xs">
           {t('nav.session')}
         </h2>
         <SessionSettings />
@@ -190,18 +193,20 @@ export default function GeneralPane() {
           automatically. 缓期批 3 adds 开机自启 — opt-in OFF, and unlike the
           two config-backed toggles its state IS the OS registration
           (get_launch_on_login), so the copy says it follows the system
-          registration state. */}
-      <section className="space-y-md" aria-labelledby="general-pane-launch-heading">
-        <h2 id="general-pane-launch-heading" className="text-headline-sm font-medium">
-          {t('settings.general.launch.title')}
-        </h2>
+          registration state.
+          G1-B S6: the filled icon brick header becomes a 16px thin-line
+          icon + 13px/600 card title, the badge rides the same row. */}
+      <section aria-labelledby="general-pane-launch-heading">
         <div
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 space-y-md"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 space-y-1"
           data-testid="general-launch-card"
         >
-          <div className="flex justify-between items-center gap-md">
-            <span className="material-symbols-outlined text-primary shrink-0" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">rocket_launch</span>
-            <EffectBadge kind="restart-app" />
+          <div className="flex items-center gap-sm mb-sm">
+            <h3 id="general-pane-launch-heading" className="flex items-center gap-sm text-label-lg font-semibold text-on-surface min-w-0">
+              <span className="material-symbols-outlined icon-sm text-primary shrink-0" aria-hidden="true">rocket_launch</span>
+              <span className="truncate">{t('settings.general.launch.title')}</span>
+            </h3>
+            <span className="ml-auto shrink-0"><EffectBadge kind="restart-app" /></span>
           </div>
           <div className="flex justify-between items-center py-sm gap-md">
             <span className="min-w-0">
@@ -254,15 +259,18 @@ export default function GeneralPane() {
         </div>
       </section>
 
-      {/* 数据 (design 12-settings-general.html:236-243) — honest edition. */}
-      <section className="space-y-md" aria-labelledby="general-pane-data-heading">
-        <h2 id="general-pane-data-heading" className="text-headline-sm font-medium">
-          {t('settings.general.data.title')}
-        </h2>
+      {/* 数据 (design 12-settings-general.html:236-243) — honest edition.
+          G1-B S6: the identity moves into the card header (icon + 13px/600
+          title), no separate section heading above. */}
+      <section aria-labelledby="general-pane-data-heading">
         <div
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 space-y-md"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 space-y-3"
           data-testid="general-data-card"
         >
+          <h3 id="general-pane-data-heading" className="flex items-center gap-sm text-label-lg font-semibold text-on-surface">
+            <span className="material-symbols-outlined icon-sm text-primary shrink-0" aria-hidden="true">database</span>
+            {t('settings.general.data.title')}
+          </h3>
           {/* 缓期批 2: the engine ships export_all_sessions — the IA
               redesign's honest「即将支持」placeholder became a real
               button. Still no cloud anything: the zip is written locally

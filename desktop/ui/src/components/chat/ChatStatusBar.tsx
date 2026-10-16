@@ -59,10 +59,14 @@ export function ChatStatusBar({ workingDir, sessionId, onChangeWorkingDir }: Cha
   }, [workingDir])
 
   return (
+    // G1-A parity batch (2026-10-15, design 02c D5 状态条): the line renders
+    // at the design's density — 26px tall, mono 11px labels, t3-muted color,
+    // hairline on the TOP edge. The directory + branch segments and their
+    // logic are unchanged.
     <div
       data-testid="chat-status-bar"
       aria-label={t('chat.statusbar.aria')}
-      className="mt-xs flex items-center gap-md px-sm text-label-sm text-on-surface-variant min-w-0"
+      className="mt-xs flex items-center gap-md border-t border-outline-variant/20 px-sm h-[26px] font-mono text-label-xs text-muted-foreground min-w-0"
     >
       {/* Working directory — the WD-picker entry. Always renders (set or
           "not set" — both real). */}
@@ -71,11 +75,11 @@ export function ChatStatusBar({ workingDir, sessionId, onChangeWorkingDir }: Cha
         variant="ghost"
         onClick={onChangeWorkingDir}
         disabled={!sessionId}
-        className="flex items-center gap-xs min-w-0 max-w-[50%] hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center gap-xs min-w-0 max-w-[50%] h-[22px] px-xs rounded-sm hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-label-xs"
         title={workingDir || t('chat.input.footer.workingDir.unset')}
         aria-label={t('chat.input.footer.workingDir.aria')}
       >
-        <span className="material-symbols-outlined icon-sm shrink-0">folder</span>
+        <span className="material-symbols-outlined icon-xs shrink-0">folder</span>
         <span className="truncate font-mono">
           {workingDir ? formatDirBreadcrumb(workingDir) : t('chat.input.footer.workingDir.unset')}
         </span>
@@ -87,7 +91,7 @@ export function ChatStatusBar({ workingDir, sessionId, onChangeWorkingDir }: Cha
           className="flex items-center gap-xs shrink-0 font-mono min-w-0"
           title={t('chat.statusbar.branch.title')}
         >
-          <span className="material-symbols-outlined icon-sm shrink-0" aria-hidden="true">account_tree</span>
+          <span className="material-symbols-outlined icon-xs shrink-0" aria-hidden="true">account_tree</span>
           <span className="truncate">{branch}</span>
         </span>
       )}

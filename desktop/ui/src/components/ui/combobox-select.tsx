@@ -70,7 +70,7 @@ export function ComboboxSelect({ options, value, onChange, placeholder, label, e
                     value={opt}
                     className={cn(
                       'flex cursor-pointer items-center justify-between px-sm py-xs font-label-md text-on-surface',
-                      'data-[highlighted]:bg-primary/10 data-[highlighted]:text-primary',
+                      'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
                       'data-[selected]:font-bold',
                     )}
                   >

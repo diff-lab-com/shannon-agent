@@ -631,7 +631,7 @@ export default function Plugins() {
           )}
           <Button
             onClick={() => handleInstall(entry)}
-            className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
+            className="px-md py-xs rounded-lg hover:bg-primary/10 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined icon-sm">download</span>
             {t("extensions.plugins.install")}
@@ -644,7 +644,7 @@ export default function Plugins() {
   return (
     <div className="p-lg max-w-7xl mx-auto">
       <div className="text-center py-xl">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary-container mb-md">
           <span className="material-symbols-outlined text-primary icon-xl">workspaces</span>
         </div>
         <h2 className="text-headline-md font-headline-md text-on-surface mb-sm">
@@ -681,7 +681,7 @@ export default function Plugins() {
               aria-expanded={addMenuOpen}
               aria-label={t("extensions.plugins.add.aria")}
               data-testid="add-plugin-button"
-              className="px-md py-xs rounded-lg hover:bg-primary/90 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-md py-xs rounded-lg hover:bg-primary/10 cursor-pointer focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined icon-sm">add</span>
               {t("extensions.plugins.add.label")}
@@ -936,7 +936,7 @@ export default function Plugins() {
             data-testid="uninstall-confirm-button"
             disabled={uninstalling || (!confirmInspectFailed && confirmSummary === null)}
             onClick={handleUninstall}
-            className="px-md py-sm rounded-xl bg-error hover:bg-error/90 text-on-error cursor-pointer disabled:opacity-50"
+            className="px-md py-sm rounded-xl bg-error hover:bg-error/10 text-on-error cursor-pointer disabled:opacity-50"
           >
             {t("extensions.plugins.uninstallConfirm.confirm")}
           </Button>

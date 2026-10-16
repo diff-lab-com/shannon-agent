@@ -65,7 +65,7 @@ export default function AboutSettings() {
             <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">info</span>
             </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.about.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.about.title')}</h3>
             {updateInfo && (
               <span
                 className={cn(
@@ -134,7 +134,7 @@ export default function AboutSettings() {
             <div className="p-sm bg-secondary-container rounded-lg text-on-secondary-container flex items-center justify-center">
               <span className="material-symbols-outlined">folder_open</span>
             </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.about.dataDir')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.about.dataDir')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.about.dataDirHelp')}</p>
           {shannonHome && (

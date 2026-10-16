@@ -128,7 +128,7 @@ export function FileRefChip({ raw, className }: FileRefChipProps) {
         className={cn(
           'inline-flex items-baseline gap-[3px] font-mono text-[0.92em] px-[5px] py-[1px] rounded-md border transition-colors',
           interactive
-            ? 'bg-primary-container/25 text-primary border-primary/25 hover:bg-primary-container/50 hover:border-primary/50 cursor-pointer'
+            ? 'bg-primary-container/25 text-primary border-primary/25 hover:bg-primary/10/50 hover:border-primary/50 cursor-pointer'
             : 'bg-surface-container text-on-surface-variant border-outline-variant/15 cursor-progress',
           className,
         )}

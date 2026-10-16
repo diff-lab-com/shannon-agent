@@ -89,7 +89,7 @@ function HeaderModelSelector() {
   };
 
   return (
-    // highlightItemOnHover={false} keeps CSS :hover (bg-primary/5, the
+    // highlightItemOnHover={false} keeps CSS :hover (bg-primary-container, the
     // pre-Base-UI hover paint) separate from the keyboard's data-highlighted
     // (primary-container) — zero visual drift, per fix round 1.
     <Menu.Root open={open} onOpenChange={setOpen} modal={false} highlightItemOnHover={false}>
@@ -141,7 +141,7 @@ function HeaderModelSelector() {
                   aria-selected={false}
                   label={t('header.model.emptyCatalog')}
                   data-testid="header-model-empty"
-                  className="flex w-full cursor-pointer items-center gap-sm px-md py-sm text-left outline-none transition-colors text-on-surface-variant hover:bg-primary/5 data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container"
+                  className="flex w-full cursor-pointer items-center gap-sm px-md py-sm text-left outline-none transition-colors text-on-surface-variant hover:bg-primary/10 data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container"
                   onClick={() => navigate('/settings/models')}
                 >
                   <span className="material-symbols-outlined icon-sm" aria-hidden="true">add</span>
@@ -159,7 +159,7 @@ function HeaderModelSelector() {
                     closeOnClick={false}
                     className={cn(
                       'flex w-full cursor-pointer items-center justify-between gap-sm px-md py-sm text-left outline-none transition-colors',
-                      m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/5',
+                      m.id === status?.model ? 'text-primary font-bold' : 'text-on-surface hover:bg-primary/10',
                       'data-[highlighted]:bg-primary-container data-[highlighted]:text-on-primary-container',
                     )}
                     onClick={() => void handleModelSwitch(m.id)}
@@ -292,15 +292,19 @@ export function Header() {
           </Button>
         )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
+          {/* S6 (parity review 2026-10-15, 页头层级): the top bar carries a
+              14px/600 CONTEXT title (session name on /chat, page name
+              elsewhere) — the design's topbar title, not a 24px page
+              heading. The right-side icon group is unchanged. */}
           {isOpcTask ? (
             <div className="flex items-center gap-sm">
-              <span className="material-symbols-outlined text-primary icon-xl">auto_awesome</span>
+              <span className="material-symbols-outlined text-primary icon-md">auto_awesome</span>
               {/* B1-13: programmatic focus target on route change (no visible
                   ring — the aria-live announcement below carries the signal). */}
-              <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-primary whitespace-nowrap outline-none">{title}</h2>
+              <h2 ref={titleRef} tabIndex={-1} className="text-body-sm font-semibold text-primary whitespace-nowrap outline-none">{title}</h2>
             </div>
           ) : (
-            <h2 ref={titleRef} tabIndex={-1} className="font-headline-md text-headline-md font-extrabold text-on-surface whitespace-nowrap outline-none">{title}</h2>
+            <h2 ref={titleRef} tabIndex={-1} className="text-body-sm font-semibold text-on-surface whitespace-nowrap outline-none">{title}</h2>
           )}
 
           {isOpcTask && (
@@ -600,7 +604,7 @@ export function Header() {
             // Test seam: the dialog's aria-modal masking blinds role queries
             // to everything outside the popup, so e2e anchors via testid.
             data-testid="header-stop-while-waiting"
-            // P0-A2 (axe color-contrast 4.41:1): bg-error/80 alpha-composited
+            // P0-A2 (axe color-contrast 4.41:1): bg-error-container alpha-composited
             // over the scrim too dark for text-on-error in the default dark
             // theme. Opaque bg-error passes AA in both matrix themes
             // (6.46:1 light/dark) and is a strict improvement in every theme.

@@ -39,7 +39,7 @@ export function ModelStep({ task, saving, canContinue, onOpenAddProvider, onBack
             <Button
               onClick={onContinue}
               disabled={saving || !canContinue}
-              className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               {intl.formatMessage({ id: 'welcome.model.continue' })}
             </Button>

@@ -337,7 +337,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
                 <Button
                   size="sm"
                   onClick={handleRejectAll}
-                  className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error-container/60"
+                  className="h-auto px-md py-xs rounded-lg font-label-md bg-error-container/40 text-error hover:bg-error/10/60"
                 >
                   {t('diff.review.rejectAll')}
                 </Button>
@@ -416,7 +416,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
           size="sm"
           onClick={handleApplyAll}
           disabled={applying || filesWithAccepts.length === 0 || deletionBlockedPaths.length > 0}
-          className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/90"
+          className="h-auto px-md py-xs rounded-lg font-label-md bg-primary text-on-primary hover:bg-primary/10"
           aria-label={t('diff.dialog.apply.aria')}
         >
           {applying ? (

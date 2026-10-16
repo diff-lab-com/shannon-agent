@@ -146,7 +146,7 @@ export default function AskUserCard() {
       <div className="p-xl" data-testid="ask-user-card">
         <div className="flex items-center gap-md mb-lg">
           <div className="h-10 w-10 rounded-full bg-secondary-container flex items-center justify-center shrink-0">
-            <span className="material-symbols-outlined text-on-secondary-container" aria-hidden="true">contact_support</span>
+            <span className="material-symbols-outlined text-secondary" aria-hidden="true">contact_support</span>
           </div>
           <div className="flex-1 min-w-0">
             <h3 id="ask-user-title" className="font-headline-sm text-on-surface font-bold">{t('chat.askUser.title')}</h3>

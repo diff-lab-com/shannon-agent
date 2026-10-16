@@ -64,7 +64,7 @@ export function ConfirmDialog({
         <Button
           disabled={busy || confirmDisabled}
           className={`px-md py-sm rounded-xl text-on-primary cursor-pointer disabled:opacity-50 ${
-            destructive ? 'bg-error hover:bg-error/90' : 'bg-primary hover:bg-primary/90'
+            destructive ? 'bg-error hover:bg-error/10' : 'bg-primary hover:bg-primary/10'
           }`}
           onClick={onConfirm}
         >

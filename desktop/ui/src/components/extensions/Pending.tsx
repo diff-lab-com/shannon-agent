@@ -100,7 +100,7 @@ export default function Pending() {
             {mcpFailures.map((srv) => (
               <li
                 key={srv.name}
-                className="border border-error/30 rounded-xl bg-error/5 px-md py-sm"
+                className="border border-error/30 rounded-xl bg-error-container px-md py-sm"
               >
                 <div className="flex items-center gap-xs">
                   <span className="material-symbols-outlined icon-sm text-error" aria-hidden="true">dns</span>

@@ -508,8 +508,6 @@
   "settings.notifications.webhook.title": "Notificaciones por webhook",
   "settings.notifications.webhook.subtitle": "Configura el envío saliente de notificaciones de escritorio por webhook.",
   "nav.mainNav.aria": "Navegación principal",
-  "footer.tokens": "{count, plural, =1 {{count, number} token} other {{count, number} tokens}}",
-  "footer.tasks": "{count, plural, =1 {{count} task} other {{count} tasks}}",
   "palette.action.newChat": "Start new chat",
   "palette.action.openCompanion": "Abrir la ventana de captura rápida",
   "palette.action.newTask": "Create scheduled task",
@@ -536,7 +534,6 @@
   "palette.category.switchModel": "Cambiar modelo",
   "palette.toast.switched": "Switched to {name}",
   "palette.toast.switchFailed": "Failed to switch model",
-  "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
   "tasks.status.completed.label": "Completed",
   "tasks.status.completed.tip": "Task finished successfully",
@@ -3710,7 +3707,6 @@
   "extensions.installed.disabledCtaHint": "Los elementos desactivados se reactivan desde la pestaña {tab}",
   "extensions.installed.manage": "Gestionar",
   "chat.input.placeholder.empty": "Pregúntale lo que quieras a Shannon... Prueba: «Explica este repo» o «Planifica una refactorización de src/foo.rs»",
-  "chat.input.placeholder.project": "Trabajando en {dir}",
   "chat.input.overrideFallback.toast": "El modelo fijado {provider}/{model} ya no está disponible; esta consulta usó el predeterminado global.",
   "chat.tool.input.expand": "Show full payload",
   "chat.tool.input.collapse": "Collapse",
@@ -4499,5 +4495,8 @@
   "chat.streaming.thought": "Thought",
   "chat.streaming.thoughtSeconds": "Thought for {seconds, plural, one {# second} other {# seconds}}",
   "chat.message.turnMeta.cost": "{cost}",
-  "chat.message.turnMeta.done": "Done"
+  "chat.message.turnMeta.done": "Done",
+  "palette.footer.navigate": "Navegar",
+  "palette.footer.select": "Seleccionar",
+  "palette.footer.close": "Cerrar"
 }

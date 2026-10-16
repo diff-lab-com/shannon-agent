@@ -87,7 +87,7 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
                 form.setValue('title', intl.formatMessage({ id: tpl.titleKey }), { shouldValidate: true })
                 form.setValue('objective', intl.formatMessage({ id: tpl.objectiveKey }), { shouldValidate: true })
               }}
-              className="text-left p-sm rounded-xl border border-outline-variant/40 bg-surface-container-lowest hover:border-primary hover:bg-primary/5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              className="text-left p-sm rounded-xl border border-outline-variant/40 bg-surface-container-lowest hover:border-primary hover:bg-primary/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               data-testid={`goal-template-${tpl.id}`}
             >
               <span className="material-symbols-outlined text-primary icon-md mb-xs block" aria-hidden="true">{tpl.icon}</span>
@@ -168,7 +168,7 @@ export default function NewGoalDialog({ open, onClose, onStart }: NewGoalDialogP
             type="submit"
             form="new-goal-form"
             disabled={submitting}
-            className="cursor-pointer bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50"
+            className="cursor-pointer bg-primary text-on-primary hover:bg-primary/10 disabled:opacity-50"
           >
             {submitting ? t('goal.new.submitting') : t('goal.new.submit')}
           </Button>

@@ -88,7 +88,7 @@ export default function ConnectionsSettings() {
   }
 
   return (
-    <div className="space-y-lg">
+    <div className="space-y-3">
       <p className="text-on-surface-variant font-body-sm max-w-prose">
         {t('settings.connections.subtitle')}
       </p>

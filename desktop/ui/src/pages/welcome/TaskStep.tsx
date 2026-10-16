@@ -91,7 +91,7 @@ export function TaskStep({
             onClick={onStart}
             disabled={!draft.trim()}
             data-testid="welcome-composer-start"
-            className="px-lg py-sm bg-primary text-on-primary rounded-full font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            className="px-lg py-sm bg-primary text-on-primary rounded-full font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/10 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
           >
             {intl.formatMessage({ id: 'welcome.composer.start' })}
           </Button>

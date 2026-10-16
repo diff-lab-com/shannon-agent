@@ -86,8 +86,8 @@ export default function TaskCalendarView({
                 aria-pressed={isSelected}
                 title={dayFires.length > 0 ? intl.formatMessage({ id: 'tasks.taskCalendarView.scheduledRuns' }, { count: dayFires.length }) : undefined}
                 className={cn('min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all',
-                  isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' :
-                  isToday ? 'border-primary/30 bg-primary/5' :
+                  isSelected ? 'border-primary bg-primary-container ring-1 ring-primary/20' :
+                  isToday ? 'border-primary/30 bg-primary-container' :
                   'border-outline-variant/10 hover:bg-surface-container-low'
                 )}
                 onClick={() => onSelectDay(isSelected ? null : day)}

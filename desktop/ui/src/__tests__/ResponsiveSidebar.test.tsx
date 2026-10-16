@@ -38,9 +38,9 @@ describe('Responsive sidebar', () => {
     expect(shannonElements.length).toBe(1)
   })
 
-  it('footer shows connection indicator when no usage', () => {
+  it('renders no global footer (裁决 D 2026-10-15: footer hidden, ChatStatusBar only)', () => {
     render(wrap(<Layout />))
-    expect(screen.getByText('Shannon Code')).toBeInTheDocument()
+    expect(screen.queryByRole('contentinfo')).not.toBeInTheDocument()
   })
 })
 

@@ -61,9 +61,11 @@ const APPROVAL_SOURCES: readonly InboxSource[] = ['session_approval']
 /// rows. Anything else renders no badge rather than an invented label.
 const RISK_TIERS: readonly string[] = ['critical', 'high', 'medium', 'low']
 
-/// Risk badge container pair — mirrors the Header permission dialog's four
-/// distinguishable tiers (Header.tsx): critical=error / high=secondary /
-/// medium=warning (amber is the high-risk signal) / low=tertiary.
+/// Risk badge container pair — G1-B S2 (设计 05 「中风险」琥珀胶囊): risk is
+/// the amber semantic, so HIGH sheds the solid blue container (站内无此语义)
+/// for the warn dim capsule — amber text + amber border + faint amber fill.
+/// critical stays error-red (one tier stronger, same capsule shape);
+/// medium/low keep their container pairs for tier separation.
 /// Exported for tests (the container-pair mapping is a contract).
 export function riskBadgeClass(risk: string): string {
   switch (risk) {
@@ -300,8 +302,21 @@ function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onT
           />
         </label>
         <div className="flex items-start gap-md flex-1 min-w-0">
-          <div className={cn("w-10 h-10 rounded-xl bg-surface-container-low flex items-center justify-center", meta.color, "shrink-0")}>
-            <span className="material-symbols-outlined icon-lg" aria-hidden="true">{meta.icon}</span>
+          {/* G1-B 图标 tile 语言 (设计 05): 40px circle → 32px rounded-lg
+              square tile with a semantic dim fill + 16px thin-line icon —
+              成功绿 dim / 失败红 dim / 待处理紫 dim, neutral otherwise. The
+              source label keeps meta.color for the group headers. */}
+          <div className={cn(
+            "w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+            runOutcome === 'failed'
+              ? 'bg-error-container text-on-error-container'
+              : runOutcome === 'succeeded'
+                ? 'bg-success-container text-on-success-container'
+                : isPending
+                  ? 'bg-primary-container text-on-primary-container'
+                  : 'bg-on-surface-variant/10 text-on-surface-variant',
+          )}>
+            <span className="material-symbols-outlined icon-sm" aria-hidden="true">{meta.icon}</span>
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs flex-wrap">
@@ -336,7 +351,10 @@ function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onT
                   {t('inbox.runStatus.succeeded')}
                 </span>
               )}
-              <span className={cn("font-label-sm text-label-xs font-bold uppercase tracking-wider", meta.color)}>{t(meta.labelKey)}</span>
+              {/* G1-B S2: the approval source tag recedes to muted — the risk
+                  capsule and the icon tile carry the colour now (design 05:
+                  the 「APPROVAL」 label is grey metadata, not a blue badge). */}
+              <span className={cn("font-label-sm text-label-xs font-bold uppercase tracking-wider", isApprovalSource ? 'text-on-surface-variant' : meta.color)}>{t(meta.labelKey)}</span>
               {/* 收件箱审批闭环: the prompt's risk tier, in the Header
                   permission dialog's four-tier container-pair language.
                   Colour never rides alone — the tier word is the content. */}
@@ -406,12 +424,15 @@ function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onT
               the honest 「去处理」 jump below. */}
           {inlineApproval ? (
             <>
+              {/* G1-B S2 (设计 05): 批准=绿描边 / 拒绝=红描边 — the semantic
+                  pair, not accent purple vs neutral ghost. */}
               <Button
                 size="sm"
+                variant="ghost"
                 disabled={deciding}
                 aria-label={t('inbox.approval.approve')}
                 title={t('inbox.approval.approve')}
-                className="cursor-pointer inline-flex items-center gap-xs"
+                className="cursor-pointer inline-flex items-center gap-xs border border-success/40 bg-success-container text-on-success-container hover:bg-success/10 hover:text-success"
                 onClick={() => void decide(true)}
               >
                 <span className="material-symbols-outlined icon-sm">check</span>
@@ -423,7 +444,7 @@ function InboxCard({ item, selected, focused, highlighted, autoPausedReason, onT
                 disabled={deciding}
                 aria-label={t('inbox.approval.reject')}
                 title={t('inbox.approval.reject')}
-                className="cursor-pointer inline-flex items-center gap-xs border border-outline-variant/40 text-on-surface-variant hover:text-error hover:border-error/40 hover:bg-error/10"
+                className="cursor-pointer inline-flex items-center gap-xs border border-error/40 bg-error-container text-on-error-container hover:bg-error/10 hover:text-error"
                 onClick={() => void decide(false)}
               >
                 <span className="material-symbols-outlined icon-sm">close</span>
@@ -1097,13 +1118,29 @@ export default function Triage() {
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
           <p className="text-on-surface-variant">{t('inbox.subtitle')}</p>
           <div className="flex items-center gap-md">
+            {/* G1-B S5/S6 (设计 05 统计 tile): the pending tile leads with the
+                number — 22px mono tabular, error-tinted while work waits (the
+                red is the same attention semantic the rail badge uses). */}
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">mark_email_unread</span>
-              <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'inbox.stats.pending' }, { count: stats.pending })}</span>
+              <span className="flex flex-col min-w-0">
+                <span
+                  data-testid="inbox-stat-pending-count"
+                  className={cn(
+                    'text-headline-sm leading-none font-bold font-mono tabular-nums',
+                    stats.pending > 0 ? 'text-error' : 'text-on-surface',
+                  )}
+                >
+                  {stats.pending}
+                </span>
+                <span className="font-label-xs text-on-surface-variant uppercase tracking-wider">
+                  {t('inbox.status.pending')}
+                </span>
+              </span>
             </div>
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">today</span>
-              <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'inbox.stats.today' }, { count: stats.today })}</span>
+              <span className="font-label-md text-on-surface tabular-nums">{intl.formatMessage({ id: 'inbox.stats.today' }, { count: stats.today })}</span>
             </div>
             {/* G6 (design 05:157-161): 本周节省 stat — processed items this
                 week × the configured minutes-of-manual-work stand-in (补2:
@@ -1118,7 +1155,7 @@ export default function Triage() {
             >
               <span className="material-symbols-outlined icon-md text-on-surface-variant" aria-hidden="true">timer</span>
               <span className="flex flex-col min-w-0">
-                <span className="font-label-md text-on-surface">
+                <span className="font-label-md text-on-surface tabular-nums">
                   {intl.formatMessage({ id: 'inbox.stats.saved' }, { minutes: weekSaved.minutes, count: weekSaved.count })}
                 </span>
                 <SavedMinutesFootnote minutes={manualMinutes} onSaved={setManualMinutes} />
@@ -1133,21 +1170,41 @@ export default function Triage() {
           <ProjectFilterChip label={projectLabel} onRemove={clearProject} />
         )}
 
-        {/* Filter bar: status */}
+        {/* Filter bar: status — G1-B S1 (设计 05 筛选行): every chip carries
+            the hairline border (unselected included); the active one is the
+            violet dim `.chip.acc`, never a solid fill. Counts render only
+            where the client actually knows them (pending from the stats
+            hook; 「all」 only while no status filter narrows the list). */}
         <div className="flex items-center gap-sm mb-sm flex-wrap">
           <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">{t('inbox.status.label')}</span>
           {STATUS_OPTIONS.map(opt => {
             const active = statusFilter === (opt === 'all' ? undefined : opt)
+            const count =
+              opt === 'all'
+                ? (statusFilter == null ? items.length : undefined)
+                : opt === 'pending'
+                  ? stats.pending
+                  : undefined
             return (
-              <Button
+              <button
                 key={opt}
-                variant="ghost"
+                type="button"
                 onClick={() => updateParams({ status: opt === 'all' ? null : opt })}
                 aria-pressed={active}
-                className={cn("px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer", active ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10')}
+                className={cn(
+                  'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+                  active
+                    ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                    : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
+                )}
               >
                 {t(opt === 'all' ? 'inbox.filter.all' : `inbox.status.${opt}`)}
-              </Button>
+                {count != null && (
+                  <span data-testid={`inbox-status-count-${opt}`} className="font-mono tabular-nums">
+                    {count}
+                  </span>
+                )}
+              </button>
             )
           })}
         </div>
@@ -1155,6 +1212,8 @@ export default function Triage() {
         {/* Q4 2026-09: source chips (6) overflow on narrow windows — collapse
             them into a dropdown that mirrors the wide layout's semantics. */}
         <div className="flex items-center gap-sm mb-lg flex-wrap">
+          {/* G1-B S1: the source trigger / grouping / sort controls join the
+              same chip geometry (active = violet dim). */}
           <SourceFilterDropdown
             value={sourceFilter}
             onChange={src => updateParams({ source: src ?? null })}
@@ -1162,34 +1221,34 @@ export default function Triage() {
             allLabel={t('inbox.filter.all')}
             label={t('inbox.source.label')}
           />
-          <Button
+          <button
             type="button"
-            variant="ghost"
             onClick={() => updateParams({ group: groupBySource ? null : 'source' })}
             aria-pressed={groupBySource}
             aria-label={t('inbox.groupBySource')}
             title={t('inbox.groupBySource')}
             className={cn(
-              'px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
+              'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
               groupBySource
-                ? 'bg-primary-container text-on-primary-container font-bold'
-                : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10',
+                ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+                : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
             )}
           >
-            <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">folder_open</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">folder_open</span>
             {t('inbox.groupBySource')}
-          </Button>
-          <Button
-            variant="ghost"
+          </button>
+          <button
+            type="button"
             onClick={() => updateParams({ sort: sortOrder === 'newest' ? 'oldest' : 'newest' })}
             aria-label={t('inbox.sort.aria')}
-            className="ml-auto px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10"
+            title={t(sortOrder === 'newest' ? 'inbox.sort.newest' : 'inbox.sort.oldest')}
+            className="chip ml-auto cursor-pointer border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
-            <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">
+            <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">
               {sortOrder === 'newest' ? 'arrow_downward' : 'arrow_upward'}
             </span>
             {t(sortOrder === 'newest' ? 'inbox.sort.newest' : 'inbox.sort.oldest')}
-          </Button>
+          </button>
         </div>
 
         {/* Bulk-action bar (visible when items are selected) — tinted glass:
@@ -1200,7 +1259,7 @@ export default function Triage() {
           <div
             role="region"
             aria-label={t('inbox.bulk.title')}
-            className="glass-surface animate-panel-in sticky top-0 z-raised mb-md flex items-center gap-md px-md py-sm rounded-xl !border-primary/30 !bg-primary/10"
+            className="glass-surface animate-panel-in sticky top-0 z-raised mb-md flex items-center gap-md px-md py-sm rounded-xl !border-primary/30 !bg-primary-container"
           >
             <span className="font-label-md text-primary font-bold">
               {intl.formatMessage({ id: 'inbox.bulk.selected' }, { count: effectiveSelected.size })}
@@ -1209,7 +1268,7 @@ export default function Triage() {
               variant="ghost"
               disabled={bulkRunning}
               onClick={bulkMarkRead}
-              className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">done_all</span>
               {t('inbox.bulk.markRead')}
@@ -1218,7 +1277,7 @@ export default function Triage() {
               variant="ghost"
               disabled={bulkRunning}
               onClick={bulkArchive}
-              className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined icon-sm mr-xs align-middle" aria-hidden="true">archive</span>
               {t('inbox.bulk.archive')}
@@ -1423,22 +1482,26 @@ function SourceFilterDropdown({
   })
   return (
     <div className="relative">
-      <Button
-        variant="ghost"
+      {/* G1-B S1: the trigger is a chip — violet dim while a source filter is
+          set, plain hairline chip otherwise. */}
+      <button
+        type="button"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={label}
         title={label}
         onClick={() => setOpen(v => !v)}
         className={cn(
-          'inline-flex items-center gap-xs px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer',
-          value ? 'bg-primary-container text-on-primary-container font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'
+          'chip cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
+          value
+            ? 'border border-primary/40 bg-primary-container text-on-primary-container font-semibold'
+            : 'border border-outline-variant/40 bg-surface-container/30 text-on-surface-variant hover:bg-surface-container/60 hover:text-on-surface',
         )}
       >
-        <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">{triggerIcon}</span>
-        <span className="align-middle">{triggerLabel}</span>
-        <span className="material-symbols-outlined icon-sm align-middle" aria-hidden="true">expand_more</span>
-      </Button>
+        <span className="material-symbols-outlined" style={{ fontSize: 13 }} aria-hidden="true">{triggerIcon}</span>
+        <span>{triggerLabel}</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 12, opacity: 0.6 }} aria-hidden="true">expand_more</span>
+      </button>
       {open && (
         <DropdownMenu
           open

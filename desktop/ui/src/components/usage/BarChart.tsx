@@ -6,7 +6,7 @@
 // is "glance and act", not pixel-perfect dashboarding — the audit (table)
 // view sits next to it for precise reconciliation.
 
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { cn } from '@/lib/utils'
 
@@ -33,12 +33,17 @@ interface BarChartProps {
   formatValue?: (n: number) => string
   /** Optional a11y label for the chart svg (axe svg-img-alt). */
   ariaLabel?: string
+  /** G1-B S3 (设计 06 柱图高亮柱): fill the LAST column with the aurora
+   *  gradient signature instead of the series colors — "today" is the bar
+   *  the user came to read. The legend keeps explaining the series colors. */
+  highlightLastColumn?: boolean
 }
 
 const FALLBACK_COLORS = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-warning']
 
-export function BarChart({ data, series, height = 220, formatValue, ariaLabel }: BarChartProps) {
+export function BarChart({ data, series, height = 220, formatValue, ariaLabel, highlightLastColumn }: BarChartProps) {
   const intl = useIntl()
+  const gradId = `aurora-bar-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const [hover, setHover] = useState<{ idx: number; x: number; y: number } | null>(null)
   const fmt = formatValue ?? ((n: number) => n.toLocaleString())
 
@@ -94,6 +99,19 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
         role="img"
         aria-label={ariaLabel ?? intl.formatMessage({ id: 'usage.chart.bar.aria' })}
       >
+        {/* G1-B S3: the aurora highlight gradient — rides the fixed brand
+            constants from index.css's :root (same signature as the aurora
+            utilities, not a theme token). 90deg left→right, violet → azure
+            → cyan. */}
+        {highlightLastColumn && (
+          <defs>
+            <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stopColor="var(--vio)" />
+              <stop offset="0.5" stopColor="var(--aurora-mid)" />
+              <stop offset="1" stopColor="var(--aurora-cyan)" />
+            </linearGradient>
+          </defs>
+        )}
         {/* Y-axis grid lines + tick labels (0%, 25%, 50%, 75%, 100%) */}
         {[0, 0.25, 0.5, 0.75, 1].map(t => (
           <g key={t}>
@@ -137,6 +155,9 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
                   seg.color ??
                   FALLBACK_COLORS[sIdx % FALLBACK_COLORS.length] ??
                   FALLBACK_COLORS[0]
+                // G1-B S3: the highlighted (latest) column takes the aurora
+                // gradient fill and full opacity; history stays dim.
+                const highlighted = highlightLastColumn && idx === data.length - 1
                 // SVG <rect> ignores background-color — the legend <div>s
                 // keep bg-*, bars need fill-*. The fill classes are spelled
                 // as literals (FILL_FALLBACKS) because Tailwind's scanner
@@ -155,7 +176,8 @@ export function BarChart({ data, series, height = 220, formatValue, ariaLabel }:
                     y={y}
                     width={colW}
                     height={Math.max(segH, 0)}
-                    className={cn(fillClass, 'opacity-90')}
+                    fill={highlighted ? `url(#${gradId})` : undefined}
+                    className={cn(fillClass, highlighted ? 'opacity-100' : 'opacity-90')}
                     rx={2}
                     onMouseEnter={(e) => {
                       const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect()

@@ -89,7 +89,8 @@ export default function CurrentSessionCostPanel() {
         {t('usage.ctx.explainer')}
       </p>
       <div className="flex items-baseline gap-sm mb-sm">
-        <span className="font-headline-md text-headline-md font-bold text-on-surface">
+        {/* G1-B S5 (design `.money`): token counts read mono tabular. */}
+        <span className="font-headline-md text-headline-md font-bold text-on-surface font-mono tabular-nums">
           {intl.formatNumber(breakdown.totalTokens)}
         </span>
         <span className="font-body-sm text-on-surface-variant">
@@ -100,7 +101,8 @@ export default function CurrentSessionCostPanel() {
       </div>
       {pct != null && (
         <div className="h-2 rounded-full bg-surface-container-low overflow-hidden mb-md" role="progressbar" aria-valuenow={Math.round(pct)} aria-valuemin={0} aria-valuemax={100}>
-          <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+          {/* G1-B S3: the window-fill bar carries the aurora signature. */}
+          <div className="h-full aurora-bar transition-all" style={{ width: `${pct}%` }} />
         </div>
       )}
       <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-lg gap-y-xs mb-md">

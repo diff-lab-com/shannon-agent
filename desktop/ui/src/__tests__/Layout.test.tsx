@@ -32,9 +32,12 @@ describe('Layout', () => {
     expect(screen.getByTestId('outlet-content')).toBeInTheDocument()
   })
 
-  it('renders footer', () => {
+  it('renders no global footer (裁决 D 2026-10-15: ChatStatusBar is the only status line)', () => {
     render(wrap(<Layout />))
-    // Footer shows "Shannon Code" when no usage/status
-    expect(screen.getByText('Shannon Code')).toBeInTheDocument()
+    // 裁决 D: the footer is removed entirely — the design has one status
+    // line (the chat page's ChatStatusBar), so the shell renders none, not
+    // even the idle "Shannon Code" brand segment.
+    expect(screen.queryByRole('contentinfo')).not.toBeInTheDocument()
+    expect(screen.queryByText('Shannon Code')).not.toBeInTheDocument()
   })
 })

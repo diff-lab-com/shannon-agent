@@ -186,17 +186,17 @@ export default function SessionSettings() {
   return (
     <div className="pb-xl">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.session.title')}</p>
-      <div className="space-y-lg">
+      <div className="space-y-3">
         {/* ① 自动压缩上下文 — off = full model I/O preserved. The engine is
             rebuilt per message, so the ruling wording is "对下一条消息生效"
             (not "new session"). */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-autocompact-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">compress</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.compaction.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">compress</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.compaction.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="new-session" />
           </div>
@@ -227,7 +227,7 @@ export default function SessionSettings() {
             <div className="p-sm bg-primary-container rounded-lg text-on-primary-container flex items-center justify-center">
               <span className="material-symbols-outlined">auto_delete</span>
             </div>
-            <h3 className="font-headline-md text-headline-md font-bold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.advanced.sessionGc.title')}</h3>
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.advanced.sessionGc.desc')}</p>
           <div className="flex items-center justify-between gap-md">
@@ -267,12 +267,12 @@ export default function SessionSettings() {
             instant badge marks the toggle persisting immediately — no
             restart; the help copy spells out the scan cadence). */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-auto-archive-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">archive</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.autoArchive.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">archive</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.autoArchive.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>
@@ -321,12 +321,12 @@ export default function SessionSettings() {
             sessions untouched, duplicated/branched sessions unaffected,
             pref saved on this device). */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-memory-bypass-default-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">psychology_alt</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.memoryBypassDefault.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">psychology_alt</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.memoryBypassDefault.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="new-session" />
           </div>
@@ -351,12 +351,12 @@ export default function SessionSettings() {
             The ask_user handler reads the switch live before each question's
             wait, so a flip applies to the NEXT question — instant. */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-ask-auto-continue-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">contact_support</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.askAutoContinue.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">contact_support</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.askAutoContinue.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>
@@ -381,18 +381,18 @@ export default function SessionSettings() {
             Ctrl+Enter stays an explicit steer in both modes — spelled out in
             the help copy. Read live per send → instant. */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-send-behavior-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>bolt</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.sendBehavior.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">bolt</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.sendBehavior.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>
           <p className="font-body-sm text-on-surface-variant mb-md">{t('settings.session.sendBehavior.help')}</p>
           <div role="radiogroup" aria-label={t('settings.session.sendBehavior.title')} data-testid="session-send-behavior-group">
-            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
+            <div className="flex rounded-[9px] bg-surface-container-low p-[2px] gap-[2px] border border-outline-variant/30">
               {([
                 { id: 'steer' as const, labelKey: 'settings.session.sendBehavior.steer' },
                 { id: 'queue' as const, labelKey: 'settings.session.sendBehavior.queue' },
@@ -405,11 +405,11 @@ export default function SessionSettings() {
                   data-testid={`session-send-behavior-${opt.id}`}
                   onClick={() => handleSendBehaviorChange(opt.id)}
                   className={cn(
-                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'flex-1 min-w-0 px-xs py-sm rounded-[7px] font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
                     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                     sendBehavior === opt.id
-                      ? 'bg-primary text-on-primary font-bold shadow-e1'
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                      ? 'bg-primary-container text-on-primary-container font-semibold'
+                      : 'text-on-surface-variant hover:text-on-surface',
                   )}
                 >
                   <span className="block truncate">{t(opt.labelKey)}</span>
@@ -424,12 +424,12 @@ export default function SessionSettings() {
             localStorage-backed display prefs (lib/toolGrouping), all default
             ON, applied live on the next render — hence the instant badge. */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="session-grouping-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{ fontVariationSettings: "'FILL' 1" }} aria-hidden="true">workspaces</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.session.grouping.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">workspaces</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.session.grouping.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>

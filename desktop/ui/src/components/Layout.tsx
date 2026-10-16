@@ -9,7 +9,6 @@ import { Banner } from '@/components/ui/banner';
 import { Button } from '@/components/ui/button';
 import CommandPalette from './CommandPalette';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
-import { useChat } from '@/context/ChatContext';
 import { useSessions } from '@/context/SessionContext';
 import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -31,7 +30,7 @@ const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle:
 export const useSidebar = () => useContext(SidebarContext)
 
 /** B1-16: chunk-loading fallback for lazy routes. Lives at the Outlet (not
- *  the app root) so the shell — sidebar, header, footer — stays mounted
+ *  the app root) so the shell — sidebar, header — stays mounted
  *  while a page chunk loads instead of the whole skeleton flashing away. */
 export function PageLoader() {
   return (
@@ -42,28 +41,14 @@ export function PageLoader() {
 }
 
 export function Layout() {
-  const { usage } = useChat();
   const { createSession, sessions, switchSession, windowSessionId } = useSessions();
-  const { backgroundTasks, config, providerStatus, loading, initError, retryInit } = useCatalog();
+  const { providerStatus, loading, initError, retryInit } = useCatalog();
   const navigate = useNavigate();
   // B1-12 (review P1-7): remounts the route ErrorBoundary on navigation so a
   // crashed page's fallback can never outlive its route — without the key,
   // one crash covered every page visited afterwards.
   const location = useLocation();
   const intl = useIntl();
-  // B6-36: the footer amount used to bypass Intl with `$…toFixed(4)`; format
-  // as USD currency in the app locale instead (grouping + decimal separator
-  // follow the locale; up to 4 decimals like the usage ledger).
-  const fmtFooterCost = useCallback(
-    (n: number) =>
-      new Intl.NumberFormat(intl.locale, {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }).format(n),
-    [intl.locale],
-  );
   // P1-1 window mode: this window is pinned to one session — sidebar hidden
   // (lowest-cost slim chrome; nav lives in the main window), content spans
   // the full width, and the native window title tracks the session title.
@@ -182,8 +167,13 @@ export function Layout() {
     }
   }, [switchSession, navigate])
 
-  const activeBgTasks = backgroundTasks.filter(t => t.status === 'running').length
-  const version = config?.version ?? ''
+  // 裁决 D (2026-10-15 parity review §5): the Layout footer is GONE. The
+  // design has exactly one status line — the chat page's ChatStatusBar
+  // (02c D5) — and the footer's brand/tasks/version/tokens segments were the
+  // "double status bar" the review called out. There is no exception state
+  // left to render here: backend init failure already gets the error Banner
+  // above, and the demo identity lives on the pages that are demos. The
+  // footer.* i18n keys are retired with it.
 
   return (
     <SidebarContext.Provider value={{ open: sidebarOpen, toggle: toggleSidebar, close: closeSidebar, reportWidth: setSidebarWidth }}>
@@ -217,7 +207,9 @@ export function Layout() {
             fixed attachment, above the surface fill, under every route
             content; plain gradients, no backdrop-filter (blur budget ≤4).
             Theme intensity is handled inside index.css (data-theme-mode). */}
-        <main role="main" className="pt-16 pb-footer h-screen flex flex-col relative bg-surface aurora-ambient" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
+        {/* 裁决 D: footer removed entirely (整条隐藏) — the content tier now
+            owns the full window height; see the comment above the return. */}
+        <main role="main" className="pt-16 h-screen flex flex-col relative bg-surface aurora-ambient" style={{ marginLeft: 'var(--sidebar-w)', width: 'calc(100% - var(--sidebar-w))' }}>
           {initError && (
             <Banner tone="error" className="items-center shrink-0">
               <span className="material-symbols-outlined icon-md text-error shrink-0" aria-hidden="true">error</span>
@@ -237,46 +229,6 @@ export function Layout() {
             </Suspense>
           </ErrorBoundary>
         </main>
-        {/* G1: footer is persistent chrome — glass-surface (was a hand-rolled
-            bg/90+backdrop-blur-sm; the utility adds the inset highlight,
-            hairline and contain:paint). */}
-        <footer role="contentinfo" className="glass-surface fixed bottom-0 right-0 h-footer flex items-center justify-between px-lg z-header" style={{ left: 'var(--sidebar-w)' }}>
-          {/* U2: footer carries runtime + usage only — tokens/cost, active
-              tasks, version. Provider/model live in the Header and the
-              session count is visible in the sidebar rail (U1). U9: the
-              agents count was removed — it counted agent *definitions*, not
-              running work, so it had no action meaning for the user. */}
-          <span className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-sm">
-            {usage ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-tertiary shrink-0" />
-                <span>{intl.formatMessage({ id: 'footer.tokens' }, { count: (usage.input_tokens + usage.output_tokens) })}</span>
-                {usage.cost_usd != null && (
-                  <>
-                    <span className="text-outline-variant">·</span>
-                    <span className="text-primary">{fmtFooterCost(usage.cost_usd)}</span>
-                  </>
-                )}
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-outline shrink-0" />
-                <span>{intl.formatMessage({ id: 'app.brandName' })}</span>
-              </>
-            )}
-          </span>
-          <div className="flex items-center gap-md font-label-sm text-label-sm text-on-surface-variant">
-            {activeBgTasks > 0 && (
-              <span className="flex items-center gap-xs text-on-surface-variant">
-                <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-                {intl.formatMessage({ id: 'footer.tasks' }, { count: activeBgTasks })}
-              </span>
-            )}
-            {version && (
-              <span className="hidden md:inline text-on-surface-variant">v{version}</span>
-            )}
-          </div>
-        </footer>
       </div>
     </SidebarContext.Provider>
   );

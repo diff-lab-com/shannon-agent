@@ -263,18 +263,18 @@ describe('Sidebar — Navigation', () => {
   it('keeps the Connectors row active on /extensions sibling tabs', () => {
     render(wrap(<Sidebar />, { path: '/extensions/market' }))
     const connectors = screen.getByRole('link', { name: /Connectors/ })
-    expect(connectors.className).toContain('bg-primary/10')
-    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' }).className).not.toContain('bg-primary/10')
+    expect(connectors.className).toContain('bg-primary-container')
+    expect(screen.getByRole('link', { name: 'Tasks · Ctrl2' }).className).not.toContain('bg-primary-container')
   })
 
   it('keeps the Connectors row active at the linked hub tab itself', () => {
     render(wrap(<Sidebar />, { path: '/extensions/featured' }))
-    expect(screen.getByRole('link', { name: /Connectors/ }).className).toContain('bg-primary/10')
+    expect(screen.getByRole('link', { name: /Connectors/ }).className).toContain('bg-primary-container')
   })
 
   it('Connectors prefix match does not leak to look-alike routes', () => {
     render(wrap(<Sidebar />, { path: '/extensions-sibling' }))
-    expect(screen.getByRole('link', { name: /Connectors/ }).className).not.toContain('bg-primary/10')
+    expect(screen.getByRole('link', { name: /Connectors/ }).className).not.toContain('bg-primary-container')
   })
 })
 

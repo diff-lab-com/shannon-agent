@@ -266,7 +266,7 @@ export default function Agents() {
                   type="button"
                   onClick={() => setRemoveTarget(agent.name)}
                   disabled={busyId === `uninstall:${agent.name}`}
-                  className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                  className="bg-error-container/40 text-on-error-container hover:bg-error/10/70"
                 >
                   {busyId === `uninstall:${agent.name}` ? "…" : t('extensions.agents.remove')}
                 </Button>

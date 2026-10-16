@@ -34,6 +34,11 @@ import EffectBadge from './EffectBadge'
 // 12-settings-security.html:163-173) — killing the two-guidance-card ring
 // jump. What stays here is a short link card: the current tier readout
 // (same honest resolver) plus a jump to where the tier is configured.
+//
+// G1-B S6 (design 12-settings-*): density pass — cards pad 16px, stack gap
+// 12px, card titles drop to 13px/600 beside a 16px thin-line icon, and the
+// paragraph descriptions read as muted hints instead of 32px-margined
+// blocks. Card copy is untouched (i18n freeze) — only the chrome tightened.
 
 export default function GeneralSettings() {
   const { config, providerStatus, refreshConfig } = useCatalog()
@@ -194,24 +199,24 @@ export default function GeneralSettings() {
     <div className="max-w-narrow">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.general.subheader')}</p>
 
-      <div className="space-y-lg">
+      <div className="space-y-3">
         {/* Autonomy Level — short link card since design-parity R2: the
             默认执行模式 entity card (four-stop ladder + expert picker,
             same approval_mode key as the composer) LIVES in 权限与安全
             (PermissionsPane). One-liner keeps the honest raw-value readout;
             the button jumps straight there. */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2"
           data-testid="approval-mode-link-card"
         >
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">auto_awesome</span>
             {/* R3 wording: title aligns with the Permissions pane's 实体卡 — one
                 config, one name (「默认执行模式」); 审批模式 stays the concept
                 term in the description below. */}
-            <h3 className="font-headline-md text-headline-md">{t('settings.permissions.executionMode.title')}</h3>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.permissions.executionMode.title')}</h3>
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">
+          <p className="font-body-sm text-on-surface-variant mb-sm">
             {intl.formatMessage({ id: 'settings.general.approvalMode.managedInPermissions' }, {
               label: currentMode.rawLabel ?? t(currentMode.labelKey),
             })}
@@ -227,12 +232,12 @@ export default function GeneralSettings() {
         </section>
 
         {/* Language */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>translate</span>
-            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">translate</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{intl.formatMessage({ id: 'settings.language.help' })}</p>
           {/* Task 2 (settings-parity R3): the 10-button wall became a select
               styled after the link-target picker below. First option is the
               explicit "follow system" pref — persisted verbatim as 'system'
@@ -254,32 +259,39 @@ export default function GeneralSettings() {
         </section>
 
         {/* P2-⑧ Display density */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>format_line_spacing</span>
-            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.density.title' })}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">format_line_spacing</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{intl.formatMessage({ id: 'settings.density.title' })}</h3>
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.density.help' })}</p>
-          <div className="flex flex-wrap gap-sm">
+          <p className="font-body-sm text-on-surface-variant mb-sm">{intl.formatMessage({ id: 'settings.density.help' })}</p>
+          {/* G1-B S1 (设计 `.seg`): contained segmented control — subtle
+              shell + hairline border + radius-9, the selected option is a
+              violet dim chip instead of the solid primary pill. */}
+          <div
+            role="group"
+            aria-label={intl.formatMessage({ id: 'settings.density.title' })}
+            className="inline-flex flex-wrap p-[2px] gap-[2px] rounded-[9px] border border-outline-variant/30 bg-surface-container-low"
+          >
             {([
               { id: 'auto' as const, labelKey: 'settings.density.auto' },
               { id: 'comfortable' as const, labelKey: 'settings.density.comfortable' },
               { id: 'compact' as const, labelKey: 'settings.density.compact' },
             ]).map(opt => (
-              <Button
+              <button
                 key={opt.id}
-                variant={density === opt.id ? 'default' : 'outline'}
+                type="button"
                 onClick={() => handleDensityChange(opt.id)}
                 aria-pressed={density === opt.id}
                 className={cn(
-                  'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
+                  'h-6 px-2.5 rounded-[7px] font-label-sm text-label-sm cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                   density === opt.id
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50',
+                    ? 'bg-primary-container text-on-primary-container font-semibold'
+                    : 'text-on-surface-variant hover:text-on-surface',
                 )}
               >
                 {intl.formatMessage({ id: opt.labelKey })}
-              </Button>
+              </button>
             ))}
           </div>
         </section>
@@ -288,16 +300,17 @@ export default function GeneralSettings() {
             model's reasoning blocks (history bubbles + live stream). Placed
             next to the other display cards (language / density); segmented
             control mirrors the approval-mode one. */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>psychology</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.general.showThinking.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">psychology</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.general.showThinking.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.showThinking.help')}</p>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.general.showThinking.help')}</p>
           <div role="radiogroup" aria-label={t('settings.general.showThinking.title')} data-testid="settings-show-thinking-group">
-            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30">
+            {/* G1-B S1 (设计 `.seg`): container seg, violet dim selected. */}
+            <div className="flex rounded-[9px] bg-surface-container-low p-[2px] gap-[2px] border border-outline-variant/30">
               {([
                 { id: 'all' as const, labelKey: 'settings.general.showThinking.all' },
                 { id: 'first' as const, labelKey: 'settings.general.showThinking.first' },
@@ -311,11 +324,11 @@ export default function GeneralSettings() {
                   data-testid={`settings-show-thinking-${opt.id}`}
                   onClick={() => handleShowThinkingChange(opt.id)}
                   className={cn(
-                    'flex-1 min-w-0 px-xs py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'flex-1 min-w-0 px-xs py-sm rounded-[7px] font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
                     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                     showThinking === opt.id
-                      ? 'bg-primary text-on-primary font-bold shadow-e1'
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                      ? 'bg-primary-container text-on-primary-container font-semibold'
+                      : 'text-on-surface-variant hover:text-on-surface',
                   )}
                 >
                   <span className="block truncate">{t(opt.labelKey)}</span>
@@ -329,14 +342,14 @@ export default function GeneralSettings() {
             the welcome card's 「换一批」 refresh + workspace-aware example
             filtering. Purely a presentation switch — static local rules,
             zero model calls either way; a flip applies immediately. */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>recommend</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.general.suggestions.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">recommend</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.general.suggestions.title')}</h3>
             <span className="flex-1" />
             <EffectBadge kind="instant" />
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.suggestions.help')}</p>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.general.suggestions.help')}</p>
           <div className="flex justify-between items-center py-sm gap-md">
             <span className="min-w-0">
               <span className="font-label-md text-on-surface block">{t('settings.general.suggestions.toggle')}</span>
@@ -352,8 +365,8 @@ export default function GeneralSettings() {
         </section>
 
         {/* Session Info */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
-          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.general.sessionInfo.title')}</h3>
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
+          <h3 className="text-label-lg font-semibold text-on-surface mb-md">{t('settings.general.sessionInfo.title')}</h3>
           <div className="space-y-sm">
             {/* Batch D4: artifact auto-open preference (recovered from the
                 retired ArtifactPanel — now the only surface for the toggle). */}
@@ -453,12 +466,12 @@ export default function GeneralSettings() {
         <FeedbackSummaryCard />
 
         {/* P1-6 — migration wizard entry (import from Claude Code / ZCode) */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>move_in</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.migration.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">move_in</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.migration.title')}</h3>
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.migration.desc')}</p>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.migration.desc')}</p>
           <Button
             variant="outline"
             onClick={() => setMigrationOpen(true)}
@@ -485,14 +498,14 @@ export default function GeneralSettings() {
               probe; while it is pending the card stays hidden so macOS
               users never see a flash of a useless card. */}
           {powerCaps && powerCaps.platform !== 'macos' && (
-            <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+            <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
               <div className="flex items-center gap-md mb-xs">
-                <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>developer_board</span>
-                <h3 className="font-headline-md text-headline-md">{t('settings.system.hwAccel.title')}</h3>
+                <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">developer_board</span>
+                <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.system.hwAccel.title')}</h3>
                 <span className="flex-1" />
                 <EffectBadge kind="restart-app" />
               </div>
-              <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.hwAccel.help')}</p>
+              <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.system.hwAccel.help')}</p>
               <div className="flex justify-between items-center py-sm gap-md">
                 <span className="font-label-md text-on-surface">{t('settings.system.hwAccel.toggle')}</span>
                 <Switch
@@ -508,14 +521,14 @@ export default function GeneralSettings() {
           {/* ② Prevent sleep — task-run blocker (default on) + always-on
               wake lock (default off). Disabled with a note when the probe
               reports no backend (Linux without systemd-inhibit). */}
-          <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1 transition-all hover:shadow-e2">
+          <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1 transition-all hover:shadow-e2">
             <div className="flex items-center gap-md mb-xs">
-              <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>bedtime</span>
-              <h3 className="font-headline-md text-headline-md">{t('settings.system.keepAwake.title')}</h3>
+              <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">bedtime</span>
+              <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.system.keepAwake.title')}</h3>
               <span className="flex-1" />
               <EffectBadge kind="instant" />
             </div>
-            <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.system.keepAwake.taskHelp')}</p>
+            <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.system.keepAwake.taskHelp')}</p>
             {powerCaps && !powerCaps.keepAwakeSupported && (
               <p
                 className="font-body-sm text-on-surface-variant mb-md px-xs py-sm rounded-lg bg-surface-container-low border border-outline-variant/30"
@@ -556,12 +569,12 @@ export default function GeneralSettings() {
         </div>
 
         {/* Re-run setup wizard */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
           <div className="flex items-center gap-md mb-xs">
-            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>refresh</span>
-            <h3 className="font-headline-md text-headline-md">{t('settings.general.rerunWizard.title')}</h3>
+            <span className="material-symbols-outlined icon-sm text-primary" aria-hidden="true">refresh</span>
+            <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.general.rerunWizard.title')}</h3>
           </div>
-          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.rerunWizard.description')}</p>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.general.rerunWizard.description')}</p>
           <Button
             variant="outline"
             onClick={handleRerunWizard}

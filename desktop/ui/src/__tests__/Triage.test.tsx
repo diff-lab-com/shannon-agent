@@ -311,14 +311,15 @@ describe('Triage page (inbox)', () => {
   it('shows pending and today counts from inbox stats', () => {
     setItems([], { pending: 4, today: 2 })
     renderPage()
-    expect(screen.getByText('4 pending')).toBeInTheDocument()
+    // G1-B stat tiles: the number leads (mono tabular) with the label under it
+    expect(screen.getByTestId('inbox-stat-pending-count')).toHaveTextContent('4')
     expect(screen.getByText('2 today')).toBeInTheDocument()
   })
 
   it('status filter chips push the status onto the hook filter', () => {
     const { setFilter } = setItems([makeItem({ id: 1 })])
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: 'Pending' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Pending/ }))
     expect(setFilter).toHaveBeenCalledWith({ status: 'pending', source: undefined })
   })
 
@@ -852,7 +853,7 @@ describe('Triage — B4 URL view state and error state (§7-28)', () => {
     expect(screen.getByTestId('location').getAttribute('data-search')).toContain('sort=newest')
     fireEvent.click(screen.getByRole('button', { name: 'Group by source' }))
     expect(screen.getByTestId('location').getAttribute('data-search')).toContain('group=source')
-    fireEvent.click(screen.getByRole('button', { name: 'Pending' }))
+    fireEvent.click(screen.getByRole('button', { name: /^Pending/ }))
     expect(screen.getByTestId('location').getAttribute('data-search')).toContain('status=pending')
   })
 

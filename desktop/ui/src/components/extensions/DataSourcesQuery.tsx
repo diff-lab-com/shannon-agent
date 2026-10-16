@@ -178,10 +178,10 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
           <div className="flex items-start gap-sm">
             <span className="material-symbols-outlined text-error">error</span>
             <div>
-              <div className="font-bold text-label-md text-on-error-container">
+              <div className="font-bold text-label-md text-error">
                 {t('extensions.datasources.query.errorTitle')}
               </div>
-              <div className="text-label-sm text-on-error-container mt-xs">{error}</div>
+              <div className="text-label-sm text-error mt-xs">{error}</div>
             </div>
           </div>
         </div>
@@ -267,7 +267,7 @@ function ResultCard({
           <button
             type="button"
             onClick={handleAddToChat}
-            className="text-label-xs px-sm py-xs rounded-lg bg-secondary-container/40 text-on-secondary-container font-bold hover:bg-secondary-container/70 flex items-center gap-xs cursor-pointer"
+            className="text-label-xs px-sm py-xs rounded-lg bg-secondary-container/40 text-on-secondary-container font-bold hover:bg-secondary/10/70 flex items-center gap-xs cursor-pointer"
           >
             <span className="material-symbols-outlined icon-sm">chat_add_on</span>
             {t('office.sources.addToChat')}
@@ -277,7 +277,7 @@ function ResultCard({
               href={item.url}
               target="_blank"
               rel="noreferrer"
-              className="text-label-xs px-sm py-xs rounded-lg bg-primary-container/20 text-on-primary-container font-bold hover:bg-primary-container/40 flex items-center gap-xs"
+              className="text-label-xs px-sm py-xs rounded-lg bg-primary-container/20 text-on-primary-container font-bold hover:bg-primary/10/40 flex items-center gap-xs"
             >
               <span className="material-symbols-outlined icon-sm">open_in_new</span>
               {t('extensions.datasources.query.openLink')}

@@ -296,7 +296,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 type="button"
                 variant="outline"
                 onClick={() => applyQuickFill(qf)}
-                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-label-sm cursor-pointer"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/10 text-on-surface-variant hover:text-primary font-label-sm text-label-sm cursor-pointer"
               >
                 <span className="material-symbols-outlined icon-sm">{qf.icon}</span>
                 {qf.id === 'custom' ? t(qf.label) : qf.label}
@@ -376,7 +376,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
               data-testid="test-provider-connection"
               disabled={!canProbe || testState?.status === 'testing'}
               onClick={handleTestConnection}
-              className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/10 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className={`material-symbols-outlined icon-md${testState?.status === 'testing' ? ' animate-spin' : ''}`}>
                 {testState?.status === 'testing' ? 'progress_activity' : 'network_check'}
@@ -423,7 +423,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
                 data-testid="fetch-models"
                 disabled={!canProbe || fetching}
                 onClick={handleFetchModels}
-                className="shrink-0 inline-flex items-center gap-xs px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/5 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className="shrink-0 inline-flex items-center gap-xs px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-low hover:border-primary/40 hover:bg-primary/10 text-on-surface font-label-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <span className={`material-symbols-outlined icon-md${fetching ? ' animate-spin' : ''}`}>
                   {fetching ? 'progress_activity' : 'cloud_download'}
@@ -522,7 +522,7 @@ export default function AddProviderModal({ editing, onClose, onSaved }: AddProvi
           <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={requestClose}>
             {t('settings.models.providers.cancel')}
           </Button>
-          <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
+          <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/10 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
             <span className="material-symbols-outlined icon-md">{saving ? 'progress_activity' : 'save'}</span>
             {saving ? t('settings.models.providers.saving') : t('settings.models.providers.save')}
           </Button>

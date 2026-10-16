@@ -562,7 +562,7 @@ export default function AdvancedSettings() {
         </div>
 
         {/* Critical System Reset */}
-        <div className="lg:col-span-2 border-2 border-error/20 bg-error/5 p-lg rounded-xl mt-sm relative overflow-hidden">
+        <div className="lg:col-span-2 border-2 border-error/20 bg-error-container p-lg rounded-xl mt-sm relative overflow-hidden">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-lg relative z-raised">
             <div className="flex items-start gap-md">
               <div className="p-sm bg-error-container rounded-lg text-on-error-container shrink-0 flex items-center justify-center">
@@ -574,7 +574,7 @@ export default function AdvancedSettings() {
               </div>
             </div>
             <Button
-              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-body-sm font-bold hover:bg-error/90 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
+              className="px-xl py-md bg-error text-on-error rounded-xl font-label-md text-body-sm font-bold hover:bg-error/10 shadow-e2 active:scale-[0.98] transition-all whitespace-nowrap cursor-pointer"
               onClick={() => setShowResetConfirm(true)}
               disabled={resetting}
             >

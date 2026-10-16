@@ -13,9 +13,9 @@ import NetworkSettings from '@/components/settings/NetworkSettings'
 export default function ConnectionsPane() {
   const t = useT()
   return (
-    <div className="space-y-xl">
-      <section className="space-y-md" aria-labelledby="connections-pane-gateway-heading">
-        <h2 id="connections-pane-gateway-heading" className="text-headline-sm font-medium">
+    <div className="space-y-3">
+      <section className="space-y-2" aria-labelledby="connections-pane-gateway-heading">
+        <h2 id="connections-pane-gateway-heading" className="text-headline-sm font-bold text-on-surface leading-tight">
           {t('settings.connections.title')}
         </h2>
         <ConnectionsSettings />
@@ -23,8 +23,8 @@ export default function ConnectionsPane() {
       <section aria-label={t('settings.remotes.title')}>
         <RemotesSettings />
       </section>
-      <section className="space-y-md" aria-labelledby="connections-pane-network-heading">
-        <h2 id="connections-pane-network-heading" className="text-headline-sm font-medium">
+      <section className="space-y-2" aria-labelledby="connections-pane-network-heading">
+        <h2 id="connections-pane-network-heading" className="text-label-2xs font-semibold uppercase tracking-wider text-on-surface-variant px-xs">
           {t('nav.network')}
         </h2>
         <NetworkSettings />

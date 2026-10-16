@@ -57,10 +57,10 @@ describe('App routing', () => {
     })
   })
 
-  it('renders layout with footer on all routes', async () => {
+  it('renders no global footer on any route (裁决 D: the ChatStatusBar is the only status line)', async () => {
     renderRoute('/chat')
     await waitFor(() => {
-      expect(screen.getByText('Shannon Code')).toBeInTheDocument()
+      expect(screen.queryByRole('contentinfo')).not.toBeInTheDocument()
     })
   })
 })

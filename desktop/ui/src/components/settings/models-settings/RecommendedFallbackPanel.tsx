@@ -207,7 +207,7 @@ export function RecommendedFallbackPanel({
               }}
               disabled={applying}
               data-testid="recommend-fallback-apply"
-              className="h-auto py-xs px-md rounded-lg font-label-sm bg-primary text-on-primary hover:bg-primary/90 cursor-pointer disabled:opacity-50 flex items-center gap-xs"
+              className="h-auto py-xs px-md rounded-lg font-label-sm bg-primary text-on-primary hover:bg-primary/10 cursor-pointer disabled:opacity-50 flex items-center gap-xs"
             >
               {applying ? (
                 <>

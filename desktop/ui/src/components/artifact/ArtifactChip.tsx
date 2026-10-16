@@ -39,11 +39,11 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
       data-testid="artifact-card"
       className={cn(
         'group/card flex items-center gap-sm max-w-md w-full px-sm py-xs rounded-xl text-left',
-        'border border-primary/25 bg-primary/5 hover:bg-primary/10 hover:border-primary/40',
+        'border border-primary/25 bg-primary-container hover:bg-primary/10 hover:border-primary/40',
         'transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
       )}
     >
-      <span className="w-8 h-8 rounded-lg bg-primary/15 flex items-center justify-center shrink-0" aria-hidden="true">
+      <span className="w-8 h-8 rounded-lg bg-primary-container flex items-center justify-center shrink-0" aria-hidden="true">
         <span className="material-symbols-outlined icon-md text-primary">{artifactIcon(artifact.kind)}</span>
       </span>
       <span className="flex-1 min-w-0">
@@ -51,7 +51,7 @@ export function ArtifactChip({ artifact }: ArtifactChipProps) {
         <span className="block font-label-xs text-on-surface-variant">{artifactKindLabel(artifact.kind, t)}</span>
       </span>
       <span
-        className="flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-md bg-primary-container text-on-primary-container font-label-xs group-hover/card:bg-primary/20"
+        className="flex items-center gap-[2px] shrink-0 px-xs py-[2px] rounded-md bg-primary-container text-on-primary-container font-label-xs group-hover/card:bg-primary-container"
         aria-hidden="true"
       >
         {t('chat.artifact.open')}

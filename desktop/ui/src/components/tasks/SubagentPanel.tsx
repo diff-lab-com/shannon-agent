@@ -17,7 +17,7 @@ import { useSubagents } from '@/hooks/subagents'
 function statusBadge(status: string): { dot: string; bg: string; labelId: string } {
   switch (status) {
     case 'running':
-      return { dot: 'bg-primary animate-pulse', bg: 'bg-primary/10 border-primary/20', labelId: 'subagent.status.running' }
+      return { dot: 'bg-primary animate-pulse', bg: 'bg-primary-container border-primary/20', labelId: 'subagent.status.running' }
     case 'completed':
       return { dot: 'bg-success', bg: 'bg-success/10 border-success/20', labelId: 'subagent.status.completed' }
     case 'failed':

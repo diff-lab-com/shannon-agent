@@ -466,7 +466,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
                   onClick={runApply}
                   disabled={selectedCount === 0}
                   data-testid="migration-apply"
-                  className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 >
                   {t('welcome.migration.review.import', { count: selectedCount })}
                 </Button>
@@ -476,7 +476,7 @@ export default function MigrationWizard({ open, onClose, apiOverride }: Migratio
               <Button
                 onClick={onClose}
                 data-testid="migration-done"
-                className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
               >
                 {t('welcome.migration.result.done')}
               </Button>

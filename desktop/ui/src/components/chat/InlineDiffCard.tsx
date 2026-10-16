@@ -42,7 +42,7 @@ export function InlineDiffCard({ path, onOpenDiff }: InlineDiffCardProps) {
   return (
     <div
       data-testid="inline-diff-card"
-      className="mt-xs flex items-center gap-sm px-sm py-xs rounded-lg bg-success/5 border border-success/20 min-w-0"
+      className="mt-xs flex items-center gap-sm px-sm py-xs rounded-lg bg-success-container border border-success/20 min-w-0"
     >
       <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">edit_note</span>
       <span className="font-mono text-label-xs text-on-surface truncate flex-1 min-w-0" title={path}>
@@ -65,7 +65,7 @@ export function InlineDiffCard({ path, onOpenDiff }: InlineDiffCardProps) {
         size="sm"
         data-testid="inline-diff-open"
         aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path })}
-        className="gap-xs px-xs py-[2px] shrink-0 text-success hover:bg-success-container/40"
+        className="gap-xs px-xs py-[2px] shrink-0 text-success hover:bg-success/10/40"
         onClick={onOpenDiff}
       >
         <span className="material-symbols-outlined icon-sm" aria-hidden="true">difference</span>

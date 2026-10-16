@@ -30,7 +30,7 @@ const CATEGORY_COLOR: Record<ContextBreakdownCategory['key'], string> = {
   system: 'bg-primary',
   tools: 'bg-secondary',
   skills: 'bg-tertiary',
-  memory: 'bg-primary/40',
+  memory: 'bg-primary-container',
   mcp: 'bg-tertiary/40',
   conversation: 'bg-on-surface-variant/40',
 }
@@ -39,7 +39,7 @@ const CATEGORY_DOT: Record<ContextBreakdownCategory['key'], string> = {
   system: 'bg-primary',
   tools: 'bg-secondary',
   skills: 'bg-tertiary',
-  memory: 'bg-primary/60',
+  memory: 'bg-primary-container',
   mcp: 'bg-tertiary/60',
   conversation: 'bg-on-surface-variant/60',
 }
@@ -175,7 +175,7 @@ export default function ContextBreakdownCard({ sessionId, usageTick }: ContextBr
                       data-testid={`injected-memory-jump-${m.id}`}
                       title={t('chat.context.injectedMemories.jump')}
                       aria-label={`${t('chat.context.injectedMemories.jump')}: ${m.title}`}
-                      className="shrink-0 inline-flex items-center gap-0.5 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-bold hover:bg-primary-container/70 transition-colors cursor-pointer"
+                      className="shrink-0 inline-flex items-center gap-0.5 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-bold hover:bg-primary/10/70 transition-colors cursor-pointer"
                       onClick={() => { void sessionCtx?.switchSession?.(m.sourceSessionId!) }}
                     >
                       <span className="material-symbols-outlined icon-xs" aria-hidden="true">history</span>

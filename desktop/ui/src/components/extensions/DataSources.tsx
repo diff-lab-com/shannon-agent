@@ -412,7 +412,7 @@ export default function DataSources() {
                     type="button"
                     onClick={() => setRemoveTarget(row.slug)}
                     disabled={busySlug === `uninstall:${row.slug}`}
-                    className="bg-error-container/40 text-on-error-container hover:bg-error-container/70"
+                    className="bg-error-container/40 text-on-error-container hover:bg-error/10/70"
                   >
                     {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
                   </Button>
@@ -500,7 +500,7 @@ function AdapterCard({
         </div>
 
         {isQueryPending && !isInstalled && (
-          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm bg-secondary/10 text-on-secondary-container border border-secondary/20">
+          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded-sm bg-secondary/10 text-secondary border border-secondary/20">
             <span className="material-symbols-outlined icon-xs">info</span>
             {t('extensions.datasources.queryComingSoonHint')}
           </div>

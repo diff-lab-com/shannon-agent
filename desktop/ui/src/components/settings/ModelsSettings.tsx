@@ -215,18 +215,20 @@ export default function ModelsSettings() {
       {/* Design 12-settings.html:167-168 (parity R1 2026-10-08): the pane
           opens with the sec-title + BYOK pitch — the app's core
           differentiator, not a generic "manage providers" line. */}
-      <h2 className="font-headline-md text-headline-md text-on-surface font-bold">
+      <h2 className="text-headline-sm font-bold text-on-surface leading-tight">
         {t('settings.models.pageTitle')}
       </h2>
       <p className="font-body-md text-on-surface-variant mt-xs mb-md">
         {t('settings.models.byokSubtitle')}
       </p>
 
-      <div className="space-y-lg">
+      <div className="space-y-3">
         {/* Performance Strategy */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
-          <h3 className="font-headline-md text-on-surface mb-md">{t('settings.models.perfStrategy')}</h3>
-          <div className="flex bg-surface-container-low p-xs rounded-xl gap-xs max-w-2xl">
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.models.perfStrategy')}</h3>
+          {/* G1-B S1 (设计 `.seg`): container seg — hairline shell + radius-9,
+              the selected option is a violet dim chip. */}
+          <div className="flex bg-surface-container-low p-[2px] rounded-[9px] gap-[2px] border border-outline-variant/30 max-w-2xl">
             {(['balanced', 'speed', 'high-quality'] as const).map(s => (
               <Button
                 key={s}
@@ -236,10 +238,10 @@ export default function ModelsSettings() {
                 // state instead of carrying it in styling alone.
                 aria-pressed={strategy === s}
                 className={cn(
-                  'flex-1 py-sm font-label-md rounded-lg transition-all cursor-pointer',
+                  'flex-1 py-sm font-label-md rounded-[7px] transition-all cursor-pointer',
                   strategy === s
-                    ? 'bg-primary text-on-primary shadow-e1 ring-1 ring-black/5 font-bold'
-                    : 'text-on-surface-variant hover:bg-surface-container-high',
+                    ? 'bg-primary-container text-on-primary-container font-semibold'
+                    : 'text-on-surface-variant hover:text-on-surface',
                 )}
               >
                 {s === 'high-quality' ? t('settings.models.stratLabel.highQuality') : s === 'speed' ? t('settings.models.stratLabel.speed') : t('settings.models.stratLabel.balanced')}
@@ -254,17 +256,18 @@ export default function ModelsSettings() {
 
         {/* Active Model */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
-          <h3 className="font-headline-md text-on-surface mb-md">{t('settings.models.activeModel')}</h3>
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.models.activeModel')}</h3>
           {currentModel ? (
             <div className="p-md rounded-xl border-2 border-primary bg-primary-container/5 flex items-center justify-between transition-all">
               <div className="flex items-center gap-md">
-                <div className="w-10 h-10 rounded-lg bg-primary text-on-primary flex items-center justify-center">
-                  <span className="material-symbols-outlined">auto_awesome</span>
+                {/* G1-B 图标 tile 语言: violet dim tile + thin-line icon. */}
+                <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined icon-sm">auto_awesome</span>
                 </div>
                 <div>
                   <div className="flex items-center gap-xs">
                     <span className="font-headline-md text-link text-lg">{currentModel}</span>
-                    <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.activeBadge')}</span>
+                    <span className="px-xs py-[2px] bg-primary-container text-on-primary-container rounded-sm text-label-2xs font-bold">{t('settings.models.activeBadge')}</span>
                   </div>
                   <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'settings.models.providerLabel' }, { provider: status?.provider })}</p>
                 </div>
@@ -359,7 +362,7 @@ export default function ModelsSettings() {
           <div className="p-lg" role="tabpanel" id="provider-catalog-panel" aria-labelledby={activeProvider ? `provider-tab-${activeProvider}` : 'provider-tab-all'}>
             <div className="flex justify-between items-center mb-lg">
               <div>
-                <h3 className="font-headline-md text-on-surface">{t('settings.models.availableModels')}</h3>
+                <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.models.availableModels')}</h3>
                 <p className="text-body-sm text-on-surface-variant">{t('settings.models.availableDesc')}</p>
               </div>
               <div className="flex items-center gap-sm shrink-0">
@@ -426,18 +429,18 @@ export default function ModelsSettings() {
                       className="h-auto p-md rounded-xl flex-1 min-w-0 flex items-center justify-between hover:bg-transparent group cursor-pointer text-left w-full whitespace-normal"
                     >
                       <div className="flex items-center gap-md">
-                        <div className={cn("w-10 h-10 rounded-lg flex items-center justify-center shrink-0",
-                          m.id === currentModel ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant',
+                        <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center shrink-0",
+                          m.id === currentModel ? 'bg-primary-container text-on-primary-container' : 'bg-surface-container-high text-on-surface-variant',
                         )}>
-                          <span className="material-symbols-outlined">psychology</span>
+                          <span className="material-symbols-outlined icon-sm">psychology</span>
                         </div>
                         <div>
                           <div className="flex items-center gap-xs">
                             <span className={cn("font-headline-md text-lg", m.id === currentModel ? 'text-link' : 'text-on-surface')}>{m.name}</span>
-                            {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
+                            {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary-container text-on-primary-container rounded-sm text-label-2xs font-bold">{t('settings.models.defaultBadge')}</span> : null}
                             {m.tier ? (
                               <span
-                                className="px-xs py-[2px] bg-primary text-on-primary rounded-sm text-label-2xs font-bold uppercase tracking-wider"
+                                className="px-xs py-[2px] bg-primary-container text-on-primary-container rounded-sm text-label-2xs font-bold uppercase tracking-wider"
                                 title={t('settings.models.tier')}
                               >
                                 {t(`settings.models.tier${m.tier.charAt(0).toUpperCase()}${m.tier.slice(1)}` as 'settings.models.tierFast' | 'settings.models.tierStandard' | 'settings.models.tierPro')}
@@ -544,7 +547,7 @@ export default function ModelsSettings() {
 
         {/* Global Parameters */}
         <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-e1">
-          <h3 className="font-headline-md text-on-surface mb-lg">{t('settings.models.globalParams')}</h3>
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.models.globalParams')}</h3>
           <p className="text-body-sm text-on-surface-variant mb-xl -mt-md">{t('settings.models.globalParamsDesc')}</p>
           <div className="space-y-xl max-w-2xl">
             <ParameterSlider label={t('settings.models.temperature')} value={config?.temperature ?? 0.7} min={0} max={1} step={0.1} lowLabel={t('settings.models.precise')} highLabel={t('settings.models.creative')} configKey="temperature" />
@@ -558,13 +561,13 @@ export default function ModelsSettings() {
             group — so this is a guidance card, same pattern as
             PermissionsPane's default-tier card pointing the other way. */}
         <section
-          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1"
+          className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1"
           data-testid="models-exec-mode-card"
         >
           <div className="flex items-start gap-md">
             <span className="material-symbols-outlined text-primary" aria-hidden="true">shield</span>
             <div className="flex-1 space-y-sm">
-              <h3 className="font-headline-sm text-headline-sm text-on-surface">
+              <h3 className="text-label-lg font-semibold text-on-surface">
                 {t('settings.models.execModeCard.title')}
               </h3>
               <p className="text-body-sm text-on-surface-variant max-w-prose">

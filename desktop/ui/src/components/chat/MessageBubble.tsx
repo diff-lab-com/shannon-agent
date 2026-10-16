@@ -407,7 +407,7 @@ function MemoryCitationChips({ memories }: { memories?: InjectedMemory[] }) {
             data-testid={`memory-citation-jump-${m.id}`}
             title={t('chat.context.injectedMemories.jump')}
             aria-label={`${t('chat.message.memoryCitations.jumpAria')}: ${m.title}`}
-            className="inline-flex items-center gap-1 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-medium hover:bg-primary-container/70 transition-colors cursor-pointer max-w-full min-w-0"
+            className="inline-flex items-center gap-1 px-xs py-[1px] rounded-full bg-primary-container/40 text-on-primary-container text-label-xs font-medium hover:bg-primary/10/70 transition-colors cursor-pointer max-w-full min-w-0"
             onClick={() => { void switchSession(m.sourceSessionId!) }}
           >
             {chipBody}
@@ -1092,7 +1092,7 @@ function FileChangesCard({ paths, rewindable, onReview, onReviewAll, onUndo }: {
     // Aurora 2026-10 语义色归位: additions/acceptance wear the success token
     // (moss green, shannon-ui.css `.plus`) — tertiary/amber is reserved for
     // warnings. Deletions stay error.
-    <div className="px-md py-xs rounded-lg bg-success/5 border border-success/20" data-testid="file-changes-card">
+    <div className="px-md py-xs rounded-lg bg-success-container border border-success/20" data-testid="file-changes-card">
       <div className="flex items-center justify-between gap-sm">
         <div className="flex items-center gap-sm min-w-0">
           <span className="material-symbols-outlined icon-sm text-success shrink-0" aria-hidden="true">difference</span>
@@ -1201,7 +1201,7 @@ function RetryChainBanner({ count, reasons = [] }: { count: number; reasons?: st
   const navigate = useNavigate()
   const { currentSessionId } = useSessions()
   return (
-    <div className="px-md py-xs rounded-lg bg-error/5 border border-error/20" data-testid="retry-chain-banner">
+    <div className="px-md py-xs rounded-lg bg-error-container border border-error/20" data-testid="retry-chain-banner">
       <div className="flex items-center gap-sm">
         <span className="material-symbols-outlined icon-sm text-error shrink-0" aria-hidden="true">replay</span>
         <span className="font-label-sm text-error flex-1 truncate">
@@ -1481,7 +1481,7 @@ export const SubagentBlock = memo(function SubagentBlock({ toolCall }: { toolCal
 
   return (
     <div
-      className="rounded-xl border border-primary/20 bg-primary/5 overflow-hidden"
+      className="rounded-xl border border-primary/20 bg-primary-container overflow-hidden"
       data-testid="subagent-block"
     >
       <button

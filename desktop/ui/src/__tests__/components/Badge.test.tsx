@@ -11,7 +11,7 @@ describe('Badge', () => {
   it('applies variant classes', () => {
     const { container } = render(<Badge variant="error">Failed</Badge>)
     const badge = container.querySelector('[data-slot="badge"]')!
-    // G7 2026-09-30: error tone = MD3 container pair (was bg-error/10 + text-error).
+    // G7 2026-09-30: error tone = MD3 container pair (was bg-error-container + text-on-error-container).
     expect(badge.className).toContain('bg-error-container')
     expect(badge.className).toContain('text-on-error-container')
   })

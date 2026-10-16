@@ -67,8 +67,10 @@ export function GoalRunCard({ run, onPause, onResume, onStop, onUpdateObjective,
     >
       <div className="flex items-start justify-between gap-md">
         <div className="flex items-start gap-md min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-primary-container flex items-center justify-center text-on-primary-container shrink-0">
-            <span className="material-symbols-outlined icon-lg">flag</span>
+          {/* G1-B 图标 tile 语言: same 32px rounded-lg violet dim tile as the
+              Best-of-N card. */}
+          <div className="w-8 h-8 rounded-lg bg-primary-container text-on-primary-container flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined icon-sm">flag</span>
           </div>
           <div className="min-w-0">
             <h3 className="font-body-lg font-semibold text-on-surface truncate">{run.title}</h3>
@@ -241,8 +243,9 @@ function GoalRunPanelImpl({ onViewSession, projectDir }: { onViewSession: (id: s
   return (
     <section aria-labelledby="goal-runs-heading" className="mb-lg" data-testid="goal-run-panel">
       <div className="flex items-center justify-between mb-sm">
-        <h2 id="goal-runs-heading" className="font-label-lg font-bold text-on-surface flex items-center gap-xs">
-          <span className="material-symbols-outlined icon-md text-primary" aria-hidden="true">flag</span>
+        {/* G1-B S6 (design `.group-label`): 10.5px/600 uppercase muted label. */}
+        <h2 id="goal-runs-heading" className="text-label-2xs font-semibold uppercase tracking-wider text-on-surface-variant flex items-center gap-xs">
+          <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">flag</span>
           {intl.formatMessage({ id: 'goal.panel.heading' })}
         </h2>
         <Button

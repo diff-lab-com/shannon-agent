@@ -137,20 +137,19 @@ export default function PersonaPackSettings() {
 
   return (
     <section
-      className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1"
+      className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1"
       data-testid="persona-pack-section"
     >
       <div className="flex items-center gap-md mb-xs">
         <span
-          className="material-symbols-outlined text-primary"
-          style={{ fontVariationSettings: "'FILL' 1" }}
+          className="material-symbols-outlined icon-sm text-primary"
           aria-hidden="true"
         >
           folder_zip
         </span>
-        <h3 className="font-headline-md text-headline-md">{t('settings.personaPack.title')}</h3>
+        <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.personaPack.title')}</h3>
       </div>
-      <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.personaPack.desc')}</p>
+      <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.personaPack.desc')}</p>
 
       {/* ─── Export ─── */}
       <div className="mb-lg">
@@ -184,7 +183,7 @@ export default function PersonaPackSettings() {
           disabled={exporting}
           data-testid="persona-pack-export"
           aria-label={t('settings.personaPack.export.buttonAria')}
-          className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
         >
           {exporting ? (
             <span className="flex items-center gap-sm">
@@ -305,7 +304,7 @@ export default function PersonaPackSettings() {
               data-testid="persona-pack-import"
               className={cn(
                 'px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary',
-                'hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed',
+                'hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed',
                 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
               )}
             >

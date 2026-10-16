@@ -30,23 +30,37 @@ export default function ThemeSettings() {
     <div className="max-w-narrow">
       <p className="font-body-md text-on-surface-variant mb-md">{t('settings.theme.subtitle')}</p>
 
-      <div className="space-y-lg pb-10">
-        {/* Theme Selection */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
-          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.themeLabel')}</h3>
+      <div className="space-y-3 pb-10">
+        {/* Theme Selection — G1-B: selection = 1px violet outline, the card
+            fill stays put (the old selected fill-lightening read as a state
+            change, not a state marker); a green ✓ chip names the current
+            theme. Label reuses palette.item.current («Current») — no new
+            i18n key this batch. */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
             {themes.map(opt => (
               <Button
                 key={opt.id}
                 variant="outline"
                 onClick={() => setTheme(opt.id)}
+                aria-pressed={theme === opt.id}
                 className={cn(
-                  'h-auto cursor-pointer p-md rounded-xl border-2 transition-all text-left whitespace-normal',
+                  'relative h-auto cursor-pointer p-md rounded-xl border transition-all text-left whitespace-normal',
                   theme === opt.id
-                    ? 'border-primary bg-primary-fixed/20 shadow-e1'
+                    ? 'border-primary'
                     : 'border-outline-variant/30 hover:border-primary/50',
                 )}
               >
+                {theme === opt.id && (
+                  <span
+                    className="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 px-1.5 py-[1px] rounded-full bg-success-container text-on-success-container text-label-2xs font-bold"
+                    title={t('palette.item.current')}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 12 }} aria-hidden="true">check</span>
+                    {t('palette.item.current')}
+                  </span>
+                )}
                 <div className="aspect-video rounded-md mb-sm border border-outline-variant/20 overflow-hidden bg-background p-xs space-y-xs">
                   <div className="flex items-center gap-xs mb-xs">
                     <div className="w-3 h-3 rounded-sm bg-primary-container" />
@@ -79,20 +93,22 @@ export default function ThemeSettings() {
         </section>
 
         {/* Font Size Selection */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
-          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.fontSize.title')}</h3>
-          <p className="font-body-sm text-on-surface-variant mb-lg">{t('settings.theme.fontSize.subtitle')}</p>
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.theme.fontSize.title')}</h3>
+          <p className="font-body-sm text-on-surface-variant mb-sm">{t('settings.theme.fontSize.subtitle')}</p>
 
+          {/* G1-B: selection = 1px violet outline, fill unchanged. */}
           <div className="flex gap-md mb-lg">
             {fontSizes.map(size => (
               <Button
                 key={size.value}
                 variant="outline"
                 onClick={() => setFontScale(size.value)}
+                aria-pressed={Math.abs(fontScale - size.value) < 0.01}
                 className={cn(
-                  'flex-1 py-md px-sm rounded-lg border-2 transition-all font-label-md',
+                  'flex-1 py-md px-sm rounded-lg border transition-all font-label-md',
                   Math.abs(fontScale - size.value) < 0.01
-                    ? 'border-primary bg-primary-fixed/30 shadow-e1'
+                    ? 'border-primary'
                     : 'border-outline-variant/30 hover:border-primary/50',
                 )}
               >
@@ -112,11 +128,12 @@ export default function ThemeSettings() {
             knobs. The 代码字体/终端配色 switches live in the advanced page's
             terminal card — linked, not migrated (shared tests + engine
             config contract). */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1" data-testid="theme-material-card">
-          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.material.title')}</h3>
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1" data-testid="theme-material-card">
+          <h3 className="text-label-lg font-semibold text-on-surface mb-sm">{t('settings.theme.material.title')}</h3>
           <p className="font-label-md text-on-surface mb-sm">{t('settings.theme.glass.label')}</p>
           <div role="radiogroup" aria-label={t('settings.theme.glass.label')} data-testid="theme-glass-group">
-            <div className="flex rounded-xl bg-surface-container-low p-xs gap-xs border border-outline-variant/30 max-w-sm">
+            {/* G1-B S1 (设计 `.seg`): container seg, violet dim selected. */}
+            <div className="flex rounded-[9px] bg-surface-container-low p-[2px] gap-[2px] border border-outline-variant/30 max-w-sm">
               {([
                 { reduced: false, labelKey: 'settings.theme.glass.standard' },
                 { reduced: true, labelKey: 'settings.theme.glass.reduced' },
@@ -129,11 +146,11 @@ export default function ThemeSettings() {
                   data-testid={`theme-glass-${opt.reduced ? 'reduced' : 'standard'}`}
                   onClick={() => handleReduceGlass(opt.reduced)}
                   className={cn(
-                    'flex-1 min-w-0 px-md py-sm rounded-lg font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
+                    'flex-1 min-w-0 px-md py-sm rounded-[7px] font-label-md text-center cursor-pointer transition-all duration-(--duration-normal)',
                     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary',
                     reduceGlass === opt.reduced
-                      ? 'bg-primary text-on-primary font-bold shadow-e1'
-                      : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-high',
+                      ? 'bg-primary-container text-on-primary-container font-semibold'
+                      : 'text-on-surface-variant hover:text-on-surface',
                   )}
                 >
                   {t(opt.labelKey)}
@@ -167,10 +184,10 @@ export default function ThemeSettings() {
         </section>
 
         {/* Active Theme Info */}
-        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-e1">
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-4 shadow-e1">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-headline-md text-headline-md">{t('settings.theme.activeTheme')}</h3>
+              <h3 className="text-label-lg font-semibold text-on-surface">{t('settings.theme.activeTheme')}</h3>
               <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: t(themes.find(opt => opt.id === theme)?.labelKey ?? 'settings.theme.name.system') })}</p>
             </div>
             <div className="flex gap-sm">

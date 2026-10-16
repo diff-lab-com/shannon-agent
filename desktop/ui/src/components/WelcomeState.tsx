@@ -80,7 +80,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
         {unconfigured && (
           <div
             data-testid="welcome-provider-cta"
-            className="mb-lg rounded-xl border border-primary/30 bg-primary/5 p-md flex flex-col items-center gap-sm"
+            className="mb-lg rounded-xl border border-primary/30 bg-primary-container p-md flex flex-col items-center gap-sm"
           >
             <span className="material-symbols-outlined icon-md text-primary">key_alert</span>
             <p className="font-label-lg text-on-surface font-bold">{t('welcomeState.providerCta.title')}</p>
@@ -88,7 +88,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
             <Button
               type="button"
               onClick={() => navigate('/settings/models')}
-              className="px-lg py-sm rounded-lg bg-primary text-on-primary font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              className="px-lg py-sm rounded-lg bg-primary text-on-primary font-label-md cursor-pointer hover:bg-primary/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
             >
               {t('welcomeState.providerCta.cta')}
             </Button>

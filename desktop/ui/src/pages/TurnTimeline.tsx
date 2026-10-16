@@ -106,7 +106,7 @@ export function toolKind(toolName: string): ToolKind {
 /** Bar tint classes per kind (semantic tokens only; failure overrides red). */
 const KIND_BAR_CLASS: Record<ToolKind, string> = {
   read: 'bg-info/15 border border-info/40',
-  write: 'bg-primary/15 border border-primary/40',
+  write: 'bg-primary-container border border-primary/40',
   net: 'bg-success/15 border border-success/40',
   risk: 'bg-warning/15 border border-warning/40',
   other: 'bg-secondary-container/70',
@@ -114,7 +114,7 @@ const KIND_BAR_CLASS: Record<ToolKind, string> = {
 
 const KIND_LEGEND_DOT_CLASS: Record<ToolKind, string> = {
   read: 'bg-info/60',
-  write: 'bg-primary/60',
+  write: 'bg-primary-container',
   net: 'bg-success/60',
   risk: 'bg-warning/70',
   other: 'bg-secondary-container',
@@ -559,7 +559,7 @@ function SummaryChip({
       data-testid={testId}
       className={cn(
         'inline-flex items-center gap-xs rounded-full bg-surface-container-low px-sm py-xs font-label-sm text-label-sm text-on-surface-variant border border-outline-variant/30',
-        error && 'text-error border-error/40',
+        error && 'bg-error-container text-on-error-container border-transparent',
       )}
     >
       <Icon name={icon} size="xs" />
@@ -657,7 +657,7 @@ function CumulativeCurve({
         {showInput && (
           <span className="inline-flex items-center gap-sm">
             <span className="inline-flex items-center gap-xs">
-              <span aria-hidden="true" className="inline-block size-2 rounded-full bg-primary/70" />
+              <span aria-hidden="true" className="inline-block size-2 rounded-full bg-primary-container" />
               {t('timeline.curve.output')}
             </span>
             <span className="inline-flex items-center gap-xs">
@@ -804,7 +804,7 @@ function TurnCard({
                   className={cn(
                     'absolute top-1/2 -translate-y-1/2 h-5 rounded-md flex items-center gap-xs px-1.5 overflow-hidden whitespace-nowrap',
                     tool.is_error
-                      ? 'bg-error/15 border border-error/40'
+                      ? 'bg-error-container border border-error/40'
                       : KIND_BAR_CLASS[kind],
                   )}
                   style={{ left: `${barLeft}%`, width: `${widthPct}%` }}

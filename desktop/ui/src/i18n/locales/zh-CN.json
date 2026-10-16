@@ -510,8 +510,6 @@
   "settings.notifications.webhook.title": "Webhook 通知",
   "settings.notifications.webhook.subtitle": "配置用于桌面通知的出站 webhook 传递。",
   "nav.mainNav.aria": "主导航",
-  "footer.tokens": "{count, plural, other {{count, number} 个 token}}",
-  "footer.tasks": "{count, plural, other {{count} 个任务}}",
   "palette.action.newChat": "开始新对话",
   "palette.action.openCompanion": "打开快速捕获窗口",
   "palette.action.newTask": "创建计划任务",
@@ -538,7 +536,6 @@
   "palette.category.switchModel": "切换模型",
   "palette.toast.switched": "已切换到 {name}",
   "palette.toast.switchFailed": "切换模型失败",
-  "palette.footer.shortcuts": "↑↓ 选择  ↵ 确认  esc 关闭",
   "palette.footer.results": "{count, plural, other {{count, number} 条结果}}",
   "tasks.status.completed.label": "已完成",
   "tasks.status.completed.tip": "任务已成功完成",
@@ -3813,7 +3810,6 @@
   "extensions.installed.disabledCtaHint": "禁用项可在「{tab}」标签中重新启用",
   "extensions.installed.manage": "管理",
   "chat.input.placeholder.empty": "回复 Shannon，或输入 / 唤起技能、@ 引用文件…",
-  "chat.input.placeholder.project": "正在 {dir} 中工作",
   "chat.input.overrideFallback.toast": "会话钉定的模型 {provider}/{model} 已不可用，本次查询回落到全局默认。",
   "chat.tool.input.expand": "查看全文",
   "chat.tool.input.collapse": "收起",
@@ -4499,5 +4495,8 @@
   "welcome.envDetected.badge": "已检测到本机密钥：{providers}",
   "welcome.privacy.keysLocal": "密钥保存在本机 ~/.shannon，永不外发",
   "companion.footer.hint": "只写入主窗口草稿，不自动发送",
-  "companion.history.label": "最近捕获"
+  "companion.history.label": "最近捕获",
+  "palette.footer.navigate": "切换",
+  "palette.footer.select": "选择",
+  "palette.footer.close": "关闭"
 }
