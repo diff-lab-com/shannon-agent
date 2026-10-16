@@ -75,11 +75,13 @@ type Tab = 'active' | 'history' | 'routines' | 'pipelines' | 'worktrees'
 const SIMPLE_TABS: readonly Tab[] = ['active', 'history']
 const DEV_TABS: readonly Tab[] = ['active', 'history', 'routines', 'pipelines', 'worktrees']
 
-// B4 裁决 (audit R1): the Simple-mode entry card for the Mission Control.
+// B4 裁决 (audit R1): the Simple-mode notice card for the Mission Control.
 // Honest-superset copy only — it names what the surface actually does
-// (parallel multi-agent runs, replayable global state) and opens /opc; the
-// card itself is not a control, the button is.
-function OpcEntryCard({ onOpen }: { onOpen: () => void }) {
+// (parallel multi-agent runs, replayable global state). Informational by
+// design: it carries no CTA (2026-10-15 parity ruling C — the kanban-form
+// mission overview is deferred, see cleanup plan 执行记录(七)); the card
+// must not grow a button until that surface exists.
+function OpcEntryCard() {
   const { formatMessage: fm } = useIntl()
   return (
     <section
@@ -94,14 +96,6 @@ function OpcEntryCard({ onOpen }: { onOpen: () => void }) {
         <h2 className="font-label-lg font-bold text-on-surface">{fm({ id: 'tasks.opcEntry.title' })}</h2>
         <p className="font-body-sm text-on-surface-variant">{fm({ id: 'tasks.opcEntry.body' })}</p>
       </div>
-      <Button
-        variant="outline"
-        className="shrink-0 rounded-xl font-label-md cursor-pointer"
-        onClick={onOpen}
-      >
-        <span className="material-symbols-outlined icon-md" aria-hidden="true">open_in_new</span>
-        {fm({ id: 'tasks.opcEntry.cta' })}
-      </Button>
     </section>
   )
 }
@@ -423,9 +417,10 @@ export default function Tasks() {
 
         {/* B4 裁决 (audit R1 §09 / R3-V-12): Simple mode has no sidebar entry
             for the Mission Control (/opc), so the tasks page carries the
-            promised entry card. Dev mode already has the sidebar nav row —
-            the card stays out to avoid a duplicate entry. */}
-        {mode === 'simple' && <OpcEntryCard onOpen={() => navigate('/opc')} />}
+            notice card (no CTA — parity ruling C, cleanup plan 执行记录(七)).
+            Dev mode already has the sidebar nav row — the card stays out to
+            avoid a duplicate entry. */}
+        {mode === 'simple' && <OpcEntryCard />}
 
         {/* P2.2: Active / History / Worktrees tab switcher — Simple mode
             only shows the two universal tabs; the dev-only surfaces move

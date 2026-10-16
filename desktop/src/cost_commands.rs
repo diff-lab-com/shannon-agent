@@ -73,7 +73,10 @@ pub(crate) enum BudgetTurnAction {
 ///   [`BUDGET_WARNING_FRACTION`];
 /// - a single event large enough to jump straight past the cap yields
 ///   `Exceeded` only — the `Exceeded` arm is checked first, so no stray
-///   `Warn` precedes it.
+///   `Warn` precedes it;
+/// - a `None` cost (unknown rate — the engine never bills an estimate) is
+///   skipped: it moves the running total by nothing, so unpriced usage
+///   neither triggers nor advances the budget.
 #[derive(Debug)]
 pub(crate) struct BudgetTurnGuard {
     budget_usd: f64,
@@ -97,8 +100,12 @@ impl BudgetTurnGuard {
     }
 
     /// Fold one Usage event's cost in and classify the running total.
-    pub(crate) fn on_usage(&mut self, cost_usd: f64) -> BudgetTurnAction {
-        self.turn_cost += cost_usd;
+    /// `cost_usd: None` (unknown rate) is skipped — the budget accumulates
+    /// known costs only.
+    pub(crate) fn on_usage(&mut self, cost_usd: Option<f64>) -> BudgetTurnAction {
+        if let Some(cost_usd) = cost_usd {
+            self.turn_cost += cost_usd;
+        }
         let spent = self.spent_basis + self.turn_cost;
         match budget_verdict(spent, self.budget_usd) {
             BudgetVerdict::Exceeded if !self.exceeded_emitted => {
@@ -308,7 +315,11 @@ fn aggregate_by_session(
         row.output_tokens += r.output_tokens;
         row.cache_creation_tokens += r.cache_creation_tokens;
         row.cache_read_tokens += r.cache_read_tokens;
-        row.cost_usd += r.cost_usd;
+        // Unknown-rate records count toward the request/token columns but
+        // add nothing to the USD column (absent = hidden, never $0-billed).
+        if let Some(cost) = r.cost_usd {
+            row.cost_usd += cost;
+        }
         row.requests += 1;
         row.last_used_at_ms = row.last_used_at_ms.max(r.timestamp_ms);
     }
@@ -540,7 +551,8 @@ mod tests {
                 output_tokens: 50,
                 cache_creation_tokens: 10,
                 cache_read_tokens: 5,
-                cost_usd: cost,
+                cost_usd: Some(cost),
+                raw_usage: None,
             },
             session,
         );
@@ -576,33 +588,33 @@ mod tests {
     fn guard_warns_once_at_80pct_then_stays_quiet_under_the_cap() {
         let mut g = BudgetTurnGuard::new(10.0, 0.0);
         // 7.0 = 70% → quiet.
-        assert_eq!(g.on_usage(7.0), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(Some(7.0)), BudgetTurnAction::Quiet);
         // 1.5 more = 8.5 = 85% → first (and only) warning.
         assert_eq!(
-            g.on_usage(1.5),
+            g.on_usage(Some(1.5)),
             BudgetTurnAction::Warn {
                 spent_usd: 8.5,
                 budget_usd: 10.0
             }
         );
         // Further in-budget events stay silent.
-        assert_eq!(g.on_usage(0.5), BudgetTurnAction::Quiet);
-        assert_eq!(g.on_usage(0.4), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(Some(0.5)), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(Some(0.4)), BudgetTurnAction::Quiet);
     }
 
     #[test]
     fn guard_exceeded_fires_exactly_once_and_latches() {
         let mut g = BudgetTurnGuard::new(1.0, 0.5);
         assert_eq!(
-            g.on_usage(0.6),
+            g.on_usage(Some(0.6)),
             BudgetTurnAction::Exceeded {
                 spent_usd: 1.1,
                 budget_usd: 1.0
             }
         );
         // Events already buffered when the cancel lands must not re-emit.
-        assert_eq!(g.on_usage(0.1), BudgetTurnAction::Quiet);
-        assert_eq!(g.on_usage(0.1), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(Some(0.1)), BudgetTurnAction::Quiet);
+        assert_eq!(g.on_usage(Some(0.1)), BudgetTurnAction::Quiet);
     }
 
     #[test]
@@ -610,7 +622,11 @@ mod tests {
         // Arm-order contract: a single event crossing from below the
         // warning line to >= 100% produces Exceeded only.
         let mut g = BudgetTurnGuard::new(1.0, 0.0);
-        let actions = [g.on_usage(2.0), g.on_usage(0.5), g.on_usage(0.5)];
+        let actions = [
+            g.on_usage(Some(2.0)),
+            g.on_usage(Some(0.5)),
+            g.on_usage(Some(0.5)),
+        ];
         assert_eq!(
             actions[0],
             BudgetTurnAction::Exceeded {
@@ -633,7 +649,7 @@ mod tests {
         // long as it pushes ≥ 100%) exceeds without warning.
         let mut g = BudgetTurnGuard::new(1.0, 0.95);
         assert!(matches!(
-            g.on_usage(0.05),
+            g.on_usage(Some(0.05)),
             BudgetTurnAction::Exceeded { .. }
         ));
     }

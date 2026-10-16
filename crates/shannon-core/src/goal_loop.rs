@@ -64,10 +64,11 @@ pub fn detect_goal_marker(last_non_empty_line: &str) -> Option<GoalMarker> {
 /// What a turn actually did, in terms the guard rails can compare.
 ///
 /// `spent_usd` carries the USD cost attributed to the run so far (desktop
-/// accumulates `QueryEvent::Usage.cost_usd` across turns; the TUI feeds the
-/// per-turn delta, which keeps its historical behaviour because it never
-/// observed costs). The budget cap only fires when `max_budget_usd` is
-/// `Some` and `spent_usd >= cap`.
+/// accumulates `QueryEvent::Usage.cost_usd` across turns, skipping `None`
+/// frames — unknown rates add nothing; the TUI feeds the per-turn delta,
+/// which keeps its historical behaviour because it never observed costs).
+/// The budget cap only fires when `max_budget_usd` is `Some` and
+/// `spent_usd >= cap`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GoalDecisionInput {
     /// The user's objective / completion condition (verbatim user words).

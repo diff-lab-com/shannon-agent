@@ -542,8 +542,13 @@ async fn discover_server_tools(
 mod tests {
     use super::*;
 
+    fn isolate_home() -> crate::config::test_support::HomeIsolation {
+        crate::config::test_support::HomeIsolation::new()
+    }
+
     #[tokio::test]
     async fn test_discover_all_servers_no_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let result = discover_all_servers(temp.path()).await;
         assert!(result.servers.is_empty());
@@ -552,6 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_all_servers_with_empty_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let config = serde_json::json!({
             "mcpServers": {}
@@ -569,6 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_all_servers_with_invalid_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(".mcp.json"), "not valid json {{{").unwrap();
 
@@ -579,6 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_all_servers_pooled_no_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let result = discover_all_servers_pooled(temp.path()).await;
         assert!(result.servers.is_empty());
@@ -589,6 +597,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_discover_all_servers_pooled_empty_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let config = serde_json::json!({ "mcpServers": {} });
         std::fs::write(
@@ -604,6 +613,7 @@ mod tests {
 
     #[test]
     fn test_discover_nonblocking_no_config() {
+        let _home = isolate_home();
         let temp = tempfile::tempdir().unwrap();
         let called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let called_clone = called.clone();

@@ -176,7 +176,8 @@ pub(crate) fn month_start_ms(now: DateTime<Local>) -> u64 {
 
 /// Month-to-date and trailing-7-day cost over pre-folded records. Both
 /// windows follow the local clock — the same convention the Usage page's
-/// per-day buckets use (`commands_usage::day_label`).
+/// per-day buckets use (`commands_usage::day_label`). Unknown-rate records
+/// (`cost_usd: None`) are skipped — they count in no window's USD total.
 pub(crate) fn summarize_windows(
     records: &[UsageRecord],
     now_ms: u64,
@@ -186,11 +187,14 @@ pub(crate) fn summarize_windows(
     let mut month_cost = 0.0f64;
     let mut week_cost = 0.0f64;
     for r in records {
+        let Some(cost) = r.cost_usd else {
+            continue;
+        };
         if r.timestamp_ms >= month_start {
-            month_cost += r.cost_usd;
+            month_cost += cost;
         }
         if r.timestamp_ms >= week_start {
-            week_cost += r.cost_usd;
+            week_cost += cost;
         }
     }
     (month_cost, week_cost)
@@ -427,9 +431,25 @@ mod tests {
             output_tokens: 50,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
-            cost_usd: cost,
+            cost_usd: Some(cost),
             session_id: None,
+            raw_usage: None,
         }
+    }
+
+    #[test]
+    fn summarize_windows_skips_unknown_rate_records() {
+        // Unknown-rate records (cost None) must not contribute to any
+        // window's USD total — absent = hidden, never $0-billed.
+        let now = 1_700_000_000_000u64;
+        let records = vec![rec(now, 0.5), {
+            let mut r = rec(now, 0.0);
+            r.cost_usd = None;
+            r
+        }];
+        let (month, week) = summarize_windows(&records, now, 0);
+        assert!((month - 0.5).abs() < 1e-9);
+        assert!((week - 0.5).abs() < 1e-9);
     }
 
     fn run(started_at: DateTime<Utc>, cost: Option<f64>) -> ScheduledRun {

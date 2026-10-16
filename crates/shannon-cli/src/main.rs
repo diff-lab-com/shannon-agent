@@ -2374,7 +2374,11 @@ fn run_noninteractive_query(
                     } else {
                         total.to_string()
                     };
-                    eprintln!("[usage: {total_fmt} tokens (${cost_usd:.4})]");
+                    // Unknown rate prints no figure — never a fabricated one.
+                    match cost_usd {
+                        Some(cost_usd) => eprintln!("[usage: {total_fmt} tokens (${cost_usd:.4})]"),
+                        None => eprintln!("[usage: {total_fmt} tokens (cost unknown)]"),
+                    }
                 }
                 Ok(QueryEvent::Progress { message, .. }) => {
                     eprintln!("[{message}]");

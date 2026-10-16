@@ -1027,7 +1027,10 @@ pub(crate) struct TurnObservation {
     /// Full assistant text of the turn (concatenated text events).
     assistant_text: String,
     had_tool_calls: bool,
-    cost_usd: f64,
+    /// Known USD cost folded from this turn's Usage events. `None` until a
+    /// known cost arrives — unknown-rate events (engine never bills an
+    /// estimate) add nothing to the budget basis.
+    cost_usd: Option<f64>,
     failure: Option<String>,
     cancelled: bool,
     /// `goal_update` reported `complete` mid-turn.
@@ -1264,7 +1267,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
         let mut observation = TurnObservation {
             assistant_text: String::new(),
             had_tool_calls: false,
-            cost_usd: 0.0,
+            cost_usd: None,
             failure: None,
             cancelled: false,
             tool_completed: false,
@@ -1379,9 +1382,13 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                         cache_creation_tokens,
                         cache_read_tokens,
                         context_window_tokens,
+                        raw_usage,
                         ..
                     } => {
-                        observation.cost_usd += event_cost;
+                        // Known costs accumulate; unknown rates fold nothing.
+                        if let Some(cost) = event_cost {
+                            observation.cost_usd = Some(observation.cost_usd.unwrap_or(0.0) + cost);
+                        }
                         // Best-effort ledger write, mirroring send_message.
                         let _ = self
                             .deps
@@ -1395,6 +1402,7 @@ impl<R: tauri::Runtime> EngineGoalTurnRunner<R> {
                                     cache_creation_tokens,
                                     cache_read_tokens,
                                     cost_usd: event_cost,
+                                    raw_usage,
                                 },
                                 Some(&self.session_id.to_string()),
                             ));
@@ -1649,8 +1657,8 @@ async fn run_turn_loop<R: tauri::Runtime, T: GoalTurnRunner + ?Sized>(
         // and the decision arms apply the advancement exactly once (see
         // check_goal_continuation). Cancels/failures leave counters
         // untouched, mirroring the TUI where an errored/cancelled query
-        // simply stops the loop.
-        spent_usd += observation.cost_usd;
+        // simply stops the loop. Unknown-rate turns (cost None) add nothing.
+        spent_usd += observation.cost_usd.unwrap_or(0.0);
         {
             let mut s = handle.state.lock().await;
             s.spent_usd = spent_usd;
@@ -2438,7 +2446,7 @@ mod tests {
         TurnObservation {
             assistant_text: text.into(),
             had_tool_calls: had_tools,
-            cost_usd: 0.0,
+            cost_usd: None,
             failure: None,
             cancelled: false,
             tool_completed: false,
@@ -2686,7 +2694,8 @@ mod tests {
                     output_tokens: 1,
                     cache_creation_tokens: 0,
                     cache_read_tokens: 0,
-                    cost_usd: 1.0,
+                    cost_usd: Some(1.0),
+                    raw_usage: None,
                 },
                 Some(&session.to_string()),
             ))

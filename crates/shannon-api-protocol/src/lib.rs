@@ -122,7 +122,12 @@ pub struct QueryResponse {
 pub struct UsageInfo {
     pub input_tokens: u64,
     pub output_tokens: u64,
-    pub cost_usd: f64,
+    /// Cost in USD. `None` when no pricing is known for the model — the
+    /// engine never bills a fabricated estimate (absent = hidden).
+    /// serde-defaulted so producers written before the field was an Option
+    /// stay parseable.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 /// JSON response for `GET /api/health`.
@@ -509,7 +514,11 @@ pub enum WsServerMessage {
     Usage {
         input_tokens: u64,
         output_tokens: u64,
-        cost_usd: f64,
+        /// Cost in USD; `None` when no rate is known for the model (absent =
+        /// hidden — hosts must not render a fabricated figure). serde-defaulted
+        /// and skipped when absent so older producers/consumers interoperate.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost_usd: Option<f64>,
     },
     /// Query completed.
     #[serde(rename = "completed")]

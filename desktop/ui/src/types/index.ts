@@ -47,7 +47,10 @@ export interface UsagePayload {
   query_id: string
   input_tokens: number
   output_tokens: number
-  cost_usd: number
+  /** Cost in USD. Absent/null when no rate is known for the model — the
+   *  backend never bills a fabricated estimate (honesty contract: absent =
+   *  hidden), so the UI renders no figure instead of $0. */
+  cost_usd?: number | null
   cache_hit_rate?: number
   /** 上下文峰值: the serving model's resolved context window for this frame
    *  (config override > live num_ctx > providers.toml > model registry).
@@ -425,8 +428,11 @@ export interface SendCostEstimate {
   draftTokens: number
   attachmentTokens: number
   maxOutputTokens: number
-  costLow: number
-  costHigh: number
+  /** Cost range. Absent/null when the model has no known pricing — the
+   *  backend yields no estimate rather than a fabricated one (absent =
+   *  hidden); the composer hides the range in that case. */
+  costLow?: number | null
+  costHigh?: number | null
   budgetUsd?: number | null
   spentUsd: number
 }

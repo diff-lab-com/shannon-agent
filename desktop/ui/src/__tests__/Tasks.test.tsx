@@ -134,11 +134,13 @@ describe('Tasks page', () => {
   })
 
   // B4 裁决 (audit R1 §09 / R3-V-12): Simple mode has no sidebar entry for
-  // the Mission Control — the tasks page carries the promised entry card.
+  // the Mission Control — the tasks page carries the entry card. Parity
+  // ruling C (2026-10-15): the card is a notice, not a control — no CTA.
   it('shows the Mission Control entry card in simple mode', async () => {
     render(wrap(<Tasks />))
     await waitFor(() => expect(screen.getByTestId('tasks-opc-entry')).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Open Mission Control' })).toBeInTheDocument()
+    expect(screen.getByText('Mission Control')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open Mission Control' })).not.toBeInTheDocument()
   })
 
   // Design 04 (audit R1 §04): a routine the SYSTEM paused leads its row with

@@ -766,6 +766,7 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
                         cost_usd: event_cost,
                         cache_creation_tokens,
                         cache_read_tokens,
+                        raw_usage,
                         ..
                     } => {
                         // Best-effort ledger write, mirroring send_message.
@@ -778,10 +779,11 @@ impl<R: tauri::Runtime> EngineBatchBranchRunner<R> {
                                 cache_creation_tokens,
                                 cache_read_tokens,
                                 cost_usd: event_cost,
+                                raw_usage,
                             },
                             Some(&session_id.to_string()),
                         ));
-                        // Live spend on the batch card.
+                        // Live spend on the batch card (unknown rates fold 0).
                         let dto = fold_branch_spend(&self.handle, spawn.index, event_cost).await;
                         let _ = self.app.emit(event_names::BATCH_UPDATED, dto);
                     }
@@ -818,11 +820,16 @@ impl<R: tauri::Runtime> BatchBranchRunner for EngineBatchBranchRunner<R> {
 
 /// Fold one `Usage` event's cost into the branch's live `spent_usd` and
 /// return the refreshed DTO for the `batch:updated` emit. Extracted from the
-/// engine runner so the 累计 rule is unit-testable without an LLM.
-async fn fold_branch_spend(handle: &BatchRunHandle, index: u32, cost_usd: f64) -> BatchRunDto {
+/// engine runner so the 累计 rule is unit-testable without an LLM. A `None`
+/// cost (unknown rate) is skipped — the card accumulates known spend only.
+async fn fold_branch_spend(
+    handle: &BatchRunHandle,
+    index: u32,
+    cost_usd: Option<f64>,
+) -> BatchRunDto {
     let mut record = handle.record.lock().await;
     if let Some(branch) = record.branches.iter_mut().find(|b| b.index == index) {
-        branch.spent_usd += cost_usd;
+        branch.spent_usd += cost_usd.unwrap_or(0.0);
     }
     record.dto()
 }
@@ -2724,11 +2731,15 @@ mod tests {
         let env = env();
         let (_, handle) = fabricate(&env, &["running", "running"], &[None, None]).await;
 
-        let _ = fold_branch_spend(&handle, 1, 0.25).await;
-        let dto = fold_branch_spend(&handle, 1, 0.5).await;
+        let _ = fold_branch_spend(&handle, 1, Some(0.25)).await;
+        let dto = fold_branch_spend(&handle, 1, Some(0.5)).await;
         assert_eq!(dto.branches[1].spent_usd, 0.75, "branch 1 accumulates");
 
-        let final_dto = fold_branch_spend(&handle, 0, 2.0).await;
+        // Unknown-rate events (None) fold nothing.
+        let dto = fold_branch_spend(&handle, 1, None).await;
+        assert_eq!(dto.branches[1].spent_usd, 0.75, "None cost is skipped");
+
+        let final_dto = fold_branch_spend(&handle, 0, Some(2.0)).await;
         assert_eq!(
             final_dto.branches[0].spent_usd, 2.0,
             "branch 0 accumulates separately"

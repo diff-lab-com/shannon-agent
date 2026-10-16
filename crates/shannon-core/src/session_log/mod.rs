@@ -363,7 +363,9 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             output_tokens: *output_tokens,
             cache_creation_tokens: *cache_creation_tokens,
             cache_read_tokens: *cache_read_tokens,
-            cost_usd: Some(*cost_usd),
+            // Unknown rate stays None — the fold treats it as "no data",
+            // never $0.
+            cost_usd: *cost_usd,
             context_window_tokens: *context_window_tokens,
         },
         QueryEvent::Cost {
@@ -376,7 +378,7 @@ pub fn token_usage_from_event(event: &QueryEvent) -> Option<TokenUsage> {
             output_tokens: *output_tokens,
             cache_creation_tokens: 0,
             cache_read_tokens: 0,
-            cost_usd: Some(*total_cost_usd),
+            cost_usd: *total_cost_usd,
             context_window_tokens: None,
         },
         QueryEvent::TurnCompleted { tokens_used, .. } => TokenUsage {
@@ -643,7 +645,7 @@ mod tests {
         assert!(
             query_event_to_session_body(&QueryEvent::Cost {
                 query_id: query_id(),
-                total_cost_usd: 0.1,
+                total_cost_usd: Some(0.1),
                 input_tokens: 1,
                 output_tokens: 2,
             })
@@ -671,10 +673,11 @@ mod tests {
             query_id: query_id(),
             input_tokens: 100,
             output_tokens: 200,
-            cost_usd: 0.5,
+            cost_usd: Some(0.5),
             cache_creation_tokens: 10,
             cache_read_tokens: 20,
             context_window_tokens: Some(200_000),
+            raw_usage: None,
         })
         .unwrap();
         assert_eq!(usage.input_tokens, 100);
@@ -690,7 +693,7 @@ mod tests {
     fn test_token_usage_from_cost_event() {
         let usage = token_usage_from_event(&QueryEvent::Cost {
             query_id: query_id(),
-            total_cost_usd: 1.5,
+            total_cost_usd: Some(1.5),
             input_tokens: 300,
             output_tokens: 400,
         })

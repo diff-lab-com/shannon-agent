@@ -28,12 +28,24 @@ pub struct UsageRecord {
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
-    pub cost_usd: f64,
+    /// Cost in USD, when a rate was known at billing time. `None` = unknown
+    /// rate (honesty rule: absent = hidden) — every aggregation below SKIPS
+    /// such records in USD sums instead of billing a fabricated number.
+    /// serde-defaulted so legacy f64 lines keep parsing as known costs.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
     /// Session the event belongs to (written since the /cost slash command).
     /// Older ledger lines lack the field and cannot be attributed to any
     /// session; they still count toward the Usage page aggregates.
     #[serde(default)]
     pub session_id: Option<String>,
+    /// Verbatim provider usage payload the engine received for this frame
+    /// (raw wire JSON), kept so historic records can be re-priced when rates
+    /// change. `None` when the engine had no raw payload. serde-defaulted and
+    /// skipped when absent: lines written before the field (and unknown-rate
+    /// frames) keep the historical shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_usage: Option<serde_json::Value>,
 }
 
 /// Append-only usage ledger backed by `~/.shannon/usage.jsonl`.
@@ -115,7 +127,9 @@ impl UsageStore {
         self.load()
             .iter()
             .filter(|r| r.session_id.as_deref() == Some(session_id))
-            .map(|r| r.cost_usd)
+            // Unknown-rate records (cost None) are excluded from the sum —
+            // they contribute tokens but no fabricated dollars.
+            .filter_map(|r| r.cost_usd)
             .sum()
     }
 
@@ -132,7 +146,9 @@ impl UsageStore {
         for record in self.load() {
             if record.session_id.as_deref() == Some(session_id) {
                 seen = true;
-                total += record.cost_usd;
+                if let Some(cost) = record.cost_usd {
+                    total += cost;
+                }
             }
         }
         seen.then_some(total)
@@ -202,13 +218,17 @@ fn now_ms() -> u64 {
 
 /// Token/cost payload of an engine `QueryEvent::Usage`, bundled so
 /// [`record_event`] stays under the clippy argument-count lint.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct UsageTotals {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_creation_tokens: u64,
     pub cache_read_tokens: u64,
-    pub cost_usd: f64,
+    /// `None` when no rate was known for the model — the record is written
+    /// with `cost_usd: null` and excluded from every USD aggregation.
+    pub cost_usd: Option<f64>,
+    /// Verbatim provider usage JSON (passthrough from the engine event).
+    pub raw_usage: Option<serde_json::Value>,
 }
 
 /// Build a [`UsageRecord`] from an engine Usage event, attributing the
@@ -230,6 +250,7 @@ pub fn record_event(
         cache_read_tokens: totals.cache_read_tokens,
         cost_usd: totals.cost_usd,
         session_id: session_id.map(str::to_string),
+        raw_usage: totals.raw_usage,
     }
 }
 
@@ -265,7 +286,9 @@ impl BucketTotals {
         self.output_tokens += r.output_tokens;
         self.cache_creation_tokens += r.cache_creation_tokens;
         self.cache_read_tokens += r.cache_read_tokens;
-        self.cost_usd += r.cost_usd;
+        if let Some(cost) = r.cost_usd {
+            self.cost_usd += cost;
+        }
         self.requests += 1;
     }
 }
@@ -408,7 +431,9 @@ fn summarize_session(records: &[UsageRecord], session_id: &str) -> SessionUsageS
             summary.output_tokens += r.output_tokens;
             summary.cache_creation_tokens += r.cache_creation_tokens;
             summary.cache_read_tokens += r.cache_read_tokens;
-            summary.cost_usd += r.cost_usd;
+            if let Some(cost) = r.cost_usd {
+                summary.cost_usd += cost;
+            }
             summary.events += 1;
         }
     }
@@ -428,9 +453,75 @@ mod tests {
             output_tokens: 50,
             cache_creation_tokens: 10,
             cache_read_tokens: 5,
-            cost_usd: cost,
+            cost_usd: Some(cost),
             session_id: None,
+            raw_usage: None,
         }
+    }
+
+    #[test]
+    fn unknown_rate_records_are_written_and_skipped_in_sums() {
+        // Honest-absent contract: an unknown-rate record lands in the ledger
+        // with cost_usd absent + the raw provider payload kept, and every
+        // USD aggregation skips it instead of billing $0 / an estimate.
+        let mut known = rec(1, "claude", "anthropic", 0.01);
+        known.raw_usage = Some(serde_json::json!({"input_tokens": 100}));
+        let unknown = UsageRecord {
+            cost_usd: None,
+            raw_usage: Some(serde_json::json!({"input_tokens": 200})),
+            ..rec(2, "mystery-model", "openai", 0.0)
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        store.append(&known).unwrap();
+        store.append(&unknown).unwrap();
+
+        let loaded = store.load();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[1].cost_usd, None);
+        assert_eq!(
+            loaded[1].raw_usage,
+            Some(serde_json::json!({"input_tokens": 200}))
+        );
+        // The unknown-rate line writes an explicit `"cost_usd":null` (the
+        // struct's null-emitting style, same as `session_id`) plus the raw
+        // provider payload; the known-rate line keeps its number.
+        let raw = fs::read_to_string(store.path()).unwrap();
+        let lines: Vec<&str> = raw.lines().collect();
+        assert!(lines[0].contains(r#""cost_usd":0.01"#), "{}", lines[0]);
+        assert!(
+            lines[1].contains(r#""cost_usd":null"#),
+            "unknown rate must read as null, not a number: {}",
+            lines[1]
+        );
+        assert!(lines[1].contains("raw_usage"));
+
+        // Sums skip the unknown record.
+        assert!(
+            store
+                .session_ledger_cost("44444444-4444-4444-4444-444444444444")
+                .is_none()
+        );
+        let summary = summarize_session(&loaded, "11111111-1111-1111-1111-111111111111");
+        assert_eq!(summary.events, 0);
+        // The windowed aggregate counts BOTH records (tokens/requests) but
+        // sums only the known cost — the unknown-rate record adds nothing.
+        let now = now_ms();
+        let in_window = vec![
+            {
+                let mut r = rec(now, "claude", "anthropic", 0.01);
+                r.raw_usage = Some(serde_json::json!({"input_tokens": 100}));
+                r
+            },
+            UsageRecord {
+                cost_usd: None,
+                ..rec(now, "mystery-model", "openai", 0.0)
+            },
+        ];
+        let stats = compute_stats(30, &in_window, now);
+        assert!((stats.totals.cost_usd - 0.01).abs() < 1e-9);
+        assert_eq!(stats.totals.requests, 2);
+        assert_eq!(stats.totals.input_tokens, 200);
     }
 
     #[test]

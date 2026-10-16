@@ -407,6 +407,13 @@ async fn test_mcp_config_reload() {
     // results when the underlying config file changes.
     use shannon_mcp::config::{McpServerConfig, discover_config};
 
+    // discover_config merges user-level configs from $HOME; pin it to an
+    // empty home so the assertion sees only this test's file (nextest runs
+    // each test as its own process, so the override cannot leak).
+    let home = tempfile::tempdir().unwrap();
+    let previous_home = std::env::var_os("HOME");
+    unsafe { std::env::set_var("HOME", home.path()) };
+
     let temp = tempfile::tempdir().unwrap();
 
     // Write initial config with one server.
@@ -460,6 +467,11 @@ async fn test_mcp_config_reload() {
             assert_eq!(url, "http://localhost:4000/mcp");
         }
         _ => panic!("Expected Sse config for server-beta"),
+    }
+
+    match previous_home {
+        Some(prev) => unsafe { std::env::set_var("HOME", prev) },
+        None => unsafe { std::env::remove_var("HOME") },
     }
 }
 

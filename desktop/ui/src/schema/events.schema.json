@@ -867,8 +867,12 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
       "cost_usd": {
+        "description": "Cost in USD. `None` when no rate is known for the model — the UI hides the figure instead of fabricating one (honesty rule). Additive — must mirror src/events.rs exactly.",
         "format": "double",
-        "type": "number"
+        "type": [
+          "number",
+          "null"
+        ]
       },
       "input_tokens": {
         "format": "uint64",
@@ -892,7 +896,6 @@
       }
     },
     "required": [
-      "cost_usd",
       "input_tokens",
       "output_tokens",
       "query_id"

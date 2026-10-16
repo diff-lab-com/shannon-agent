@@ -394,7 +394,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let new_msg_chars = input.len();
         let tracker = shannon_core::query_engine::CostTracker::new(model.to_string());
         let estimate = tracker.estimate_query_cost(model, history_chars, new_msg_chars, max_tokens);
-        if estimate.estimated_cost_usd > 0.0 {
+        if estimate.estimated_cost_usd.is_some_and(|c| c > 0.0) {
             repl.state.status = format!("Cost estimate: {estimate}");
         }
     }
@@ -629,23 +629,27 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 }
                 Ok(QueryEvent::Cost { total_cost_usd, input_tokens, output_tokens, .. }) => {
                     tokens_in_turn = input_tokens + output_tokens;
-                    let budget_limit;
-                    {
-                        let mut s = recover_lock(ss.lock());
-                        s.cost = total_cost_usd;
-                        budget_limit = s.budget;
-                    }
-                    // Budget warning: alert when cost exceeds 80% of limit
-                    if let Some(limit) = budget_limit {
-                        if total_cost_usd > limit * 0.8 && total_cost_usd <= limit {
-                            response_text.push_str(&format!(
-                                "\n\n⚠️ Budget warning: ${total_cost_usd:.4} / ${limit:.2} ({:.0}% used)",
-                                (total_cost_usd / limit) * 100.0
-                            ));
-                        } else if total_cost_usd > limit {
-                            response_text.push_str(&format!(
-                                "\n\n🚨 Budget exceeded: ${total_cost_usd:.4} > ${limit:.2}"
-                            ));
+                    // Unknown rate: keep the previous known total — never
+                    // fabricate or zero it out.
+                    if let Some(total_cost_usd) = total_cost_usd {
+                        let budget_limit;
+                        {
+                            let mut s = recover_lock(ss.lock());
+                            s.cost = total_cost_usd;
+                            budget_limit = s.budget;
+                        }
+                        // Budget warning: alert when cost exceeds 80% of limit
+                        if let Some(limit) = budget_limit {
+                            if total_cost_usd > limit * 0.8 && total_cost_usd <= limit {
+                                response_text.push_str(&format!(
+                                    "\n\n⚠️ Budget warning: ${total_cost_usd:.4} / ${limit:.2} ({:.0}% used)",
+                                    (total_cost_usd / limit) * 100.0
+                                ));
+                            } else if total_cost_usd > limit {
+                                response_text.push_str(&format!(
+                                    "\n\n🚨 Budget exceeded: ${total_cost_usd:.4} > ${limit:.2}"
+                                ));
+                            }
                         }
                     }
                 }

@@ -44,7 +44,11 @@ export function ContextPanelContent({ usage, activeToolCalls }: { usage: UsagePa
             </div>
             <div className="flex justify-between text-body-sm">
               <span className="text-on-surface-variant">{t('chat.context.cost')}</span>
-              <span className="font-bold text-primary">${usage.cost_usd.toFixed(4)}</span>
+              {/* Unknown rate (cost_usd null) shows no figure — the backend
+                  never bills a fabricated estimate (absent = hidden). */}
+              <span className="font-bold text-primary">
+                {usage.cost_usd != null ? `$${usage.cost_usd.toFixed(4)}` : '—'}
+              </span>
             </div>
             {(() => {
               const total = usage.input_tokens + usage.output_tokens

@@ -71,10 +71,11 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
         query_id: Uuid::new_v4(),
         input_tokens: 100,
         output_tokens: 30,
-        cost_usd: 0.05,
+        cost_usd: Some(0.05),
         cache_creation_tokens: 12,
         cache_read_tokens: 44,
         context_window_tokens: None,
+        raw_usage: None,
     });
     tee.record_query_event(&shannon_core::QueryEvent::Completed {
         query_id: Uuid::new_v4(),
@@ -92,10 +93,11 @@ fn seed_two_turn_session(store: &SessionStore, id: &Uuid) {
         query_id: Uuid::new_v4(),
         input_tokens: 20,
         output_tokens: 2,
-        cost_usd: 0.01,
+        cost_usd: Some(0.01),
         cache_creation_tokens: 0,
         cache_read_tokens: 0,
         context_window_tokens: None,
+        raw_usage: None,
     });
     tee.record_query_event(&shannon_core::QueryEvent::Completed {
         query_id: Uuid::new_v4(),

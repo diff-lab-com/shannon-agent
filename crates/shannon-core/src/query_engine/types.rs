@@ -13,25 +13,35 @@ pub struct CostEstimate {
     pub estimated_input_tokens: u64,
     /// Estimated output tokens (based on max_tokens)
     pub estimated_output_tokens: u64,
-    /// Estimated cost for this query in USD
-    pub estimated_cost_usd: f64,
-    /// Session total before this query
+    /// Estimated cost for this query in USD; `None` when the model has no
+    /// known pricing — display code hides the range instead of fabricating
+    /// one (absent = hidden).
+    pub estimated_cost_usd: Option<f64>,
+    /// Session total before this query (known costs only)
     pub session_total_usd: f64,
-    /// Projected session total after this query
+    /// Projected session total after this query; unknown-rate estimates add
+    /// nothing (the known total is carried through unchanged).
     pub projected_total_usd: f64,
 }
 
 impl std::fmt::Display for CostEstimate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Est: ~{}in+{}out tokens, ~${:.4} (session total: ${:.4}→${:.4})",
-            self.estimated_input_tokens,
-            self.estimated_output_tokens,
-            self.estimated_cost_usd,
-            self.session_total_usd,
-            self.projected_total_usd
-        )
+        match self.estimated_cost_usd {
+            Some(cost) => write!(
+                f,
+                "Est: ~{}in+{}out tokens, ~${:.4} (session total: ${:.4}→${:.4})",
+                self.estimated_input_tokens,
+                self.estimated_output_tokens,
+                cost,
+                self.session_total_usd,
+                self.projected_total_usd
+            ),
+            None => write!(
+                f,
+                "Est: ~{}in+{}out tokens, cost unknown (no pricing for model)",
+                self.estimated_input_tokens, self.estimated_output_tokens,
+            ),
+        }
     }
 }
 
@@ -46,8 +56,12 @@ pub struct TurnCost {
     pub input_tokens: u64,
     /// Output tokens generated
     pub output_tokens: u64,
-    /// Cost in USD for this turn
-    pub cost_usd: f64,
+    /// Cost in USD for this turn; `None` when no rate is known for the
+    /// model — unknown-rate turns are excluded from USD totals (absent =
+    /// hidden), never billed at a fallback estimate. serde-defaulted so
+    /// pre-Option logs keep parsing as "no cost".
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
 }
 
 /// Accumulated cost for a specific model
@@ -284,14 +298,6 @@ static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
     ),
 ];
 
-/// Fallback pricing used for models not found in the table.
-const DEFAULT_PRICING_FALLBACK: ModelPricing = ModelPricing {
-    input_price_per_mtok: 3.0,
-    output_price_per_mtok: 15.0,
-    cache_read_per_mtok: None,
-    cache_write_per_mtok: None,
-};
-
 /// Lazily-built pricing table: merge the canonical catalog with runtime overrides.
 static PRICING_TABLE: Lazy<HashMap<String, ModelPricing>> = Lazy::new(build_pricing_table);
 
@@ -416,8 +422,9 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
 /// 2. Static table (catalog ids/aliases + env/file overlays) — exact match,
 ///    then substring (`contains`), mirroring the original semantics.
 ///
-/// Returns `None` when only the [`DEFAULT_PRICING_FALLBACK`] estimate would
-/// apply (dynamic/custom models).
+/// Returns `None` when the model has no priced source (dynamic/custom
+/// models). Callers must treat that as *cost unknown* — absent = hidden,
+/// never a fabricated estimate.
 fn find_pricing(model: &str) -> Option<ModelPricing> {
     // 1. Declared per-model metadata (R2-4) — authoritative, exact match.
     if let Some(pricing) = crate::declared_models::pricing_for(model) {
@@ -455,23 +462,22 @@ pub fn pricing_for_model_opt(model: &str) -> Option<ModelPricing> {
 }
 
 /// Look up pricing for a model name, falling back to the LiteLLM community
-/// table and then the default estimate, emitting a debug log for truly unknown
-/// models.
-fn lookup_pricing(model: &str) -> ModelPricing {
+/// table. Returns `None` for truly unknown models — the honest-absent
+/// contract: the caller records the cost as unknown (and excludes it from
+/// USD totals) rather than billing a made-up rate.
+fn lookup_pricing(model: &str) -> Option<ModelPricing> {
     if let Some(pricing) = find_pricing(model) {
-        return pricing.clone();
+        return Some(pricing.clone());
     }
     if let Some(pricing) = super::litellm::lookup_pricing(model) {
-        return pricing;
+        return Some(pricing);
     }
 
     tracing::debug!(
-        "No pricing entry for model '{}', using default (${:.2}/Mtok in, ${:.2}/Mtok out)",
+        "No pricing entry for model '{}'; cost will be recorded as unknown",
         model,
-        DEFAULT_PRICING_FALLBACK.input_price_per_mtok,
-        DEFAULT_PRICING_FALLBACK.output_price_per_mtok,
     );
-    DEFAULT_PRICING_FALLBACK.clone()
+    None
 }
 
 /// Weighted cost for a usage report, pricing prompt-cache tokens at their
@@ -515,8 +521,11 @@ impl CostTracker {
     }
 
     /// Calculate cost based on model pricing (in USD).
-    /// Prices per million tokens, looked up from the configurable pricing table.
-    pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 {
+    /// Prices per million tokens, looked up from the configurable pricing
+    /// table. `None` when no rate is known for the model — callers must skip
+    /// the record in USD accumulations (absent = hidden), never bill $0 or an
+    /// invented rate.
+    pub fn calculate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
         Self::calculate_cost_with_cache(model, input_tokens, output_tokens, 0, 0)
     }
 
@@ -531,38 +540,53 @@ impl CostTracker {
     /// `ModelPricing::cache_write_per_mtok`); when the rate is `None` the
     /// tokens fall back to the plain input price, which reproduces the
     /// pre-cache-aware cost exactly.
+    ///
+    /// Returns `None` when the model has no known pricing at all — no
+    /// fallback estimate is ever billed.
     pub fn calculate_cost_with_cache(
         model: &str,
         input_tokens: u64,
         output_tokens: u64,
         cache_read_tokens: u64,
         cache_creation_tokens: u64,
-    ) -> f64 {
-        cost_with_cache(
-            &lookup_pricing(model),
+    ) -> Option<f64> {
+        let pricing = lookup_pricing(model)?;
+        Some(cost_with_cache(
+            &pricing,
             input_tokens,
             output_tokens,
             cache_read_tokens,
             cache_creation_tokens,
-        )
+        ))
     }
 
-    /// Record usage and update totals with turn tracking
+    /// Record usage and update totals with turn tracking.
+    ///
+    /// Token counts are always accumulated; the USD cost only when a rate is
+    /// known. A record priced `None` (unknown rate) is excluded from
+    /// `total_cost_usd` and from the per-model cost breakdown — the budget
+    /// (`is_budget_exceeded` / `check_and_mark_budget_warning`) accumulates
+    /// known costs only, never a fabricated estimate.
     pub fn record_usage(&mut self, model: &str, input_tokens: u64, output_tokens: u64) {
         let cost = Self::calculate_cost(model, input_tokens, output_tokens);
         self.total_input_tokens += input_tokens;
         self.total_output_tokens += output_tokens;
-        self.total_cost_usd += cost;
+        if let Some(cost) = cost {
+            self.total_cost_usd += cost;
+        }
 
         // Update per-model breakdown
         let entry = self.model_breakdowns.entry(model.to_string()).or_default();
         entry.input_tokens += input_tokens;
         entry.output_tokens += output_tokens;
-        entry.cost_usd += cost;
+        if let Some(cost) = cost {
+            entry.cost_usd += cost;
+        }
         entry.turn_count += 1;
     }
 
-    /// Record usage for a specific turn number
+    /// Record usage for a specific turn number. `cost_usd` is `None` when no
+    /// rate is known for the model (unknown-rate turns carry no USD figure).
     pub fn record_turn(&mut self, turn: usize, model: &str, input_tokens: u64, output_tokens: u64) {
         let cost = Self::calculate_cost(model, input_tokens, output_tokens);
         self.record_usage(model, input_tokens, output_tokens);
@@ -635,7 +659,9 @@ impl CostTracker {
     ///
     /// Uses a rough token estimation (~4 chars per token) on the conversation
     /// history plus the new message, and assumes the model will use `max_tokens`
-    /// output tokens.
+    /// output tokens. `estimated_cost_usd` is `None` when the model has no
+    /// known pricing — the projection then carries the known session total
+    /// unchanged.
     pub fn estimate_query_cost(
         &self,
         model: &str,
@@ -651,7 +677,7 @@ impl CostTracker {
             estimated_output_tokens: max_output_tokens,
             estimated_cost_usd: estimated_cost,
             session_total_usd: self.total_cost_usd,
-            projected_total_usd: self.total_cost_usd + estimated_cost,
+            projected_total_usd: self.total_cost_usd + estimated_cost.unwrap_or(0.0),
         }
     }
 
@@ -710,10 +736,18 @@ impl CostTracker {
             let start = self.turn_costs.len() - show;
             report.push_str(&format!("  Recent turns (last {show}):\n"));
             for tc in &self.turn_costs[start..] {
-                report.push_str(&format!(
-                    "    Turn {}: ${:.4} ({} in + {} out, {})\n",
-                    tc.turn, tc.cost_usd, tc.input_tokens, tc.output_tokens, tc.model,
-                ));
+                match tc.cost_usd {
+                    Some(cost) => report.push_str(&format!(
+                        "    Turn {}: ${:.4} ({} in + {} out, {})\n",
+                        tc.turn, cost, tc.input_tokens, tc.output_tokens, tc.model,
+                    )),
+                    // No pricing known for the model — no USD figure is
+                    // fabricated for the turn.
+                    None => report.push_str(&format!(
+                        "    Turn {}: cost unknown ({} in + {} out, {})\n",
+                        tc.turn, tc.input_tokens, tc.output_tokens, tc.model,
+                    )),
+                }
             }
         }
 
@@ -1230,7 +1264,13 @@ pub enum QueryEvent {
         query_id: Uuid,
         input_tokens: u64,
         output_tokens: u64,
-        cost_usd: f64,
+        /// Cost of this request in USD. `None` when no rate is known for the
+        /// model (honesty rule: absent = hidden — consumers skip the record
+        /// in USD totals and hide the figure rather than fabricating one).
+        /// serde-defaulted so JSON/SSE producers written before the field was
+        /// an Option stay parseable.
+        #[serde(default)]
+        cost_usd: Option<f64>,
         /// Tokens written to prompt cache this request
         cache_creation_tokens: u64,
         /// Tokens read from prompt cache this request
@@ -1244,12 +1284,26 @@ pub enum QueryEvent {
         /// written before the field stay parseable.
         #[serde(default)]
         context_window_tokens: Option<u64>,
+        /// Verbatim provider usage payload (OpenAI/Anthropic wire JSON for
+        /// the frame, as received) so the usage ledger can re-price historic
+        /// records when rates change. `None` when the engine had no raw
+        /// payload (synthesized frames, wire formats without a usage object).
+        /// serde-defaulted and skipped when absent so producers written
+        /// before the field stay byte-compatible.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raw_usage: Option<serde_json::Value>,
     },
 
     /// Cost summary event
     Cost {
         query_id: Uuid,
-        total_cost_usd: f64,
+        /// Session-total cost in USD. `None` when no rate is known for the
+        /// model — the total stays unknown instead of a fabricated estimate
+        /// (same honesty rule as [`QueryEvent::Usage`]). serde-defaulted so
+        /// JSON/SSE producers written before the field was an Option stay
+        /// parseable.
+        #[serde(default)]
+        total_cost_usd: Option<f64>,
         input_tokens: u64,
         output_tokens: u64,
     },
@@ -1316,7 +1370,8 @@ mod tests {
 
         // 1M input tokens at the declared $0.99 — any other outcome means the
         // substring scan or LiteLLM leaked through.
-        let cost = CostTracker::calculate_cost("shannon-test-gpt-4o-mini", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("shannon-test-gpt-4o-mini", 1_000_000, 0)
+            .expect("declared price must resolve");
         crate::declared_models::clear();
         assert!(
             (cost - 0.99).abs() < 1e-9,
@@ -1325,7 +1380,8 @@ mod tests {
 
         // Exact-match catalog ids remain untouched once the declaration is
         // gone (sanity: the table still resolves normally).
-        let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("gpt-4o-mini", 1_000_000, 0)
+            .expect("catalog price must resolve");
         assert!(
             (cost - 0.15).abs() < 1e-9,
             "catalog price intact, got {cost}"
@@ -1352,7 +1408,8 @@ mod tests {
         };
         crate::declared_models::clear();
         crate::declared_models::replace_from_specs(&[spec]);
-        let cost = CostTracker::calculate_cost("shannon-test-collides-gpt-4o", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("shannon-test-collides-gpt-4o", 1_000_000, 0)
+            .expect("substring chain must resolve for a catalog-colliding id");
         crate::declared_models::clear();
         // Whatever the substring scan resolves to (gpt-4o or gpt-4o-mini
         // pricing), it must NOT bill the lone declared input half of $0.99.
@@ -1562,33 +1619,38 @@ mod tests {
 
     #[test]
     fn test_calculate_cost_claude_sonnet() {
-        let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 0)
+            .expect("known-priced model");
         assert!((cost - 3.0).abs() < 0.001);
 
-        let cost_out = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 0, 1_000_000);
+        let cost_out = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 0, 1_000_000)
+            .expect("known-priced model");
         assert!((cost_out - 15.0).abs() < 0.001);
     }
 
     #[test]
     fn test_calculate_cost_gpt4o() {
-        let cost = CostTracker::calculate_cost("gpt-4o", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("gpt-4o", 1_000_000, 0).expect("known-priced model");
         assert!((cost - 2.5).abs() < 0.001);
 
-        let cost_out = CostTracker::calculate_cost("gpt-4o", 0, 1_000_000);
+        let cost_out =
+            CostTracker::calculate_cost("gpt-4o", 0, 1_000_000).expect("known-priced model");
         assert!((cost_out - 10.0).abs() < 0.001);
     }
 
     #[test]
     fn test_calculate_cost_ollama_free() {
-        let cost = CostTracker::calculate_cost("llama3", 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost("llama3", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         assert_eq!(cost, 0.0);
     }
 
     #[test]
     fn test_calculate_cost_unknown_model() {
         let cost = CostTracker::calculate_cost("unknown-model", 1_000_000, 0);
-        // Uses default fallback pricing
-        assert!((cost - 3.0).abs() < 0.001);
+        // Honest-absent contract: no rate is known, so NO cost is produced —
+        // never the historical $3/$15 estimate.
+        assert!(cost.is_none());
     }
 
     #[test]
@@ -1633,13 +1695,18 @@ mod tests {
             model: "claude-sonnet-4".to_string(),
             input_tokens: 1000,
             output_tokens: 500,
-            cost_usd: 0.015,
+            cost_usd: Some(0.015),
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: TurnCost = serde_json::from_str(&json).unwrap();
         assert_eq!(back.turn, 1);
         assert_eq!(back.model, "claude-sonnet-4");
         assert_eq!(back.input_tokens, 1000);
+        // Legacy JSON without cost_usd reads as "no cost" (serde default).
+        let legacy: TurnCost =
+            serde_json::from_str(r#"{"turn":2,"model":"m","input_tokens":1,"output_tokens":1}"#)
+                .unwrap();
+        assert_eq!(legacy.cost_usd, None);
     }
 
     // -- CostEstimate tests --
@@ -1651,9 +1718,9 @@ mod tests {
         // 4100 chars / 4 = ~1025 input tokens
         assert_eq!(est.estimated_input_tokens, 1025);
         assert_eq!(est.estimated_output_tokens, 4096);
-        assert!(est.estimated_cost_usd > 0.0);
+        assert!(est.estimated_cost_usd.unwrap() > 0.0);
         assert_eq!(est.session_total_usd, 0.0);
-        assert_eq!(est.projected_total_usd, est.estimated_cost_usd);
+        assert_eq!(est.projected_total_usd, est.estimated_cost_usd.unwrap());
     }
 
     #[test]
@@ -1678,64 +1745,76 @@ mod tests {
     fn test_cost_estimate_free_model() {
         let tracker = CostTracker::new("llama3".to_string());
         let est = tracker.estimate_query_cost("llama3", 1000, 100, 2048);
-        assert_eq!(est.estimated_cost_usd, 0.0);
+        assert_eq!(est.estimated_cost_usd, Some(0.0));
+    }
+
+    #[test]
+    fn test_cost_estimate_unknown_model_is_none() {
+        // Honest-absent: an unpriced model yields no estimate — the display
+        // says "cost unknown" instead of fabricating a range.
+        let tracker = CostTracker::new("unknown-model".to_string());
+        let est = tracker.estimate_query_cost("unknown-model", 1000, 100, 2048);
+        assert_eq!(est.estimated_cost_usd, None);
+        // The projection carries the known session total unchanged.
+        assert_eq!(est.projected_total_usd, est.session_total_usd);
+        assert!(format!("{est}").contains("cost unknown"));
     }
 
     // -- Pricing table tests --
 
     #[test]
     fn test_lookup_pricing_claude_sonnet_4() {
-        let p = lookup_pricing("claude-sonnet-4-20250514");
+        let p = lookup_pricing("claude-sonnet-4-20250514").expect("known-priced model");
         assert!((p.input_price_per_mtok - 3.0).abs() < 0.001);
         assert!((p.output_price_per_mtok - 15.0).abs() < 0.001);
     }
 
     #[test]
     fn test_lookup_pricing_claude_opus_4() {
-        let p = lookup_pricing("claude-opus-4-20250514");
+        let p = lookup_pricing("claude-opus-4-20250514").expect("known-priced model");
         assert!((p.input_price_per_mtok - 15.0).abs() < 0.001);
         assert!((p.output_price_per_mtok - 75.0).abs() < 0.001);
     }
 
     #[test]
     fn test_lookup_pricing_claude_haiku_4() {
-        let p = lookup_pricing("claude-haiku-4-20250514");
+        let p = lookup_pricing("claude-haiku-4-20250514").expect("known-priced model");
         assert!((p.input_price_per_mtok - 0.80).abs() < 0.001);
         assert!((p.output_price_per_mtok - 4.0).abs() < 0.001);
     }
 
     #[test]
     fn test_lookup_pricing_gpt41() {
-        let p = lookup_pricing("gpt-4.1");
+        let p = lookup_pricing("gpt-4.1").expect("known-priced model");
         assert!((p.input_price_per_mtok - 2.0).abs() < 0.001);
         assert!((p.output_price_per_mtok - 8.0).abs() < 0.001);
     }
 
     #[test]
     fn test_lookup_pricing_gpt41_mini() {
-        let p = lookup_pricing("gpt-4.1-mini");
+        let p = lookup_pricing("gpt-4.1-mini").expect("known-priced model");
         assert!((p.input_price_per_mtok - 0.40).abs() < 0.001);
         assert!((p.output_price_per_mtok - 1.60).abs() < 0.001);
     }
 
     #[test]
     fn test_lookup_pricing_gpt41_nano() {
-        let p = lookup_pricing("gpt-4.1-nano");
+        let p = lookup_pricing("gpt-4.1-nano").expect("known-priced model");
         assert!((p.input_price_per_mtok - 0.10).abs() < 0.001);
         assert!((p.output_price_per_mtok - 0.40).abs() < 0.001);
     }
 
     #[test]
-    fn test_lookup_pricing_unknown_fallback() {
-        let p = lookup_pricing("some-brand-new-model");
-        assert!((p.input_price_per_mtok - 3.0).abs() < 0.001);
-        assert!((p.output_price_per_mtok - 15.0).abs() < 0.001);
+    fn test_lookup_pricing_unknown_no_fallback() {
+        // Honest-absent: a model absent from every priced source yields None —
+        // no $3/$15 estimate is invented for it.
+        assert!(lookup_pricing("some-brand-new-model").is_none());
     }
 
     #[test]
     fn test_lookup_pricing_exact_match_preferred() {
         // "gpt-4o" should match "gpt-4o" entry, not "gpt-4" or others
-        let p = lookup_pricing("gpt-4o");
+        let p = lookup_pricing("gpt-4o").expect("known-priced model");
         assert!((p.input_price_per_mtok - 2.5).abs() < 0.001);
     }
 
@@ -1893,16 +1972,19 @@ mod tests {
 
     #[test]
     fn test_calculate_cost_with_claude_haiku_4() {
-        let cost = CostTracker::calculate_cost("claude-haiku-4-20250514", 1_000_000, 0);
+        let cost = CostTracker::calculate_cost("claude-haiku-4-20250514", 1_000_000, 0)
+            .expect("known-priced model");
         assert!((cost - 0.80).abs() < 0.001);
 
-        let cost_out = CostTracker::calculate_cost("claude-haiku-4-20250514", 0, 1_000_000);
+        let cost_out = CostTracker::calculate_cost("claude-haiku-4-20250514", 0, 1_000_000)
+            .expect("known-priced model");
         assert!((cost_out - 4.0).abs() < 0.001);
     }
 
     #[test]
     fn test_calculate_cost_with_gpt41() {
-        let cost = CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000);
+        let cost =
+            CostTracker::calculate_cost("gpt-4.1", 1_000_000, 500_000).expect("known-priced model");
         // 1M * 2.0/1M + 500K * 8.0/1M = 2.0 + 4.0 = 6.0
         assert!((cost - 6.0).abs() < 0.001);
     }
@@ -1919,7 +2001,8 @@ mod tests {
             1_000_000, // output
             500_000,   // cache read
             200_000,   // cache creation
-        );
+        )
+        .expect("known-priced model");
         let expected = 3.0 + 15.0 + 0.5 * 0.3 + 0.2 * 3.75;
         assert!(
             (cost - expected).abs() < 1e-9,
@@ -1931,7 +2014,8 @@ mod tests {
     fn test_calculate_cost_cache_fallback_to_input_price() {
         // A model without cache rates (cache_read/write_per_mtok = None):
         // cache tokens are priced at the plain input rate.
-        let cost = CostTracker::calculate_cost_with_cache("gpt-4o", 0, 0, 1_000_000, 1_000_000);
+        let cost = CostTracker::calculate_cost_with_cache("gpt-4o", 0, 0, 1_000_000, 1_000_000)
+            .expect("known-priced model");
         let expected = 2.5 + 2.5; // both at gpt-4o input price
         assert!(
             (cost - expected).abs() < 1e-9,
@@ -1941,15 +2025,23 @@ mod tests {
 
     #[test]
     fn test_calculate_cost_with_cache_zero_cache_tokens_matches_calculate_cost() {
-        // Without cache tokens the cache-aware path is exactly the legacy math.
-        for model in ["claude-sonnet-4-20250514", "gpt-4o", "unknown-model"] {
-            let legacy = CostTracker::calculate_cost(model, 12_345, 6_789);
-            let cache_aware = CostTracker::calculate_cost_with_cache(model, 12_345, 6_789, 0, 0);
+        // Without cache tokens the cache-aware path is exactly the legacy
+        // math — including the honest-absent case, where BOTH paths yield
+        // None for an unpriced model.
+        for model in ["claude-sonnet-4-20250514", "gpt-4o"] {
+            let legacy =
+                CostTracker::calculate_cost(model, 12_345, 6_789).expect("known-priced model");
+            let cache_aware = CostTracker::calculate_cost_with_cache(model, 12_345, 6_789, 0, 0)
+                .expect("known-priced model");
             assert!(
                 (legacy - cache_aware).abs() < 1e-12,
                 "{model}: {legacy} != {cache_aware}"
             );
         }
+        assert!(CostTracker::calculate_cost("unknown-model", 12_345, 6_789).is_none());
+        assert!(
+            CostTracker::calculate_cost_with_cache("unknown-model", 12_345, 6_789, 0, 0).is_none()
+        );
     }
 
     #[test]
@@ -1966,7 +2058,7 @@ mod tests {
             "claude-haiku-4-20250514",
         ];
         for model in anthropic_models {
-            let p = lookup_pricing(model);
+            let p = lookup_pricing(model).expect("known-priced model");
             assert!(
                 rate_matches(p.cache_read_per_mtok, p.input_price_per_mtok, 0.1),
                 "{model}: cache read must be 0.1x input, got {:?}",
@@ -1978,7 +2070,7 @@ mod tests {
                 p.cache_write_per_mtok
             );
         }
-        let gpt = lookup_pricing("gpt-4o");
+        let gpt = lookup_pricing("gpt-4o").expect("known-priced model");
         assert_eq!(gpt.cache_read_per_mtok, None);
         assert_eq!(gpt.cache_write_per_mtok, None);
     }
@@ -2105,11 +2197,11 @@ mod tests {
     #[test]
     fn glm_5_3_flash_cost_uses_catalog_price_not_fallback() {
         // The TB2.1 eval anchor model must price from the static catalog
-        // ($0.114 in / $0.40 out per Mtok, bigmodel.cn reference), not from
-        // the $3/$15 DEFAULT_PRICING_FALLBACK — and, because exact match now
-        // wins over the `contains` scan, not from the "glm-5" entry's
-        // $7.14/$7.14 either.
-        let cost = CostTracker::calculate_cost("glm-5.3-flash", 1_000_000, 1_000_000);
+        // ($0.114 in / $0.40 out per Mtok, bigmodel.cn reference) — and,
+        // because exact match now wins over the `contains` scan, not from
+        // the "glm-5" entry's $7.14/$7.14 either.
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 1_000_000, 1_000_000)
+            .expect("known-priced model");
         let expected = 0.114 + 0.40;
         assert!(
             (cost - expected).abs() < 1e-9,
@@ -2125,7 +2217,8 @@ mod tests {
             "must not substring-match the glm-5 entry"
         );
         // Scaled input shape: 42M input / 9M output (sweep-magnitude run).
-        let cost = CostTracker::calculate_cost("glm-5.3-flash", 42_000_000, 9_000_000);
+        let cost = CostTracker::calculate_cost("glm-5.3-flash", 42_000_000, 9_000_000)
+            .expect("known-priced model");
         assert!((cost - (42.0 * 0.114 + 9.0 * 0.40)).abs() < 1e-6);
     }
 
@@ -2181,7 +2274,7 @@ mod tests {
     /// failure mode. Exact match against the gap-filler must win.
     #[test]
     fn openrouter_gpt5_mini_priced_as_mini_not_flagship() {
-        let p = lookup_pricing("openai/gpt-5-mini");
+        let p = lookup_pricing("openai/gpt-5-mini").expect("known-priced model");
         assert!(
             (p.input_price_per_mtok - 0.25).abs() < 1e-9,
             "gpt-5-mini input must be $0.25, got {}",
@@ -2195,7 +2288,7 @@ mod tests {
         // Display code must see it as a known price, not the $3/$15 estimate.
         assert!(pricing_for_model_opt("openai/gpt-5-mini").is_some());
         // The flagship id is unaffected by the gap-filler key.
-        let flagship = lookup_pricing("openai/gpt-5");
+        let flagship = lookup_pricing("openai/gpt-5").expect("known-priced model");
         assert!((flagship.input_price_per_mtok - 1.25).abs() < 1e-9);
         assert!((flagship.output_price_per_mtok - 10.0).abs() < 1e-9);
     }
@@ -2208,13 +2301,15 @@ mod tests {
     #[test]
     fn bedrock_bare_on_demand_ids_price_via_substring() {
         // Haiku's $0.80/$4.00 distinguishes a real hit from the fallback.
-        let haiku = lookup_pricing("anthropic.claude-haiku-4-5-20251001-v1:0");
+        let haiku =
+            lookup_pricing("anthropic.claude-haiku-4-5-20251001-v1:0").expect("known-priced model");
         assert!((haiku.input_price_per_mtok - 0.80).abs() < 1e-9);
         assert!((haiku.output_price_per_mtok - 4.0).abs() < 1e-9);
         // Opus bare id: substring candidates ("claude-opus-4", the Anthropic
         // catalog id, the inference-profile id) all agree on $15/$75, so the
         // HashMap scan order cannot change the billed rate.
-        let opus = lookup_pricing("anthropic.claude-opus-4-20250514-v1:0");
+        let opus =
+            lookup_pricing("anthropic.claude-opus-4-20250514-v1:0").expect("known-priced model");
         assert!((opus.input_price_per_mtok - 15.0).abs() < 1e-9);
         assert!((opus.output_price_per_mtok - 75.0).abs() < 1e-9);
     }

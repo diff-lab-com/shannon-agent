@@ -56,10 +56,11 @@ mod reconciliation {
             query_id: q,
             input_tokens: 1_000,
             output_tokens: 200,
-            cost_usd: 0.5,
+            cost_usd: Some(0.5),
             cache_creation_tokens: 10,
             cache_read_tokens: 20,
             context_window_tokens: None,
+            raw_usage: None,
         });
         events.push(QueryEvent::TurnCompleted {
             query_id: q,
@@ -103,10 +104,11 @@ mod reconciliation {
                         query_id: q,
                         input_tokens: 100 + turn as u64,
                         output_tokens: 10,
-                        cost_usd: 0.01,
+                        cost_usd: Some(0.01),
                         cache_creation_tokens: 0,
                         cache_read_tokens: 5,
                         context_window_tokens: None,
+                        raw_usage: None,
                     },
                 ];
                 if turn % 7 == 0 {
@@ -118,7 +120,7 @@ mod reconciliation {
                 if turn % 11 == 0 {
                     step.push(QueryEvent::Cost {
                         query_id: q,
-                        total_cost_usd: 1.25,
+                        total_cost_usd: Some(1.25),
                         input_tokens: 50,
                         output_tokens: 60,
                     });

@@ -618,14 +618,16 @@ fn test_cost_tracker_accumulates_across_models() {
 #[test]
 fn test_cost_tracker_pricing_accuracy() {
     // Claude Sonnet: $3/M input, $15/M output
-    let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 1_000_000);
+    let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 1_000_000)
+        .expect("known-priced model");
     assert!(
         (cost - 18.0).abs() < 0.01,
         "Sonnet 1M+1M should cost ~$18, got ${cost}"
     );
 
     // GPT-4o: $2.5/M input, $10/M output
-    let cost = CostTracker::calculate_cost("gpt-4o", 1_000_000, 1_000_000);
+    let cost =
+        CostTracker::calculate_cost("gpt-4o", 1_000_000, 1_000_000).expect("known-priced model");
     assert!(
         (cost - 12.5).abs() < 0.01,
         "GPT-4o 1M+1M should cost ~$12.5, got ${cost}"
@@ -633,7 +635,7 @@ fn test_cost_tracker_pricing_accuracy() {
 
     // Ollama: free
     let cost = CostTracker::calculate_cost("llama3", 1_000_000, 1_000_000);
-    assert_eq!(cost, 0.0, "Local models should be free");
+    assert_eq!(cost, Some(0.0), "Local models should be free");
 }
 
 // ============================================================================

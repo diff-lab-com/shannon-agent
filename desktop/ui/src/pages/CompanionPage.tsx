@@ -135,13 +135,19 @@ export default function CompanionPage() {
     // W4 视觉收敛 (design 13 `.companion-win glass-2 aurora-line`): the page
     // IS the companion window's content, so the window's aurora top edge
     // rides on the page root — at the true 356px window size it reads exactly
-    // as the mockup's frame light.
-    <div className="aurora-line flex h-screen min-h-0 flex-col" data-testid="companion-page">
+    // as the mockup's frame light. The bottom padding keeps every row clear
+    // of the window edge (mock mode pins a fixed overlay badge there);
+    // overflow-hidden pins the no-scroll contract at the minimum window size.
+    <div
+      className="aurora-line flex h-screen min-h-0 flex-col overflow-hidden pb-6"
+      data-testid="companion-page"
+    >
       <div className="flex items-center justify-between gap-2 border-b border-outline-variant/40 px-3 py-2">
         <h1 className="text-body-md font-medium">{t('companion.title')}</h1>
         <label className="flex cursor-pointer items-center gap-1.5 text-label-sm text-on-surface-variant">
           <input
             type="checkbox"
+            className="accent-primary shrink-0"
             checked={alwaysOnTop}
             onChange={(e) => void handleAlwaysOnTopChange(e.target.checked)}
             aria-label={t('companion.alwaysOnTop')}
@@ -152,8 +158,11 @@ export default function CompanionPage() {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+        {/* Capped at ~3 lines (design 13): the capture box must never grow
+            into a full-height void — leftover space belongs to the capture
+            history below, not to an ever-taller textarea. */}
         <textarea
-          className="min-h-0 flex-1 resize-none rounded-xl border border-outline-variant bg-surface-container p-2 text-body-sm outline-none focus:border-primary"
+          className="max-h-20 min-h-0 flex-1 resize-none rounded-xl border border-outline-variant bg-surface-container p-2 text-body-sm outline-none focus:border-primary"
           value={text}
           placeholder={t('companion.placeholder')}
           aria-label={t('companion.inputLabel')}
@@ -198,10 +207,11 @@ export default function CompanionPage() {
 
       {/* Recent captures — memory only (never persisted; cleared when the
           window reopens). Text truncates with a title tooltip, matching the
-          mockup's single-line rows. */}
+          mockup's single-line rows. Height-bounded so five entries can never
+          squeeze the footer out of the window. */}
       {history.length > 0 && (
         <div
-          className="min-h-0 overflow-y-auto border-t border-outline-variant/40"
+          className="max-h-28 min-h-0 shrink overflow-y-auto border-t border-outline-variant/40"
           aria-label={t('companion.history.label')}
           data-testid="companion-history"
         >
