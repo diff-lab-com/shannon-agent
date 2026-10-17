@@ -24,7 +24,7 @@ interface ComposerPanelProps {
 // Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
-  const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit, mentionPaths, setMentionPaths } = useComposer()
+  const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit, setMentionPaths } = useComposer()
   const { isQuerying, isCancelInFlight, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()

@@ -346,10 +346,12 @@ export default function ChatInput({
       if (cancelled) return
       const indexPaths = rows.map(r => r.path)
       // C4: directories join the candidate universe (menu marks them with
-      // the folder icon; picking one drills in). Dirs come first so an
-      // empty query shows the tree shape before the leaves.
-      setMentionCandidates([...new Set([...treeSplit.dirs, ...treeSplit.files, ...indexPaths])])
-      setMentionDirs(new Set(treeSplit.dirs))
+      // the folder icon; picking one drills in). The walk ROOT itself is
+      // excluded — its relative form is ".", a meaningless pick row. Dirs
+      // come first so an empty query shows the tree shape before leaves.
+      const dirPaths = treeSplit.dirs.filter(d => d !== sessionWorkingDir)
+      setMentionCandidates([...new Set([...dirPaths, ...treeSplit.files, ...indexPaths])])
+      setMentionDirs(new Set(dirPaths))
       // Recency weight = position among the recents, newest highest. The
       // absolute timestamps don't matter — only the ordering.
       const ordered = [...rows].filter(r => r.at > 0).sort((a, b) => b.at - a.at)
@@ -1441,8 +1443,11 @@ export default function ChatInput({
   // AI-chat-ux C1: outside a Tauri runtime (plain-browser dev against a
   // remote backend) the native file dialog cannot open — the attach item
   // is disabled with the reason on its tooltip instead of failing silently.
+  // Test runs count as Tauri-like: they simulate the desktop surface (and
+  // mock the dialog IPC); only a real plain-browser runtime is excluded.
   const isTauriLike =
     import.meta.env.VITE_MOCK_MODE === '1'
+    || import.meta.env.MODE === 'test'
     || (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window)
   const plusItems: DropdownMenuEntry[] = [
     DropdownMenuHeader('plus-group-attach', t('chat.input.plus.group.attach')),

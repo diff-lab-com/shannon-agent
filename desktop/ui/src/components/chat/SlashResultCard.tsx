@@ -28,7 +28,7 @@ function HelpRoster() {
   const [skills, setSkills] = useState<SlashSkillEntry[] | null>(null)
   useEffect(() => {
     let cancelled = false
-    fetchSlashSkills().then(entries => {
+    fetchSlashSkills().then(({ entries }) => {
       if (!cancelled) setSkills(entries)
     })
     return () => { cancelled = true }

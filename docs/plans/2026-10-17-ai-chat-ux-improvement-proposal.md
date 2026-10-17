@@ -2,7 +2,7 @@
 
 - 日期：2026-10-17
 - 分支：`feat/ai-chat-ux`（基于 dev `62cbc2f1e` 的 worktree `.worktrees/feat-ai-chat-ux`）
-- 状态：**草案，待审核** —— 本文档只做调研与方案，未改任何产品代码
+- 状态：**已实施（2026-10-17 审核 through 全部 Phase）** —— 实施记录见文末 §6
 - 调研方法：三路代码走查（Explore 代理）+ mock 模式实机验证（vite dev + 浏览器实测）+ 竞品公开资料对比
 
 ---
@@ -181,3 +181,22 @@ Phase 3 增强（按需排期）
 
 - 实机验证：worktree mock 模式（`VITE_MOCK_MODE=1 pnpm dev`）+ 浏览器实测 `/`、`@`、`+`、麦克风、终端字体度量（getComputedStyle 探测 + 截图）。
 - 竞品资料：Claude Code（code.claude.com/docs）、Cursor（cursor.com/docs）、Copilot Chat（code.visualstudio.com/docs、docs.github.com）、Zed（zed.dev/docs）、Trae、Wispr Flow、SuperWhisper、VS Code Terminal Appearance、Windows Terminal docs、Tauri issues #10898/#11951、wry issues #85/#1195。
+
+
+---
+
+## 6. 实施记录（2026-10-17，全部 Phase 已落地）
+
+| 批次 | 提交 | 内容 | 验证 |
+|------|------|------|------|
+| T1–T5 | `659274fa7` | 字体栈修正（JetBrains Mono Variable）/ 13px+1.15 行距+4.5:1 对比 / WebGL 渲染器（DOM 回退）/ 6px 主题滚动条 / 12-8px 留白 + 非活跃选区半透明 | TerminalPanel 61 测试 + 实机 canvas 确认 WebGL 生效 |
+| T6–T7 | `d313def8b` | 设置热生效（`shannon:terminal-settings-changed`）/ 字体选择器（预设+自定义+实时预览） | TerminalSettings 10 测试 + 面板热应用测试 |
+| V1–V3 | `243839fad` | 错误码→10 语言文案 / toast「去设置」action / STT 未配置门控（needsSetup 态直达设置） | Voice+ChatInput 82 测试 |
+| V4 | `d1302884e` | macOS `NSMicrophoneUsageDescription`（bundle.macOS.infoPlist 部分合并）/ README 平台语音依赖章节 | tauri.conf diff 最小化（4 行） |
+| V5–V6 | `c81752298` | 录音计时+电平光环+Esc 取消 / 长按 PTT（≥350ms）与轻点 toggle 双模 | Voice 19 测试（含 PTT 三态） |
+| C1–C6 | `b6919cefb` | @ 空态引导 + 技能降级提示 + 非 Tauri attach 禁用 / 引用 chip / 确定性注入（三条发送路径）/ 目录钻取 + recency / + 菜单分组 / 任意文件粘贴（save_pasted_file 全链路） | Mention 11 + Chat 78 + fileMention 25 测试 |
+| C7 | `f48b024b6` | `GET /v1/skills`（api-protocol DTO + 服务端镜像 roots + 契约一致性测试） | server 3 测试 + clippy/check 通过 |
+
+补充修正（walkthrough 中发现）：`@` 候选排除工作目录根（其相对形式 `.` 是无意义行）；vitest 环境计入 Tauri-like（attach 项在测试中不被禁用）。
+
+**全量验证**：vitest 3920 通过 / 0 失败；tsc 无错误；`cargo check`+`clippy`（desktop/server/api-protocol）干净；desktop terminal_settings/save_pasted/ACL 覆盖测试与 server skills 测试全绿；`pnpm build` 生产构建成功；实机 mock 走查确认 WebGL、@ 目录钻取、chip、+ 分组。
