@@ -1,0 +1,20 @@
+# env passed to adapter subprocess (keys only unless *_LEAK marker)
+HOME
+LANG
+LOGNAME
+PATH
+SHELL
+TERM
+USER
+
+# /proc/2484669/environ of the LIVE bridge process (keys only)
+
+HOME
+LANG
+LOGNAME
+PATH
+SHELL
+TERM
+USER
+
+# ISOLATION CHECK: PASS — no credential-like variable in live child env

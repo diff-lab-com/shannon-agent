@@ -1,0 +1,8 @@
+/target
+/node_modules
+# Full protocol logs live in logs/ (ignored by the repo-root `logs/` rule).
+# Curated, trimmed evidence excerpts for review live in evidence/ (committed).
+smoke-*.log
+e2e-smoke.log
+e2e-stderr.log
+stderr.log

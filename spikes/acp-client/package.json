@@ -1,0 +1,10 @@
+{
+  "name": "shannon-acp-spike",
+  "version": "0.0.0",
+  "description": "Task 4 spike deps: Claude Code ACP bridge adapter (NOT part of Shannon; prototype evidence only)",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.93.0"
+  },
+  "private": true
+}

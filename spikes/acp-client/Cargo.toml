@@ -1,0 +1,20 @@
+[package]
+name = "acp-client"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Spike only: NOT a workspace member, NOT in CI. The empty [workspace] table
+# detaches this crate from the repo workspace at ../.. so `cargo build` at the
+# repo root never sees it.
+[workspace]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+# spike: keep build fast, size irrelevant
+opt-level = 0
