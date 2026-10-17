@@ -483,7 +483,7 @@ const fn row_for(event: HookEventType) -> HookEventSemantics {
 /// The full dispatch-semantics table: exactly one row per `HookEventType`
 /// variant, in enum declaration order.
 ///
-/// Rows come from [`row_for`]'s exhaustive match — a new enum variant
+/// Rows come from `row_for`'s exhaustive match — a new enum variant
 /// without a row is a **compile error**, which is the CI machine check.
 pub fn all_event_semantics() -> &'static [HookEventSemantics] {
     const TABLE: &[HookEventSemantics] = &[

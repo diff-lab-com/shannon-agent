@@ -14,11 +14,12 @@
 //!   `shannon_engine::hooks::HookManager` (`hooks_file()` /
 //!   `configured_event_types()`): per-event matcher groups and their
 //!   commands, plus the config paths they were loaded from.
-//! - **skills** — the token-budget trim ([`SkillBudgetReport`]), including
-//!   what got truncated and what was dropped entirely.
+//! - **skills** — the token-budget trim (`SkillBudgetReport`, from
+//!   `shannon_skills`), including what got truncated and what was dropped
+//!   entirely.
 //! - **compaction** — the three coexisting threshold sources, listed
 //!   honestly side by side (see [`CompactionSection`]).
-//! - **sandbox** — resolved [`SandboxMode`]-family mode, world kind and
+//! - **sandbox** — resolved `SandboxMode`-family mode, world kind and
 //!   degrade notices (see [`SandboxSnapshot`]).
 //!
 //! Degradation contract (P0-3): every source is `Option`; a missing source
