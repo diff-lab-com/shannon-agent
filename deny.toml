@@ -68,9 +68,9 @@ ignore = [
     # utoipa-swagger-ui 10.0.1 as latest and all still pin zip ^8.x — same
     # trigger as the Semver/audit advisory gates (see .cargo/audit.toml).
     # Re-enable when any upstream ships a zip-9-compatible release.
-    "RUSTSEC-2026-0367", # zip 8.6.0 extract SUID/SGID — unreachable (no extract on 8.x paths)
-    "RUSTSEC-2026-0368", # zip 8.6.0 extract symlink escape — unreachable (no extract on 8.x paths)
-    "RUSTSEC-2026-0369", # zip 8.6.0 extract symlink permissions — unreachable (no extract on 8.x paths)
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
 
 [licenses]

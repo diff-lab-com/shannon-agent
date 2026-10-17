@@ -1204,6 +1204,15 @@ pub enum QueryEvent {
         /// payload's `meta`.
         #[serde(default)]
         meta: Box<serde_json::Value>,
+        /// P0-1: wall-clock execution duration in milliseconds, measured by
+        /// the registry's around stage and filled by the execution arms.
+        /// `None` for results that never reached tool execution (permission
+        /// denials, malformed input, hook vetoes, …). serde-defaulted and
+        /// skipped when absent so JSON/SSE producers written before the
+        /// field stay byte-compatible; the L0 `tool/result` payload passes
+        /// the value straight through.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
 
     /// Turn completed

@@ -148,12 +148,53 @@ pub fn sandbox_meta_from(
     })
 }
 
+/// One timeout-bounded tool attempt — the §P2-2 wrapping verbatim: `None`
+/// runs unbounded, `Some(t)` interrupts at `t` with `ToolError::Timeout`.
+async fn attempt_bounded<F>(
+    name: &str,
+    timeout: Option<std::time::Duration>,
+    mut attempt: impl FnMut() -> F,
+) -> ToolResult<ToolOutput>
+where
+    F: std::future::Future<Output = ToolResult<ToolOutput>>,
+{
+    match timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, attempt()).await {
+            Ok(output) => output,
+            Err(_) => Err(ToolError::Timeout {
+                name: name.to_string(),
+                duration: timeout,
+            }),
+        },
+        None => attempt().await,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
 /// Default threshold above which MCP server tools are deferred (not sent to LLM schema).
 pub const DEFER_THRESHOLD: usize = 50;
+
+/// P0-3 assembly dump: one tool's runtime-visible mounting flags, as
+/// returned by [`ToolRegistry::list_tools_runtime`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolRuntimeInfo {
+    /// Registered tool name.
+    pub name: String,
+    /// Tool category (`general` when the tool does not override).
+    pub category: String,
+    /// No side effects — cacheable, parallelizable, retry-eligible.
+    pub read_only: bool,
+    /// May perform irreversible changes — always requires confirmation.
+    pub destructive: bool,
+    /// Schema excluded from the LLM tool list; still callable by name.
+    pub hidden_from_llm: bool,
+    /// Registered and executable but excluded from the LLM schema;
+    /// discovered on demand via `mcp__tool_search`.
+    pub deferred: bool,
+}
 
 /// Registry for managing available tools
 pub struct ToolRegistry {
@@ -501,6 +542,33 @@ impl ToolRegistry {
         Self::recover_lock(self.deferred.read()).len()
     }
 
+    /// P0-3 assembly dump: per-tool runtime entries — exactly the flags that
+    /// decide how a tool is mounted (schema visibility, parallelism, approval
+    /// surface, deferred discovery) — plus the deferred marker.
+    ///
+    /// Unlike [`Self::list_tools_info`] this deliberately does NOT apply the
+    /// `allowed_tools` filter: a dump of "what is actually mounted" must show
+    /// registered-but-filtered tools too (they stay executable via direct
+    /// dispatch). Mirrors [`Self::tool_read_only_flags`] /
+    /// [`Self::destructive_tool_names`], the other diagnostic listings.
+    pub fn list_tools_runtime(&self) -> Vec<ToolRuntimeInfo> {
+        let deferred = Self::recover_lock(self.deferred.read());
+        Self::recover_lock(self.tools.read())
+            .values()
+            .map(|t| {
+                let name = t.name();
+                ToolRuntimeInfo {
+                    name: name.to_string(),
+                    category: t.category().to_string(),
+                    read_only: t.is_read_only(),
+                    destructive: t.is_destructive(),
+                    hidden_from_llm: t.hidden_from_llm(),
+                    deferred: deferred.contains(name),
+                }
+            })
+            .collect()
+    }
+
     /// Get a tool by name (respects the allowed_tools filter).
     ///
     /// Returns an `Arc` clone so the caller does not need to hold the internal
@@ -578,17 +646,14 @@ impl ToolRegistry {
             }
         }
 
-        let mut result = if let Some(timeout) = self.execution_timeout {
-            match tokio::time::timeout(timeout, tool.execute(input)).await {
-                Ok(output) => output,
-                Err(_) => Err(ToolError::Timeout {
-                    name: name.to_string(),
-                    duration: timeout,
-                }),
-            }
-        } else {
-            tool.execute(input).await
-        };
+        // P0-1 around stage: wall-clock measurement, the read-only timeout
+        // retry, and the execution metric wrap the bare §P2-2 timeout
+        // uniformly for both registry entry points.
+        let mut result = self
+            .execute_with_around(name, is_read_only, self.execution_timeout, || {
+                tool.execute(input.clone())
+            })
+            .await;
 
         if let Ok(ref mut output) = result {
             Self::append_unresolved_note(output, &unresolved);
@@ -734,22 +799,14 @@ impl ToolRegistry {
             }
         }
 
-        let mut result = if let Some(timeout) = self.execution_timeout {
-            // Review §P2-2: the engine's agent loop goes through
-            // `execute_streaming`, so the default timeout must be enforced on
-            // this path too — a hung tool otherwise stalls the query forever.
-            match tokio::time::timeout(timeout, tool.execute_streaming(input.clone(), progress))
-                .await
-            {
-                Ok(output) => output,
-                Err(_) => Err(ToolError::Timeout {
-                    name: name.to_string(),
-                    duration: timeout,
-                }),
-            }
-        } else {
-            tool.execute_streaming(input.clone(), progress).await
-        };
+        // P0-1 around stage (§P2-2 timeout enforced here too — the engine's
+        // agent loop goes through `execute_streaming`, so a hung tool must
+        // never stall the query): measurement + read-only retry + metric.
+        let mut result = self
+            .execute_with_around(name, is_read_only, self.execution_timeout, || {
+                tool.execute_streaming(input.clone(), progress.clone())
+            })
+            .await;
 
         if let Ok(ref mut output) = result {
             Self::append_unresolved_note(output, &unresolved);
@@ -766,6 +823,47 @@ impl ToolRegistry {
             }
         }
 
+        result
+    }
+
+    /// P0-1 around stage, shared by [`Self::execute`] and
+    /// [`Self::execute_streaming`]: run one tool attempt under the §P2-2
+    /// timeout (length and `ToolError::Timeout` type unchanged), apply the
+    /// retry policy — **read-only tools get exactly one extra attempt on
+    /// `Err(ToolError::Timeout)`, no backoff; everything else never
+    /// retries** — and observe the final outcome (Ok / Error / Timeout)
+    /// with the total wall time exactly once, retry included.
+    ///
+    /// `attempt` produces a fresh future per invocation (tool call plus its
+    /// inputs), so the retry re-executes the same call unchanged.
+    async fn execute_with_around<F>(
+        &self,
+        name: &str,
+        read_only: bool,
+        timeout: Option<std::time::Duration>,
+        mut attempt: impl FnMut() -> F,
+    ) -> ToolResult<ToolOutput>
+    where
+        F: std::future::Future<Output = ToolResult<ToolOutput>>,
+    {
+        let started = std::time::Instant::now();
+        let mut result = attempt_bounded(name, timeout, &mut attempt).await;
+        if let Err(ToolError::Timeout { name: ref tool, .. }) = result {
+            if read_only {
+                tracing::warn!(
+                    tool = %tool,
+                    first_attempt_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "read-only tool timed out; retrying once"
+                );
+                result = attempt_bounded(name, timeout, &mut attempt).await;
+            }
+        }
+        crate::signals::observe_tool_execution(
+            name,
+            crate::signals::ToolExecOutcome::classify(&result),
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         result
     }
 
@@ -1742,6 +1840,69 @@ mod tests {
         assert_eq!(registry.deferred_count(), 2);
     }
 
+    /// P0-3: `list_tools_runtime` reports every registered tool with its
+    /// mounting flags, including deferred marking, and ignores the
+    /// allowed_tools filter (a mount dump must show filtered tools too).
+    #[test]
+    fn test_list_tools_runtime_reports_flags_and_deferred() {
+        struct ReadOnlyTool {
+            name: &'static str,
+        }
+        #[async_trait]
+        impl Tool for ReadOnlyTool {
+            fn name(&self) -> &str {
+                self.name
+            }
+            fn description(&self) -> &str {
+                "read-only"
+            }
+            fn category(&self) -> &str {
+                "fs"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            fn is_read_only(&self) -> bool {
+                true
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                Ok(ToolOutput::success("ok".into()))
+            }
+        }
+
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(ReadOnlyTool { name: "Read" }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool { name: "D1".into() }))
+            .unwrap();
+
+        // Filter one tool out: it must still appear in the runtime listing.
+        registry.set_allowed_tools(Some(vec!["Read".to_string()]));
+
+        let mut infos = registry.list_tools_runtime();
+        infos.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(infos.len(), 2, "filter must not hide mounted tools");
+
+        let read = infos
+            .iter()
+            .find(|t| t.name == "Read")
+            .expect("Read listed");
+        assert_eq!(read.category, "fs");
+        assert!(read.read_only);
+        assert!(!read.destructive);
+        assert!(!read.hidden_from_llm);
+        assert!(!read.deferred);
+
+        let deferred = infos
+            .iter()
+            .find(|t| t.name == "D1")
+            .expect("deferred tool listed");
+        assert!(!deferred.read_only);
+        assert!(deferred.deferred);
+    }
+
     #[test]
     fn test_search_deferred() {
         let registry = ToolRegistry::new();
@@ -2041,6 +2202,178 @@ mod tests {
             registry.execution_timeout(),
             Some(std::time::Duration::from_secs(30))
         );
+    }
+
+    // ── P0-1 around stage: retry policy ──────────────────────────────────
+
+    /// Hangs (60s sleep) on its first attempt, succeeds afterwards — the
+    /// `Err(ToolError::Timeout)` the read-only retry policy keys on.
+    struct RetryOnTimeoutTool {
+        read_only: bool,
+        attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for RetryOnTimeoutTool {
+        fn name(&self) -> &str {
+            "retry_on_timeout"
+        }
+        fn description(&self) -> &str {
+            "hangs on its first attempt"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            let attempt = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if attempt == 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+            Ok(ToolOutput::success(format!("attempt-{attempt}")))
+        }
+        fn is_read_only(&self) -> bool {
+            self.read_only
+        }
+    }
+
+    /// P0-1 acceptance: a read-only tool's `Err(ToolError::Timeout)` is
+    /// retried exactly once, and the retry's output is what the caller sees.
+    #[tokio::test(start_paused = true)]
+    async fn p0_1_read_only_timeout_is_retried_exactly_once() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(RetryOnTimeoutTool {
+                read_only: true,
+                attempts: attempts.clone(),
+            }))
+            .unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry.execute("retry_on_timeout", json!({})).await;
+
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly one extra attempt after the first timeout"
+        );
+        let output = result.expect("the retry attempt must succeed");
+        assert_eq!(output.content, "attempt-1");
+    }
+
+    /// P0-1: the streaming path (the one the engine's agent loop uses)
+    /// applies the same one-retry policy.
+    #[tokio::test(start_paused = true)]
+    async fn p0_1_streaming_read_only_timeout_is_retried_exactly_once() {
+        struct NopSender;
+        #[async_trait]
+        impl shannon_tool_interface::ProgressSender for NopSender {
+            async fn send(&self, _: &str) {}
+        }
+
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(RetryOnTimeoutTool {
+                read_only: true,
+                attempts: attempts.clone(),
+            }))
+            .unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry
+            .execute_streaming(
+                "retry_on_timeout",
+                json!({}),
+                std::sync::Arc::new(NopSender),
+            )
+            .await;
+
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "exactly one extra attempt after the first timeout"
+        );
+        assert!(result.is_ok(), "the retry attempt must succeed");
+    }
+
+    /// P0-1 acceptance: a non-read-only tool never retries — one attempt,
+    /// one `Err(ToolError::Timeout)`.
+    #[tokio::test(start_paused = true)]
+    async fn p0_1_non_read_only_timeout_is_never_retried() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(RetryOnTimeoutTool {
+                read_only: false,
+                attempts: attempts.clone(),
+            }))
+            .unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry.execute("retry_on_timeout", json!({})).await;
+
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "write tools must not be retried"
+        );
+        assert!(
+            matches!(result, Err(ToolError::Timeout { .. })),
+            "the timeout must surface unchanged: {result:?}"
+        );
+    }
+
+    /// P0-1: a plain (non-timeout) error never retries, even for a
+    /// read-only tool.
+    #[tokio::test]
+    async fn p0_1_non_timeout_errors_are_never_retried() {
+        struct AlwaysErrTool {
+            attempts: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Tool for AlwaysErrTool {
+            fn name(&self) -> &str {
+                "always_err"
+            }
+            fn description(&self) -> &str {
+                "always fails with a non-timeout error"
+            }
+            fn input_schema(&self) -> Value {
+                json!({"type": "object"})
+            }
+            async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+                self.attempts
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(ToolError::ExecutionFailed("boom".into()))
+            }
+            fn is_read_only(&self) -> bool {
+                true
+            }
+        }
+
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let registry = ToolRegistry::new();
+        registry
+            .register(Box::new(AlwaysErrTool {
+                attempts: attempts.clone(),
+            }))
+            .unwrap();
+
+        let result = registry.execute("always_err", json!({})).await;
+
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "non-timeout errors must not be retried"
+        );
+        assert!(matches!(
+            result,
+            Err(ToolError::ExecutionFailed(ref msg)) if msg.contains("boom")
+        ));
     }
 
     // ---- secret-guard execution-boundary wiring (blueprint §9.6) ----------

@@ -1236,6 +1236,7 @@ mod tests {
         {
             let mut tee = open_tee(&dir);
             tee.record_query_event(&QueryEvent::ToolUseResult {
+                duration_ms: None,
                 query_id: query_id(),
                 tool_use_id: "t1".into(),
                 tool_name: "Bash".into(),
@@ -1661,6 +1662,7 @@ mod tests {
                 tool_input: serde_json::json!({"command": "ls"}),
             });
             tee.record_query_event(&QueryEvent::ToolUseResult {
+                duration_ms: None,
                 query_id: q,
                 tool_use_id: "toolu_1".into(),
                 tool_name: "Bash".into(),

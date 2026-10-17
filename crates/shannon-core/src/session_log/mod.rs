@@ -286,13 +286,17 @@ pub fn query_event_to_session_body(event: &QueryEvent) -> Option<SessionEventBod
             result,
             is_error,
             meta,
+            duration_ms,
             ..
         } => SessionEventBody::ToolResult(ToolResultPayload {
             tool_use_id: tool_use_id.clone(),
             tool_name: tool_name.clone(),
             output: result.clone(),
             is_error: *is_error,
-            duration_ms: None,
+            // P0-1: the engine measures wall time in the registry's around
+            // stage; pass it through so OTel/projections receive real data
+            // (was a hardcoded `None` before the field existed).
+            duration_ms: *duration_ms,
             // Boxed in the event; payload keeps the vocabulary's plain Value.
             meta: (**meta).clone(),
         }),
@@ -546,6 +550,7 @@ mod tests {
     #[test]
     fn test_mapping_tool_result() {
         let body = query_event_to_session_body(&QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: query_id(),
             tool_use_id: "toolu_9".into(),
             tool_name: "Read".into(),
@@ -564,6 +569,28 @@ mod tests {
                     result.meta["classification"],
                     serde_json::Value::String("sandbox_denied".into())
                 );
+            }
+            other => panic!("wrong body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_mapping_tool_result_passes_duration_through() {
+        // P0-1 acceptance: the around stage's measured wall time reaches the
+        // L0 `tool/result` payload (this mapping used to hardcode `None`).
+        let body = query_event_to_session_body(&QueryEvent::ToolUseResult {
+            query_id: query_id(),
+            tool_use_id: "toolu_9".into(),
+            tool_name: "Read".into(),
+            result: "contents".into(),
+            is_error: false,
+            meta: Box::new(serde_json::Value::Null),
+            duration_ms: Some(42),
+        })
+        .unwrap();
+        match body {
+            SessionEventBody::ToolResult(result) => {
+                assert_eq!(result.duration_ms, Some(42));
             }
             other => panic!("wrong body: {other:?}"),
         }

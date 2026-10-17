@@ -35,6 +35,10 @@ shannon-api-protocol = { path = "../shannon-api-protocol" }
 shannon-engine = { path = "../shannon-engine" }
 shannon-plugin-api = { path = "../shannon-plugin-api" }
 
+# Skills (P0-3 assembly dump consumes the skill budget report; acyclic —
+# shannon-skills depends only on shannon-types/shannon-engine)
+shannon-skills = { path = "../shannon-skills" }
+
 # Repo map (P1-4): tree-sitter based symbol map injected into the system
 # prompt. Always built — the integration is gated by a config toggle on
 # the engine side, but the binary is small and depends on the same tree-

@@ -437,6 +437,7 @@ mod tests {
     fn test_query_event_tool_use_result() {
         let id = Uuid::new_v4();
         let event = QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: id,
             tool_use_id: "tool_456".to_string(),
             tool_name: "read".to_string(),
@@ -458,6 +459,7 @@ mod tests {
     #[test]
     fn test_query_event_tool_use_result_error() {
         let event = QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: Uuid::new_v4(),
             tool_use_id: "t1".to_string(),
             tool_name: "bash".to_string(),

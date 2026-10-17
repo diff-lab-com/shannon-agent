@@ -7332,6 +7332,7 @@ dependencies = [
  "shannon-engine",
  "shannon-plugin-api",
  "shannon-repomap",
+ "shannon-skills",
  "shannon-tool-interface",
  "shannon-types",
  "sys-locale",

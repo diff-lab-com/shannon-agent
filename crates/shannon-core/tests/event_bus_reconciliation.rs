@@ -45,6 +45,7 @@ mod reconciliation {
             tool_input: serde_json::json!({"command": "ls -la /tmp"}),
         });
         events.push(QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: q,
             tool_use_id: "toolu_1".into(),
             tool_name: "Bash".into(),
@@ -93,6 +94,7 @@ mod reconciliation {
                         tool_input: serde_json::json!({"label": turn}),
                     },
                     QueryEvent::ToolUseResult {
+                        duration_ms: None,
                         query_id: q,
                         tool_use_id: format!("toolu_{turn}"),
                         tool_name: "echo".into(),
@@ -163,6 +165,7 @@ mod reconciliation {
 
         // Oversized payload: truncation must be byte-identical on both paths.
         events.push(QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: q,
             tool_use_id: "big".into(),
             tool_name: "dump".into(),

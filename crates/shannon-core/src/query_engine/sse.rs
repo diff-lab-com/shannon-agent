@@ -101,6 +101,7 @@ pub fn representative_events() -> Vec<QueryEvent> {
             tool_input: serde_json::json!({"command": "ls"}),
         },
         QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: qid,
             tool_use_id: "t1".to_string(),
             tool_name: "bash".to_string(),

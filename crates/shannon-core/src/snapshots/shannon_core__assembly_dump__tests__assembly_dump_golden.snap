@@ -1,0 +1,158 @@
+---
+source: crates/shannon-core/src/assembly_dump.rs
+assertion_line: 1109
+expression: json
+---
+{
+  "compaction": {
+    "auto_compact_enabled": true,
+    "thresholds": [
+      {
+        "name": "agent_loop_warning_floor",
+        "provenance": "hardcoded literal in query_engine/engine/agent_loop.rs",
+        "role": "pre-compaction warning: Progress event + synthetic user message once usage crosses 60% (only below compression_threshold)",
+        "value": 0.6
+      },
+      {
+        "name": "agent_loop_imminent_warning",
+        "provenance": "hardcoded literal in query_engine/engine/agent_loop.rs",
+        "role": "imminent-compaction warning (synthetic user message, fires once)",
+        "value": 0.8
+      },
+      {
+        "name": "effective_compression_threshold",
+        "provenance": "QueryEngineConfig.compression_threshold (query_engine/types.rs; default 0.8)",
+        "role": "the actual auto-compaction trigger enforced by the agent loop",
+        "value": 0.8
+      },
+      {
+        "name": "compact_engine_trigger_threshold",
+        "provenance": "shannon-engine compact/types.rs CompactConfig::default (default 0.75)",
+        "role": "standalone CompactEngine auto-compact trigger — coexists with the loop ladder, independent path",
+        "value": 0.75
+      }
+    ]
+  },
+  "generated_at": "[timestamp]",
+  "hooks": {
+    "configured_events": [
+      "PreToolUse",
+      "SessionStart"
+    ],
+    "mount_count": 3,
+    "mounts": [
+      {
+        "blocking": false,
+        "command": "echo audit",
+        "event": "PreToolUse",
+        "hook_type": "command",
+        "matcher": "Bash",
+        "timeout_secs": 15
+      },
+      {
+        "blocking": true,
+        "command": "echo guard",
+        "event": "PreToolUse",
+        "hook_type": "command",
+        "if_condition": "Bash(rm *)",
+        "matcher": "Edit|Write",
+        "timeout_secs": 30
+      },
+      {
+        "blocking": true,
+        "command": "summarize",
+        "event": "SessionStart",
+        "hook_type": "prompt",
+        "matcher": "*",
+        "timeout_secs": 30
+      }
+    ],
+    "project_config_path": "[project-hooks-config]",
+    "user_config_path": "[user-hooks-config]"
+  },
+  "notes": [],
+  "partial": false,
+  "sandbox": {
+    "extra_executable": [
+      "/usr"
+    ],
+    "extra_readable": [],
+    "extra_writable": [
+      "/tmp/workspace"
+    ],
+    "mode": "landlock",
+    "network": false,
+    "notices": [
+      "user-space-only: fs policy enforced in-process"
+    ],
+    "world_kind": "landlock"
+  },
+  "skills": {
+    "budget": 2000,
+    "budget_source": "SkillRegistry::DEFAULT_SKILL_TOKEN_BUDGET",
+    "dropped": [],
+    "included": [
+      {
+        "description": "Create git commits with conventional messages",
+        "estimated_tokens": 13,
+        "name": "commit",
+        "source": "user"
+      }
+    ],
+    "included_count": 1,
+    "registered": 1,
+    "truncated": []
+  },
+  "tools": {
+    "count": 4,
+    "deferred_count": 1,
+    "tools": [
+      {
+        "category": "exec",
+        "deferred": false,
+        "destructive": true,
+        "hidden_from_llm": false,
+        "name": "Bash",
+        "read_only": false,
+        "source": {
+          "kind": "builtin"
+        }
+      },
+      {
+        "category": "fs",
+        "deferred": false,
+        "destructive": false,
+        "hidden_from_llm": false,
+        "name": "Read",
+        "read_only": true,
+        "source": {
+          "kind": "builtin"
+        }
+      },
+      {
+        "category": "mcp",
+        "deferred": false,
+        "destructive": false,
+        "hidden_from_llm": true,
+        "name": "mcp__acme__widget",
+        "read_only": true,
+        "source": {
+          "kind": "plugin",
+          "plugin": "acme"
+        }
+      },
+      {
+        "category": "mcp",
+        "deferred": true,
+        "destructive": false,
+        "hidden_from_llm": false,
+        "name": "mcp__github__search_code",
+        "read_only": true,
+        "source": {
+          "kind": "mcp",
+          "server": "github"
+        }
+      }
+    ]
+  }
+}

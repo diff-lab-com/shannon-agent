@@ -70,6 +70,7 @@
 mod config;
 mod events;
 mod manager;
+mod semantics;
 mod types;
 
 #[cfg(test)]
@@ -80,4 +81,7 @@ mod tests;
 pub use config::{HookConfig, HookDecision, HookDef, HookResult, HookType, HooksFile};
 pub use events::{HookEvent, HookEventType};
 pub use manager::HookManager;
+// P0-2: machine-checkable dispatch semantics table (see semantics.rs docs;
+// docs/HOOK-SEMANTICS.md is its human-readable projection).
+pub use semantics::{CcCompat, HookEventSemantics, Regime, ShortCircuit, all_event_semantics};
 pub use types::HookError;

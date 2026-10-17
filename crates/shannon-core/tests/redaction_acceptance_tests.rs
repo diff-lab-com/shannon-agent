@@ -78,6 +78,7 @@ fn session_disk_scan_finds_no_plaintext_secrets() {
             tool_input: json!({"command": "echo xapp-1-prefixsecret"}),
         });
         tee.record_query_event(&shannon_core::QueryEvent::ToolUseResult {
+            duration_ms: None,
             query_id: Uuid::new_v4(),
             tool_use_id: "t1".into(),
             tool_name: "Bash".into(),

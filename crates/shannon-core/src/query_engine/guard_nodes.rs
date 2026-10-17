@@ -1,16 +1,50 @@
-//! §4.8 guard nodes and hook adapters mounted on the session bus.
+//! §4.8/P0-1 guard nodes and hook adapters mounted on the session bus, plus
+//! the **tool guard pipeline contract** that names and orders them.
 //!
-//! The tool pre-execute sequence is expressed as two typed Waterfall chains
-//! ([`EventBus::guard_pipeline`](crate::bus::EventBus::guard_pipeline)):
+//! ## The node contract
 //!
-//! 1. **Permission gate** (`PIPELINE_PERMISSION`) — the shared
-//!    [`PermissionManager`] verdict is the *first* node of the chain; every
-//!    verdict is published to the bus as a durable `permission/decision`
-//!    row (route (b) agreed in §4.9).
-//! 2. **PreToolUse hooks** (`PIPELINE_HOOKS_PRE_TOOL_USE`) — configured
-//!    hooks observe/mutate the tool input (the "`next()` chain") exactly
-//!    like the previous inline `run_hooks` block, and each executed hook
-//!    lands in the log as a durable `hook/fired` audit row.
+//! One stage of the tool pre-execute sequence is a [`ToolPipelineNode`]:
+//!
+//! - [`ToolPipelineNode::name`] returns one of the stable `PIPELINE_*` keys
+//!   below (the name is the node's identity in audits and dumps);
+//! - [`ToolPipelineNode::evaluate`] observes or mutates the shared
+//!   [`ToolGuardContext`] and returns a [`Flow`]. **Decisions travel in the
+//!   context, not the flow**: the query loop reads `ctx.verdict` /
+//!   `ctx.hook_deny` after each stage. A node returns
+//!   [`Flow::Halt`] only when later stages must not run for this call —
+//!   today that is exactly the permission gate's `Denied`/`Prompt`
+//!   verdicts, because the interactive prompt is resolved *between* the two
+//!   mounted nodes (the loop resumes the chain with
+//!   [`ToolExecutionPipeline::run_from`] once the user approves).
+//!
+//! ## Mounted order (fixed)
+//!
+//! [`ToolExecutionPipeline`] mounts, in order:
+//!
+//! 1. **Permission gate** (`PIPELINE_PERMISSION`,
+//!    [`PermissionGateNode`]) — the shared [`PermissionManager`] verdict is
+//!    the *chain-head* node; every verdict is published to the bus as a
+//!    durable `permission/decision` row (route (b) agreed in §4.9). Allow
+//!    continues the chain; Deny/Prompt halt it (deny short-circuits the
+//!    call; the prompt round-trip happens in the query loop before the next
+//!    stage may run — byte-identical to the pre-pipeline sequencing).
+//! 2. **PreToolUse hooks** (`PIPELINE_HOOKS_PRE_TOOL_USE`,
+//!    [`PreToolUseHookNode`]) — configured hooks observe/mutate the tool
+//!    input (the "`next()` chain") exactly like the previous inline
+//!    `run_hooks` block, and each executed hook lands in the log as a
+//!    durable `hook/fired` audit row. Always continues: a hook denial
+//!    travels in `ctx.hook_deny` for the loop to enforce.
+//!
+//! ## Adding a node
+//!
+//! Implement [`ToolPipelineNode`] (pick an unused `PIPELINE_*` key, keep
+//! decisions in [`ToolGuardContext`], document your Flow rule), then append
+//! the node where the query loop builds its [`ToolExecutionPipeline`]
+//! (agent_loop Phase 1). Stages after the gate only see calls the gate
+//! allowed — preserve that property unless the loop's verdict handling is
+//! redesigned with it.
+//!
+//! ## Downstream of the guards
 //!
 //! Fire-and-forget hook types (UserPromptSubmit, PostToolUse, …) stop being
 //! direct method calls: their triggers ride the bus as routing-only
@@ -22,6 +56,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use crate::bus::{EventBus, Flow, hook_fired_event, hook_trigger_event, permission_decision_event};
+use async_trait::async_trait;
 use serde_json::Value;
 use shannon_engine::hooks::{HookDecision, HookEvent, HookEventType, HookManager, HookResult};
 use shannon_engine::permissions::{PermissionManager, PermissionPrompt};
@@ -31,6 +66,62 @@ use shannon_types::session_event::{HookFiredPayload, SessionEventBody};
 pub const PIPELINE_PERMISSION: &str = "tool/guard/permission";
 /// Pipeline key: stage 2 — PreToolUse hooks rewriting/vetoing input.
 pub const PIPELINE_HOOKS_PRE_TOOL_USE: &str = "tool/guard/pre-tool-use-hooks";
+
+// ============================================================================
+// The pipeline contract (P0-1): named nodes, mounted order, Flow semantics
+// ============================================================================
+
+/// One stage of the tool guard pipeline (see the module docs for the full
+/// contract: node names, mounted order, Flow semantics).
+#[async_trait]
+pub trait ToolPipelineNode: Send + Sync {
+    /// Stable pipeline key naming this stage (a `PIPELINE_*` constant).
+    fn name(&self) -> &'static str;
+
+    /// Observe/mutate one pending call. Decisions land in the shared
+    /// [`ToolGuardContext`]; the returned [`Flow`] only controls whether
+    /// later stages run (Halt) or not (Continue).
+    async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow;
+}
+
+/// The mounted tool guard pipeline: an ordered list of
+/// [`ToolPipelineNode`] stages run over one pending call.
+pub struct ToolExecutionPipeline {
+    nodes: Vec<Arc<dyn ToolPipelineNode>>,
+}
+
+impl ToolExecutionPipeline {
+    /// Mount the stages in execution order (agent_loop Phase 1 mounts
+    /// permission gate first, PreToolUse hooks second).
+    pub fn new(nodes: Vec<Arc<dyn ToolPipelineNode>>) -> Self {
+        Self { nodes }
+    }
+
+    /// Run every mounted stage in order over one pending call.
+    ///
+    /// Waterfall semantics: each node sees the context the previous node
+    /// left behind, and the first [`Flow::Halt`] stops the chain (the
+    /// context still carries whatever the halting node decided — verdicts
+    /// travel in the context, so the caller reads `ctx` either way).
+    pub async fn run(&self, ctx: &mut ToolGuardContext) -> Flow {
+        self.run_from(ctx, 0).await
+    }
+
+    /// Resume the chain at stage `start` (0-based, registration order).
+    ///
+    /// Exists for the interactive permission prompt: the prompt is resolved
+    /// by the query loop *between* the gate and the hook stage, so after an
+    /// approved prompt the loop re-enters here and the hook stage still
+    /// runs — the exact pre-pipeline sequencing.
+    pub async fn run_from(&self, ctx: &mut ToolGuardContext, start: usize) -> Flow {
+        for node in self.nodes.iter().skip(start) {
+            if node.evaluate(ctx).await == Flow::Halt {
+                return Flow::Halt;
+            }
+        }
+        Flow::Continue
+    }
+}
 
 // ============================================================================
 // Typed Waterfall context
@@ -114,11 +205,21 @@ impl PermissionGateNode {
             bus,
         }
     }
+}
 
-    /// Evaluate the pending call and fill `ctx.verdict`. Always continues
-    /// the chain: downstream stages inspect the verdict themselves, which
-    /// keeps denial/prompt handling byte-identical to the pre-bus loop.
-    pub async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow {
+#[async_trait]
+impl ToolPipelineNode for PermissionGateNode {
+    fn name(&self) -> &'static str {
+        PIPELINE_PERMISSION
+    }
+
+    /// Evaluate the pending call and fill `ctx.verdict`. Continues the
+    /// chain only on Allow — Deny/Prompt halt it, because the deny must
+    /// short-circuit the call and the prompt must be resolved by the query
+    /// loop before downstream stages may observe it. Downstream stages
+    /// inspect the verdict themselves, which keeps denial/prompt handling
+    /// byte-identical to the pre-bus loop.
+    async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow {
         let started = Instant::now();
         // N3: resolve the trusted-kind label BEFORE the classify pass. When
         // the classify below auto-approves BECAUSE of a kind grant, this
@@ -139,6 +240,9 @@ impl PermissionGateNode {
             guard.approval_mode().short_label().to_string()
         };
         let tool = ctx.tool_name.clone();
+        // P0-1 chain rule: Allow keeps the pipeline flowing; Deny and
+        // Prompt halt it (deny short-circuits the call; a prompt is
+        // resolved by the loop before the next stage may run).
         match result {
             Err(err) => {
                 // Same user-facing message the loop produced before the bus.
@@ -154,6 +258,7 @@ impl PermissionGateNode {
                     &mode,
                     elapsed_ms,
                 );
+                Flow::Halt
             }
             Ok(None) => {
                 ctx.verdict = PermissionVerdict::Allowed;
@@ -165,6 +270,7 @@ impl PermissionGateNode {
                     &mode,
                     elapsed_ms,
                 );
+                Flow::Continue
             }
             Ok(Some(prompt)) => {
                 if prompt.risk_level == shannon_engine::permissions::RiskLevel::Critical {
@@ -195,9 +301,11 @@ impl PermissionGateNode {
                         elapsed_ms,
                     );
                 }
+                // Denied-by-risk and Prompt both stop the chain here; the
+                // loop resumes it with `run_from` after an approved prompt.
+                Flow::Halt
             }
         }
-        Flow::Continue
     }
 }
 
@@ -253,10 +361,31 @@ impl PreToolUseHookNode {
         Self { hooks, bus }
     }
 
+    fn audit_row(&self, event_name: String, result: &HookResult, duration_ms: u64) {
+        let outcome = outcome_label(result);
+        self.bus.dispatch(
+            hook_fired_event(HookFiredPayload {
+                event: event_name,
+                hook: result.command.chars().take(120).collect(),
+                outcome: Some(outcome.into()),
+                duration_ms: Some(duration_ms),
+            })
+            .into(),
+            crate::bus::DispatchMode::Emit,
+        );
+    }
+}
+
+#[async_trait]
+impl ToolPipelineNode for PreToolUseHookNode {
+    fn name(&self) -> &'static str {
+        PIPELINE_HOOKS_PRE_TOOL_USE
+    }
+
     /// Run the hooks and record their verdicts into `ctx`. Continues the
     /// chain regardless: the deny travels in `ctx.hook_deny`, preserving
     /// the exact pre-bus message flow in the query loop.
-    pub async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow {
+    async fn evaluate(&self, ctx: &mut ToolGuardContext) -> Flow {
         let event = HookEvent::PreToolUse {
             tool_name: ctx.tool_name.clone(),
             input: ctx.input.clone(),
@@ -302,20 +431,6 @@ impl PreToolUseHookNode {
             }
         }
         Flow::Continue
-    }
-
-    fn audit_row(&self, event_name: String, result: &HookResult, duration_ms: u64) {
-        let outcome = outcome_label(result);
-        self.bus.dispatch(
-            hook_fired_event(HookFiredPayload {
-                event: event_name,
-                hook: result.command.chars().take(120).collect(),
-                outcome: Some(outcome.into()),
-                duration_ms: Some(duration_ms),
-            })
-            .into(),
-            crate::bus::DispatchMode::Emit,
-        );
     }
 }
 
@@ -500,6 +615,160 @@ mod tests {
     use super::*;
     use crate::bus::TopicFilter;
     use crate::session_log::{L0TeeSubscriber, TeeHandle, session_events_path};
+
+    /// Test double implementing the pipeline contract: records its call
+    /// order into a shared log and returns a fixed [`Flow`].
+    struct ProbeNode {
+        name: &'static str,
+        log: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        flow: Flow,
+    }
+
+    #[async_trait]
+    impl ToolPipelineNode for ProbeNode {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        async fn evaluate(&self, _ctx: &mut ToolGuardContext) -> Flow {
+            self.log.lock().unwrap().push(self.name);
+            self.flow
+        }
+    }
+
+    #[test]
+    fn guard_node_names_are_the_pipeline_keys() {
+        // P0-1: the two built-in stages carry the (formerly dead) PIPELINE_*
+        // constants as their contract names.
+        let bus = EventBus::new();
+        let gate = PermissionGateNode::new(
+            Arc::new(std::sync::RwLock::new(
+                shannon_engine::permissions::PermissionManager::new(),
+            )),
+            uuid::Uuid::new_v4(),
+            bus.shared(),
+        );
+        let hooks = PreToolUseHookNode::new(empty_manager(), bus.shared());
+        assert_eq!(ToolPipelineNode::name(&gate), PIPELINE_PERMISSION);
+        assert_eq!(ToolPipelineNode::name(&hooks), PIPELINE_HOOKS_PRE_TOOL_USE);
+    }
+
+    #[tokio::test]
+    async fn pipeline_runs_stages_in_order_and_halts_at_the_first_halt() {
+        // P0-1 acceptance: the pipeline executes its nodes sequentially.
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = ToolExecutionPipeline::new(vec![
+            Arc::new(ProbeNode {
+                name: "s1",
+                log: log.clone(),
+                flow: Flow::Continue,
+            }),
+            Arc::new(ProbeNode {
+                name: "s2",
+                log: log.clone(),
+                flow: Flow::Continue,
+            }),
+            Arc::new(ProbeNode {
+                name: "s3",
+                log: log.clone(),
+                flow: Flow::Continue,
+            }),
+        ]);
+        let mut ctx = ToolGuardContext::new("Bash", serde_json::json!({}));
+        let flow = pipeline.run(&mut ctx).await;
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(*log.lock().unwrap(), vec!["s1", "s2", "s3"]);
+
+        // A halting stage stops the chain: later stages never see the call.
+        log.lock().unwrap().clear();
+        let pipeline = ToolExecutionPipeline::new(vec![
+            Arc::new(ProbeNode {
+                name: "gate",
+                log: log.clone(),
+                flow: Flow::Halt,
+            }),
+            Arc::new(ProbeNode {
+                name: "after",
+                log: log.clone(),
+                flow: Flow::Continue,
+            }),
+        ]);
+        let mut ctx = ToolGuardContext::new("Bash", serde_json::json!({}));
+        let flow = pipeline.run(&mut ctx).await;
+        assert_eq!(flow, Flow::Halt);
+        assert_eq!(*log.lock().unwrap(), vec!["gate"]);
+
+        // `run_from` resumes mid-chain — the approved-prompt path.
+        log.lock().unwrap().clear();
+        let mut ctx = ToolGuardContext::new("Bash", serde_json::json!({}));
+        let flow = pipeline.run_from(&mut ctx, 1).await;
+        assert_eq!(flow, Flow::Continue);
+        assert_eq!(*log.lock().unwrap(), vec!["after"]);
+    }
+
+    #[tokio::test]
+    async fn real_pipeline_allow_continues_into_later_stages_prompt_halts() {
+        // The mounted contract, end to end over the real nodes: an Allow
+        // verdict flows through the stages mounted after the gate inside the
+        // same pass; a Prompt verdict halts the chain (the query loop
+        // resolves the prompt, then resumes with `run_from`).
+        let always_allow = {
+            let mut pm = shannon_engine::permissions::PermissionManager::new();
+            pm.allow_tool("Read");
+            pm
+        };
+        let bus = EventBus::new();
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline = ToolExecutionPipeline::new(vec![
+            Arc::new(PermissionGateNode::new(
+                Arc::new(std::sync::RwLock::new(always_allow)),
+                uuid::Uuid::new_v4(),
+                bus.shared(),
+            )),
+            Arc::new(ProbeNode {
+                name: "probe",
+                log: log.clone(),
+                flow: Flow::Continue,
+            }),
+            Arc::new(PreToolUseHookNode::new(empty_manager(), bus.shared())),
+        ]);
+        let mut ctx = ToolGuardContext::new("Read", serde_json::json!({"path": "/tmp/x"}));
+        let flow = pipeline.run(&mut ctx).await;
+        assert_eq!(flow, Flow::Continue);
+        assert!(matches!(ctx.verdict, PermissionVerdict::Allowed));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["probe"],
+            "gate Allow continues into the later stages"
+        );
+
+        // Ask mode + untrusted write tool → Prompt: the chain halts before
+        // any later stage.
+        let mut ask = shannon_engine::permissions::PermissionManager::new();
+        ask.set_approval_mode(shannon_engine::permissions::ApprovalMode::Ask);
+        let bus2 = EventBus::new();
+        let log2 = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pipeline2 = ToolExecutionPipeline::new(vec![
+            Arc::new(PermissionGateNode::new(
+                Arc::new(std::sync::RwLock::new(ask)),
+                uuid::Uuid::new_v4(),
+                bus2.shared(),
+            )),
+            Arc::new(ProbeNode {
+                name: "probe",
+                log: log2.clone(),
+                flow: Flow::Continue,
+            }),
+        ]);
+        let mut ctx2 = ToolGuardContext::new("Write", serde_json::json!({"path": "/tmp/y"}));
+        let flow2 = pipeline2.run(&mut ctx2).await;
+        assert_eq!(flow2, Flow::Halt);
+        assert!(matches!(ctx2.verdict, PermissionVerdict::Prompt { .. }));
+        assert!(
+            log2.lock().unwrap().is_empty(),
+            "a prompt must halt the chain before later stages"
+        );
+    }
 
     fn empty_manager() -> Arc<tokio::sync::RwLock<HookManager>> {
         Arc::new(tokio::sync::RwLock::new(HookManager::with_paths(

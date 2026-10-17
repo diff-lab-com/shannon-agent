@@ -198,6 +198,158 @@ impl crate::tools::ProgressSender for ChannelProgressSender {
     }
 }
 
+/// P0-1 post-execute normalization for one finished tool call: everything
+/// that happens once `execute_streaming` returns, in one place — PostToolUse
+/// hook trigger, matching triggered routines, the completion `ToolProgress`,
+/// the `ToolUseResult` event (now carrying the around stage's measured
+/// `duration_ms`), `cap_tool_result` + `ToolResultEntry`.
+///
+/// Both execution arms (parallel batch and serial) repeated this block
+/// line-for-line; this is the pure move of it, with exactly one mandated
+/// addition: an `Err` result now also fires the **PostToolUseFailure** hook
+/// trigger (the event's first producer; payload mirrors PostToolUse with the
+/// error text and `is_error: true` semantics).
+///
+/// Returns `true` when the call returned `Ok` — the serial arm consumes that
+/// for its Edit/Write session flag. Arm-specific side effects (the
+/// denial-counter reset, the file-edit flag) stay with the caller. `pub(super)`
+/// so the engine test group can exercise the PostToolUseFailure producer.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn finalize_tool_result(
+    tx: &EventTx,
+    session_bus: &crate::bus::EventBus,
+    triggered_routines: &std::sync::Arc<
+        tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>,
+    >,
+    query_id: Uuid,
+    tool_use_id: String,
+    tool_name: &str,
+    effective_input: &serde_json::Value,
+    result: crate::tools::ToolResult<crate::tools::ToolOutput>,
+    duration_ms: Option<u64>,
+    tool_results: &mut Vec<ToolResultEntry>,
+) -> bool {
+    let succeeded = result.is_ok();
+    // §4.8: PostToolUse fires as a bus trigger handled by the adapter
+    // subscription.
+    {
+        let output_val = match &result {
+            Ok(o) => serde_json::Value::String(o.content.clone()),
+            Err(e) => serde_json::Value::String(format!("Error: {e}")),
+        };
+        let is_error = match &result {
+            Ok(o) => o.is_error,
+            Err(_) => true,
+        };
+        crate::query_engine::guard_nodes::publish_hook_trigger(
+            session_bus,
+            "PostToolUse",
+            serde_json::json!({
+                "tool_name": tool_name,
+                "input": effective_input,
+                "output": output_val,
+                "is_error": is_error,
+            }),
+        );
+    }
+
+    // Execute matching triggered routines (non-blocking)
+    {
+        let routines = triggered_routines.clone();
+        let tool = tool_name.to_string();
+        tokio::spawn(async move {
+            let reg = routines.read().await;
+            let results = reg
+                .execute_matching(&crate::HookEventType::PostToolUse, &tool, None)
+                .await;
+            for r in &results {
+                if r.success() {
+                    tracing::info!(name = %r.name, "Triggered routine completed");
+                } else {
+                    tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
+                }
+            }
+        });
+    }
+
+    // Emit progress: tool completed
+    send_event!(
+        tx,
+        QueryEvent::ToolProgress {
+            query_id,
+            tool_use_id: tool_use_id.clone(),
+            tool_name: tool_name.to_string(),
+            progress: 1.0,
+            message: format!("{tool_name} completed"),
+        }
+    );
+    match result {
+        Ok(output) => {
+            let is_err = output.is_error;
+            send_event!(
+                tx,
+                QueryEvent::ToolUseResult {
+                    query_id,
+                    tool_use_id: tool_use_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    result: output.content.clone(),
+                    is_error: is_err,
+                    meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
+                    duration_ms,
+                }
+            );
+            let (capped, truncated) = cap_tool_result(output.content.clone());
+            let mut meta = output.metadata.clone();
+            if truncated {
+                meta.insert("truncated".to_string(), serde_json::json!(true));
+            }
+            tool_results.push(ToolResultEntry {
+                tool_use_id,
+                content: capped,
+                is_error: is_err,
+                metadata: meta,
+            });
+        }
+        Err(e) => {
+            let output_text = format!("Error: {e}");
+            let error_msg = format!("Tool error: {e}");
+            // P0-1: PostToolUseFailure — the failure sibling of the
+            // PostToolUse trigger above (payload shape mirrored, error text
+            // as output, is_error=true).
+            crate::query_engine::guard_nodes::publish_hook_trigger(
+                session_bus,
+                "PostToolUseFailure",
+                serde_json::json!({
+                    "tool_name": tool_name,
+                    "input": effective_input,
+                    "output": output_text,
+                    "is_error": true,
+                }),
+            );
+            // Tool execution errors are not permission denials
+            send_event!(
+                tx,
+                QueryEvent::ToolUseResult {
+                    query_id,
+                    tool_use_id: tool_use_id.clone(),
+                    tool_name: tool_name.to_string(),
+                    result: error_msg.clone(),
+                    is_error: true,
+                    meta: Box::new(serde_json::Value::Null),
+                    duration_ms,
+                }
+            );
+            tool_results.push(ToolResultEntry {
+                tool_use_id,
+                content: error_msg,
+                is_error: true,
+                metadata: Default::default(),
+            });
+        }
+    }
+    succeeded
+}
+
 // ── Tool result entry ──────────────────────────────────────────────
 
 /// A pending tool result waiting to be assembled into an API message.
@@ -2292,6 +2444,7 @@ impl QueryEngine {
                                                         send_event!(
                                                             tx,
                                                             QueryEvent::ToolUseResult {
+                                                                duration_ms: None,
                                                                 query_id,
                                                                 tool_use_id: id.clone(),
                                                                 tool_name: name.clone(),
@@ -2710,6 +2863,33 @@ impl QueryEngine {
                                                     config.working_directory.as_deref(),
                                                 );
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
+                                                // P0-1: the two guard stages mount ONCE per
+                                                // tool batch as the named
+                                                // `ToolExecutionPipeline`
+                                                // (permission gate → PreToolUse
+                                                // hooks); the per-call behavior is
+                                                // unchanged — the gate continues only
+                                                // on Allow, the interactive prompt is
+                                                // resolved between the two stages
+                                                // (`run_from` resumes), and every
+                                                // verdict travels in the context.
+                                                let guard_pipeline = std::sync::Arc::new(
+                                                    crate::query_engine::guard_nodes::ToolExecutionPipeline::new(vec![
+                                                        std::sync::Arc::new(
+                                                            crate::query_engine::guard_nodes::PermissionGateNode::new(
+                                                                permissions.clone(),
+                                                                session_id_for_permissions,
+                                                                session_bus.shared(),
+                                                            ),
+                                                        ),
+                                                        std::sync::Arc::new(
+                                                            crate::query_engine::guard_nodes::PreToolUseHookNode::new(
+                                                                hook_manager.clone(),
+                                                                session_bus.shared(),
+                                                            ),
+                                                        ),
+                                                    ]),
+                                                );
                                                 let mut approved_tools: Vec<(
                                                     String,
                                                     String,
@@ -2776,6 +2956,7 @@ impl QueryEngine {
                                                             send_event!(
                                                                 tx,
                                                                 QueryEvent::ToolUseResult {
+                                                                    duration_ms: None,
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
                                                                     tool_name,
@@ -2801,22 +2982,22 @@ impl QueryEngine {
                                                     // pre-execute waterfall; every
                                                     // verdict is published as a
                                                     // durable permission/decision row
-                                                    // by the node itself.
+                                                    // by the node itself. P0-1: run the
+                                                    // pipeline from stage 1 (gate) — on
+                                                    // Allow the gate continues straight
+                                                    // into the hook stage within this
+                                                    // pass; Deny/Prompt halt the chain
+                                                    // here (the hook stage has not run).
                                                     use crate::query_engine::guard_nodes::PermissionVerdict;
                                                     let mut guard_ctx =
                                                         crate::query_engine::guard_nodes::ToolGuardContext::new(
                                                             tool_name.clone(),
                                                             tool_input.clone(),
                                                         );
-                                                    {
-                                                        use crate::query_engine::guard_nodes::PermissionGateNode;
-                                                        let gate = PermissionGateNode::new(
-                                                            permissions.clone(),
-                                                            session_id_for_permissions,
-                                                            session_bus.shared(),
-                                                        );
-                                                        gate.evaluate(&mut guard_ctx).await;
-                                                    }
+                                                    let hooks_pending = matches!(
+                                                        guard_pipeline.run(&mut guard_ctx).await,
+                                                        crate::bus::Flow::Halt
+                                                    );
 
                                                     match &guard_ctx.verdict {
                                                         PermissionVerdict::Denied {
@@ -2828,6 +3009,7 @@ impl QueryEngine {
                                                             send_event!(
                                                                 tx,
                                                                 QueryEvent::ToolUseResult {
+                                                                    duration_ms: None,
                                                                     query_id,
                                                                     tool_use_id: tool_id.clone(),
                                                                     tool_name,
@@ -2970,6 +3152,7 @@ impl QueryEngine {
                                                                             "Permission denied: {prompt_desc}"
                                                                         );
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
+                                                                                duration_ms: None,
                                                                             query_id,
                                                                             tool_use_id: tool_id
                                                                                 .clone(),
@@ -3103,6 +3286,7 @@ impl QueryEngine {
                                                                             "Permission channel closed"
                                                                                 .to_string();
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
+                                                                                duration_ms: None,
                                                                             query_id,
                                                                             tool_use_id: tool_id
                                                                                 .clone(),
@@ -3143,6 +3327,7 @@ impl QueryEngine {
                                                                 send_event!(
                                                                     tx,
                                                                     QueryEvent::ToolUseResult {
+                                                                        duration_ms: None,
                                                                         query_id,
                                                                         tool_use_id: tool_id
                                                                             .clone(),
@@ -3171,13 +3356,16 @@ impl QueryEngine {
                                                     // §4.8 stage 2: PreToolUse hooks run as the
                                                     // second waterfall node; executed hooks are
                                                     // audited as durable hook/fired rows by the node.
-                                                    {
-                                                        use crate::query_engine::guard_nodes::PreToolUseHookNode;
-                                                        let hooks_stage = PreToolUseHookNode::new(
-                                                            hook_manager.clone(),
-                                                            session_bus.shared(),
-                                                        );
-                                                        hooks_stage.evaluate(&mut guard_ctx).await;
+                                                    // P0-1: only reached after an approved
+                                                    // prompt — an Allow already ran the hook
+                                                    // stage inside `run` above, and every deny
+                                                    // path `continue`d — so resume the chain at
+                                                    // the hook stage, the exact pre-pipeline
+                                                    // ordering.
+                                                    if hooks_pending {
+                                                        guard_pipeline
+                                                            .run_from(&mut guard_ctx, 1)
+                                                            .await;
                                                     }
                                                     if let Some(reason) = guard_ctx.hook_deny.take()
                                                     {
@@ -3186,6 +3374,7 @@ impl QueryEngine {
                                                         send_event!(
                                                             tx,
                                                             QueryEvent::ToolUseResult {
+                                                                duration_ms: None,
                                                                 query_id,
                                                                 tool_use_id: tool_id.clone(),
                                                                 tool_name,
@@ -3215,6 +3404,7 @@ impl QueryEngine {
                                                 // Circuit breaker: check consecutive denials before executing tools.
                                                 if consecutive_denials >= DENIAL_HARD_LIMIT {
                                                     send_event!(tx, QueryEvent::ToolUseResult {
+                                                            duration_ms: None,
                                                         query_id,
                                                         tool_use_id: "circuit-breaker".to_string(),
                                                         tool_name: "system".to_string(),
@@ -3293,7 +3483,13 @@ impl QueryEngine {
                                                                     // query's bus.
                                                                     let handle = tokio::spawn(
                                                                         crate::bus::inherit_decision_sink(async move {
-                                                                            (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
+                                                                            // P0-1: wall time for the
+                                                                            // ToolUseResult event is
+                                                                            // measured around the call.
+                                                                            let started = std::time::Instant::now();
+                                                                            let result = tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await;
+                                                                            let duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                                                                            (tool_id, tool_name, effective_input, result, duration_ms)
                                                                         }),
                                                                     );
                                                                     exec_handles.push((
@@ -3311,119 +3507,27 @@ impl QueryEngine {
                                                                             tool_name,
                                                                             effective_input,
                                                                             result,
+                                                                            duration_ms,
                                                                         )) => {
-                                                                            // §4.8: PostToolUse fires as a bus
-                                                                            // trigger handled by the adapter
-                                                                            // subscription.
-                                                                            {
-                                                                                let output_val = match &result {
-                                                                                    Ok(o) => serde_json::Value::String(o.content.clone()),
-                                                                                    Err(e) => serde_json::Value::String(format!("Error: {e}")),
-                                                                                };
-                                                                                let is_error = match &result {
-                                                                                    Ok(o) => o.is_error,
-                                                                                    Err(_) => true,
-                                                                                };
-                                                                                crate::query_engine::guard_nodes::publish_hook_trigger(
-                                                                                    &session_bus,
-                                                                                    "PostToolUse",
-                                                                                    serde_json::json!({
-                                                                                        "tool_name": tool_name.clone(),
-                                                                                        "input": effective_input.clone(),
-                                                                                        "output": output_val,
-                                                                                        "is_error": is_error,
-                                                                                    }),
-                                                                                );
-                                                                            }
-
-                                                                            // Execute matching triggered routines (non-blocking)
-                                                                            {
-                                                                                let routines =
-                                                                                    triggered_routines
-                                                                                        .clone();
-                                                                                let tool =
-                                                                                    tool_name
-                                                                                        .clone();
-                                                                                tokio::spawn(
-                                                                                    async move {
-                                                                                        let reg =
-                                                                                            routines
-                                                                                                .read()
-                                                                                                .await;
-                                                                                        let results = reg
-                                                                                            .execute_matching(
-                                                                                                &crate::HookEventType::PostToolUse,
-                                                                                                &tool,
-                                                                                                None,
-                                                                                            )
-                                                                                            .await;
-                                                                                        for r in
-                                                                                            &results
-                                                                                        {
-                                                                                            if r.success() {
-                                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
-                                                                                            } else {
-                                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
-                                                                                            }
-                                                                                        }
-                                                                                    },
-                                                                                );
-                                                                            }
-
-                                                                            // Emit progress: tool completed
-                                                                            send_event!(tx, QueryEvent::ToolProgress {
+                                                                            // P0-1: post-execute
+                                                                            // normalization moved
+                                                                            // verbatim into
+                                                                            // `finalize_tool_result`
+                                                                            // (shared with the serial
+                                                                            // arm).
+                                                                            finalize_tool_result(
+                                                                                &tx,
+                                                                                &session_bus,
+                                                                                &triggered_routines,
                                                                                 query_id,
-                                                                                tool_use_id: tool_id.clone(),
-                                                                                tool_name: tool_name.clone(),
-                                                                                progress: 1.0,
-                                                                                message: format!("{tool_name} completed"),
-                                                                            });
-                                                                            match result {
-                                                                                Ok(output) => {
-                                                                                    let is_err = output.is_error;
-                                                                                    send_event!(tx, QueryEvent::ToolUseResult {
-                                                                                        query_id,
-                                                                                        tool_use_id: tool_id.clone(),
-                                                                                        tool_name: tool_name.clone(),
-                                                                                        result: output.content.clone(),
-                                                                                        is_error: is_err,
-                                                                                        meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
-                                                                                        });
-                                                                                    let (capped, truncated) = cap_tool_result(output.content.clone());
-                                                                                    let mut meta = output.metadata.clone();
-                                                                                    if truncated {
-                                                                                        meta.insert("truncated".to_string(), serde_json::json!(true));
-                                                                                    }
-                                                                                    tool_results
-                                                                                        .push(ToolResultEntry {
-                                                                                        tool_use_id: tool_id,
-                                                                                        content: capped,
-                                                                                        is_error: is_err,
-                                                                                        metadata: meta,
-                                                                                    });
-                                                                                }
-                                                                                Err(e) => {
-                                                                                    // Tool execution errors are not permission denials
-                                                                                    let error_msg = format!(
-                                                                                        "Tool error: {e}"
-                                                                                    );
-                                                                                    send_event!(tx, QueryEvent::ToolUseResult {
-                                                                                        query_id,
-                                                                                        tool_use_id: tool_id.clone(),
-                                                                                        tool_name,
-                                                                                        result: error_msg.clone(),
-                                                                                        is_error: true,
-                                                                                        meta: Box::new(serde_json::Value::Null),
-                                                                                        });
-                                                                                    tool_results
-                                                                                        .push(ToolResultEntry {
-                                                                                        tool_use_id: tool_id,
-                                                                                        content: error_msg,
-                                                                                        is_error: true,
-                                                                                        metadata: Default::default(),
-                                                                                    });
-                                                                                }
-                                                                            }
+                                                                                tool_id,
+                                                                                &tool_name,
+                                                                                &effective_input,
+                                                                                result,
+                                                                                duration_ms,
+                                                                                &mut tool_results,
+                                                                            )
+                                                                            .await;
                                                                         }
                                                                         Err(e) => {
                                                                             // Task join errors are not permission denials
@@ -3431,6 +3535,7 @@ impl QueryEngine {
                                                                                 "Task join error: {e}"
                                                                             );
                                                                             send_event!(tx, QueryEvent::ToolUseResult {
+                                                                                    duration_ms: None,
                                                                                 query_id,
                                                                                 tool_use_id: saved_tool_id.clone(),
                                                                                 tool_name: String::new(),
@@ -3486,6 +3591,8 @@ impl QueryEngine {
                                                                                 .clone(),
                                                                         },
                                                                     );
+                                                                let started =
+                                                                    std::time::Instant::now();
                                                                 let result = tools
                                                                     .execute_streaming(
                                                                         &tool_name,
@@ -3493,141 +3600,51 @@ impl QueryEngine {
                                                                         progress_sender,
                                                                     )
                                                                     .await;
-
-                                                                // §4.8: PostToolUse fires as a bus trigger
-                                                                // handled by the adapter subscription.
-                                                                {
-                                                                    let output_val = match &result {
-                                                                        Ok(o) => serde_json::Value::String(o.content.clone()),
-                                                                        Err(e) => serde_json::Value::String(format!("Error: {e}")),
-                                                                    };
-                                                                    let is_error = match &result {
-                                                                        Ok(o) => o.is_error,
-                                                                        Err(_) => true,
-                                                                    };
-                                                                    crate::query_engine::guard_nodes::publish_hook_trigger(
-                                                                        &session_bus,
-                                                                        "PostToolUse",
-                                                                        serde_json::json!({
-                                                                            "tool_name": tool_name.clone(),
-                                                                            "input": effective_input.clone(),
-                                                                            "output": output_val,
-                                                                            "is_error": is_error,
-                                                                        }),
-                                                                    );
-                                                                }
-
-                                                                // Execute matching triggered routines (non-blocking)
-                                                                {
-                                                                    let routines =
-                                                                        triggered_routines.clone();
-                                                                    let tool = tool_name.clone();
-                                                                    tokio::spawn(async move {
-                                                                        let reg =
-                                                                            routines.read().await;
-                                                                        let results = reg
-                                                                                .execute_matching(
-                                                                                    &crate::HookEventType::PostToolUse,
-                                                                                    &tool,
-                                                                                    None,
-                                                                                )
-                                                                                .await;
-                                                                        for r in &results {
-                                                                            if r.success() {
-                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
-                                                                            } else {
-                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
-                                                                            }
-                                                                        }
-                                                                    });
-                                                                }
-
-                                                                // Emit progress: tool completed
-                                                                send_event!(
-                                                                    tx,
-                                                                    QueryEvent::ToolProgress {
-                                                                        query_id,
-                                                                        tool_use_id: tool_id
-                                                                            .clone(),
-                                                                        tool_name: tool_name
-                                                                            .clone(),
-                                                                        progress: 1.0,
-                                                                        message: format!(
-                                                                            "{tool_name} completed"
-                                                                        ),
-                                                                    }
+                                                                // P0-1: wall time for the
+                                                                // ToolUseResult event is
+                                                                // measured around the call.
+                                                                let duration_ms = Some(
+                                                                    u64::try_from(
+                                                                        started
+                                                                            .elapsed()
+                                                                            .as_millis(),
+                                                                    )
+                                                                    .unwrap_or(u64::MAX),
                                                                 );
-                                                                match result {
-                                                                    Ok(output) => {
-                                                                        let is_err =
-                                                                            output.is_error;
-                                                                        consecutive_denials = 0; // reset on success
-                                                                        send_event!(tx, QueryEvent::ToolUseResult {
-                                                                            query_id,
-                                                                            tool_use_id: tool_id.clone(),
-                                                                            tool_name: tool_name.clone(),
-                                                                            result: output.content.clone(),
-                                                                            is_error: is_err,
-                                                                            meta: Box::new(crate::tools::sandbox_meta_from(&output.metadata)),
-                                                                            });
-                                                                        let (capped, truncated) =
-                                                                            cap_tool_result(
-                                                                                output
-                                                                                    .content
-                                                                                    .clone(),
-                                                                            );
-                                                                        let mut meta =
-                                                                            output.metadata.clone();
-                                                                        if truncated {
-                                                                            meta.insert(
-                                                                                "truncated"
-                                                                                    .to_string(),
-                                                                                serde_json::json!(
-                                                                                    true
-                                                                                ),
-                                                                            );
-                                                                        }
-                                                                        tool_results.push(
-                                                                            ToolResultEntry {
-                                                                                tool_use_id:
-                                                                                    tool_id,
-                                                                                content: capped,
-                                                                                is_error: is_err,
-                                                                                metadata: meta,
-                                                                            },
-                                                                        );
-                                                                        if matches!(
-                                                                            tool_name.as_str(),
-                                                                            "Edit" | "Write"
-                                                                        ) {
-                                                                            file_edits_made = true;
-                                                                            // P-B: session-level flag for the
-                                                                            // turn-N checkpoint decision.
-                                                                            session_file_edits_made = true;
-                                                                        }
-                                                                    }
-                                                                    Err(e) => {
-                                                                        let error_msg = format!(
-                                                                            "Tool error: {e}"
-                                                                        );
-                                                                        // Gate-approved call: a runtime
-                                                                        // error is not a denial.
-                                                                        consecutive_denials = 0;
-                                                                        send_event!(tx, QueryEvent::ToolUseResult {
-                                                                            query_id,
-                                                                            tool_use_id: tool_id.clone(),
-                                                                            tool_name,
-                                                                            result: error_msg.clone(),
-                                                                            is_error: true,
-                                                                            meta: Box::new(serde_json::Value::Null),
-                                                                            });
-                                                                        tool_results.push(ToolResultEntry {
-                                                                            tool_use_id: tool_id,
-                                                                            content: error_msg,
-                                                                            is_error: true,
-                                                                            metadata: Default::default(),
-                                                                        });
-                                                                    }
+
+                                                                // P0-1: post-execute normalization
+                                                                // moved verbatim into
+                                                                // `finalize_tool_result` (shared
+                                                                // with the parallel arm).
+                                                                let succeeded =
+                                                                    finalize_tool_result(
+                                                                        &tx,
+                                                                        &session_bus,
+                                                                        &triggered_routines,
+                                                                        query_id,
+                                                                        tool_id,
+                                                                        &tool_name,
+                                                                        &effective_input,
+                                                                        result,
+                                                                        duration_ms,
+                                                                        &mut tool_results,
+                                                                    )
+                                                                    .await;
+                                                                // Gate-approved call: neither a
+                                                                // success nor a runtime error is a
+                                                                // permission denial (this reset used
+                                                                // to sit in both match arms).
+                                                                consecutive_denials = 0;
+                                                                if succeeded
+                                                                    && matches!(
+                                                                        tool_name.as_str(),
+                                                                        "Edit" | "Write"
+                                                                    )
+                                                                {
+                                                                    file_edits_made = true;
+                                                                    // P-B: session-level flag for the
+                                                                    // turn-N checkpoint decision.
+                                                                    session_file_edits_made = true;
                                                                 }
                                                             }
                                                         }
@@ -3753,6 +3770,7 @@ impl QueryEngine {
                                                                     .unwrap_or("committed")
                                                                     .to_string();
                                                                 send_event!(tx, QueryEvent::ToolUseResult {
+                                                                        duration_ms: None,
                                                                     query_id,
                                                                     tool_use_id: String::new(),
                                                                     tool_name: "auto_commit".to_string(),

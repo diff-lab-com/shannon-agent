@@ -46,6 +46,10 @@
 //!   terminal close funnels through `close_turn`, including cancellation.
 //! - permission decisions: `crate::query_engine::guard_nodes::emit_decision`
 //!   — mode `"USER"` marks human-taken decisions.
+//! - tool executions: `ToolRegistry` around stage (`execute_with_around`,
+//!   P0-1) — outcome class + wall time per finished call, accumulated in
+//!   the local-only tool-exec totals (see [`observe_tool_execution`]; not
+//!   part of the frozen v1 wire whitelist).
 //! - `/rewind`: REPL command handler (`shannon-ui`, `handle_rewind`).
 //! - feedback: `shannon feedback <up|down>` (`shannon-cli`).
 //!
@@ -244,6 +248,99 @@ pub fn observe_permission_decision(decision: &str, mode: Option<&str>) {
     }
     if mode == Some("USER") {
         r.takeover_in_turn.store(true, Ordering::Relaxed);
+    }
+}
+
+// ============================================================================
+// Tool-execution outcomes (P0-1 around stage)
+// ============================================================================
+
+/// Outcome class of one registry tool execution, as classified by the
+/// around stage ([`crate::tools::ToolRegistry`] `execute_with_around`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExecOutcome {
+    /// The call returned `Ok` — regardless of the output's `is_error` flag.
+    Ok,
+    /// The call returned an `Err` other than `ToolError::Timeout`.
+    Error,
+    /// The call returned `Err(ToolError::Timeout)` on the final attempt.
+    Timeout,
+}
+
+impl ToolExecOutcome {
+    /// Classify a finished call: `Err(ToolError::Timeout)` ⇒
+    /// [`Self::Timeout`], any other `Err` ⇒ [`Self::Error`], `Ok` ⇒
+    /// [`Self::Ok`].
+    pub fn classify<T>(result: &Result<T, crate::tools::ToolError>) -> Self {
+        match result {
+            Ok(_) => Self::Ok,
+            Err(crate::tools::ToolError::Timeout { .. }) => Self::Timeout,
+            Err(_) => Self::Error,
+        }
+    }
+}
+
+/// Aggregate tool-execution totals (see [`observe_tool_execution`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolExecTotals {
+    /// Calls classified [`ToolExecOutcome::Ok`].
+    pub ok: u64,
+    /// Calls classified [`ToolExecOutcome::Error`].
+    pub error: u64,
+    /// Calls classified [`ToolExecOutcome::Timeout`].
+    pub timeout: u64,
+    /// Sum of measured wall-clock execution time (milliseconds, retry
+    /// attempts included).
+    pub total_duration_ms: u64,
+}
+
+/// Aggregate counters for the P0-1 tool-execution metric. Deliberately kept
+/// OUT of [`SignalCounters`]: the v1 wire payload is a frozen ten-counter
+/// whitelist (enforced by tests — adding a counter is a schema change), so
+/// these accumulate locally under the same anonymous counts-only rule until
+/// a schema revision ships them.
+struct ToolExecCounters {
+    ok: AtomicU64,
+    error: AtomicU64,
+    timeout: AtomicU64,
+    total_duration_ms: AtomicU64,
+}
+
+fn tool_exec_counters() -> &'static ToolExecCounters {
+    static COUNTERS: OnceLock<ToolExecCounters> = OnceLock::new();
+    COUNTERS.get_or_init(|| ToolExecCounters {
+        ok: AtomicU64::new(0),
+        error: AtomicU64::new(0),
+        timeout: AtomicU64::new(0),
+        total_duration_ms: AtomicU64::new(0),
+    })
+}
+
+/// Record one finished tool execution from the around stage — exactly once
+/// per outer attempt outcome (the retry policy's final result, not per
+/// internal retry). Counts only: the tool name never persists (the same
+/// privacy rule as every signal here); it rides the debug log line for
+/// local observability.
+pub fn observe_tool_execution(tool: &str, outcome: ToolExecOutcome, duration_ms: u64) {
+    let c = tool_exec_counters();
+    match outcome {
+        ToolExecOutcome::Ok => c.ok.fetch_add(1, Ordering::Relaxed),
+        ToolExecOutcome::Error => c.error.fetch_add(1, Ordering::Relaxed),
+        ToolExecOutcome::Timeout => c.timeout.fetch_add(1, Ordering::Relaxed),
+    };
+    c.total_duration_ms
+        .fetch_add(duration_ms, Ordering::Relaxed);
+    tracing::debug!(tool = %tool, ?outcome, duration_ms, "tool execution observed");
+}
+
+/// Read the accumulated tool-execution counters without clearing them.
+pub fn tool_exec_snapshot() -> ToolExecTotals {
+    let c = tool_exec_counters();
+    ToolExecTotals {
+        ok: c.ok.load(Ordering::Relaxed),
+        error: c.error.load(Ordering::Relaxed),
+        timeout: c.timeout.load(Ordering::Relaxed),
+        total_duration_ms: c.total_duration_ms.load(Ordering::Relaxed),
     }
 }
 
@@ -646,6 +743,35 @@ mod tests {
         assert_eq!(measured.rewind_both, 1);
         assert_eq!(measured.rewind_file, 1);
         assert_eq!(measured.rewind_total(), 5);
+    }
+
+    #[test]
+    fn tool_execution_outcomes_classify_and_count() {
+        // P0-1: the around-stage classification contract — Timeout only for
+        // `Err(ToolError::Timeout)`, Ok regardless of `is_error`.
+        let ok: Result<u32, crate::tools::ToolError> = Ok(1);
+        let timeout: Result<u32, crate::tools::ToolError> = Err(crate::tools::ToolError::Timeout {
+            name: "t".into(),
+            duration: std::time::Duration::from_secs(1),
+        });
+        let err: Result<u32, crate::tools::ToolError> =
+            Err(crate::tools::ToolError::ExecutionFailed("boom".into()));
+        assert_eq!(ToolExecOutcome::classify(&ok), ToolExecOutcome::Ok);
+        assert_eq!(
+            ToolExecOutcome::classify(&timeout),
+            ToolExecOutcome::Timeout
+        );
+        assert_eq!(ToolExecOutcome::classify(&err), ToolExecOutcome::Error);
+
+        let before = tool_exec_snapshot();
+        observe_tool_execution("Read", ToolExecOutcome::Ok, 3);
+        observe_tool_execution("Grep", ToolExecOutcome::Timeout, 4);
+        observe_tool_execution("Bash", ToolExecOutcome::Error, 5);
+        let after = tool_exec_snapshot();
+        assert_eq!(after.ok - before.ok, 1);
+        assert_eq!(after.timeout - before.timeout, 1);
+        assert_eq!(after.error - before.error, 1);
+        assert_eq!(after.total_duration_ms - before.total_duration_ms, 12);
     }
 
     #[test]

@@ -6,12 +6,28 @@ use crate::loader::{
     load_full_skill as loader_load_full_skill, load_metadata_only as loader_load_metadata_only,
     load_skill_from_file, load_skills_from_directory,
 };
+use serde::Serialize;
 use shannon_types::recover_lock;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, info, trace, warn};
 use walkdir::WalkDir;
+
+/// P0-3 assembly dump: outcome of one budget pass over the registered
+/// skills — what made it into the LLM context, what got its description
+/// truncated to squeeze under the budget, and what was cut entirely.
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillBudgetReport {
+    /// Skills mounted into the LLM context (alphabetical by name; may
+    /// include up to one entry whose description was truncated).
+    pub included: Vec<SkillMetadata>,
+    /// Names of skills dropped entirely (over budget, not truncatable).
+    pub dropped: Vec<String>,
+    /// Names of included skills whose description was truncated (marked
+    /// with a trailing `...`).
+    pub truncated: Vec<String>,
+}
 
 /// Registry for managing all available skills
 #[derive(Debug, Clone)]
@@ -546,7 +562,21 @@ impl SkillRegistry {
     ///
     /// If the total estimated tokens exceed `budget`, descriptions are
     /// truncated to fit. Skills are returned in alphabetical order by name.
+    ///
+    /// Thin wrapper over [`Self::available_skills_metadata_with_budget_report`]
+    /// that keeps only the included entries — behavior identical to the
+    /// pre-report implementation.
     pub fn available_skills_metadata_with_budget(&self, budget: usize) -> Vec<SkillMetadata> {
+        self.available_skills_metadata_with_budget_report(budget)
+            .included
+    }
+
+    /// P0-3 assembly dump: same budget pass as
+    /// [`Self::available_skills_metadata_with_budget`], but it also reports
+    /// what the budget cut — skills whose description was truncated to fit
+    /// and skills dropped entirely — so "what did the skill budget trim?"
+    /// is answerable without re-deriving the arithmetic.
+    pub fn available_skills_metadata_with_budget_report(&self, budget: usize) -> SkillBudgetReport {
         let inner = recover_lock(self.inner.read());
 
         let mut all_meta: Vec<SkillMetadata> = Vec::new();
@@ -574,20 +604,30 @@ impl SkillRegistry {
 
         // Apply token budget
         if budget == usize::MAX {
-            return all_meta;
+            return SkillBudgetReport {
+                included: all_meta,
+                dropped: Vec::new(),
+                truncated: Vec::new(),
+            };
         }
 
-        let mut result = Vec::new();
+        let mut included = Vec::new();
+        let mut dropped = Vec::new();
+        let mut truncated = Vec::new();
         let mut tokens_used = 0;
 
-        for mut meta in all_meta {
+        let mut remaining = all_meta.into_iter();
+        // Walk until the first skill that no longer fits; at most one
+        // truncated entry is ever emitted (the pre-report behavior), and
+        // everything after the break point is dropped.
+        for mut meta in remaining.by_ref() {
             let tokens = meta.estimated_tokens();
             if tokens_used + tokens > budget {
                 // Try truncating description to fit
-                let remaining = budget.saturating_sub(tokens_used);
-                if remaining > 0 {
+                let budget_left = budget.saturating_sub(tokens_used);
+                if budget_left > 0 {
                     // Rough estimate: truncate description to fit remaining tokens
-                    let max_chars = remaining.saturating_sub(meta.name.len() / 4 + 2) * 4;
+                    let max_chars = budget_left.saturating_sub(meta.name.len() / 4 + 2) * 4;
                     if max_chars > 10 {
                         // review F24: String::truncate panics if the cut index
                         // is not a char boundary. Descriptions may contain
@@ -599,17 +639,28 @@ impl SkillRegistry {
                         }
                         meta.description.truncate(cut);
                         meta.description.push_str("...");
-                        result.push(meta);
+                        truncated.push(meta.name.clone());
+                        included.push(meta);
+                    } else {
+                        dropped.push(meta.name);
                     }
+                } else {
+                    dropped.push(meta.name);
                 }
                 // Budget exhausted, stop adding skills
                 break;
             }
             tokens_used += tokens;
-            result.push(meta);
+            included.push(meta);
         }
+        // Every skill past the break point was cut entirely.
+        dropped.extend(remaining.map(|meta| meta.name));
 
-        result
+        SkillBudgetReport {
+            included,
+            dropped,
+            truncated,
+        }
     }
 
     /// Default token budget for LLM skill listing.
@@ -1441,6 +1492,146 @@ mod tests {
             assert!(metas[0].description.len() < long_desc.len());
             assert!(metas[0].description.ends_with("..."));
         }
+    }
+
+    /// P0-3: the budget report must surface exactly what the trim cut —
+    /// truncated names plus entirely-dropped names — while `included`
+    /// matches the plain budget call.
+    #[test]
+    fn test_budget_report_reports_dropped_and_truncated() {
+        let registry = SkillRegistry::new();
+        // 20 same-shaped skills; a tight budget keeps only a few and drops
+        // the rest of the alphabetical run.
+        for i in 0..20 {
+            let skill = Skill::new(
+                format!("skill-{i:02}"),
+                format!("skill-{i:02}"),
+                format!("This is skill number {i} with a description that takes some tokens"),
+                "Content".to_string(),
+            );
+            registry.register(skill).unwrap();
+        }
+
+        let report = registry.available_skills_metadata_with_budget_report(20);
+        let plain = registry.available_skills_metadata_with_budget(20);
+
+        // included is behavior-identical to the plain budget call
+        assert_eq!(
+            report
+                .included
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            plain.iter().map(|m| m.name.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            !report.included.is_empty(),
+            "tight budget still includes some"
+        );
+
+        // Real invariant of the budget pass: dropped ∩ included = ∅,
+        // truncated ⊆ included (a truncated skill IS mounted, description
+        // shortened), so registered candidates = included + dropped.
+        assert_eq!(
+            report.included.len() + report.dropped.len(),
+            20,
+            "included + dropped must account for all registered skills"
+        );
+        for name in &report.truncated {
+            assert!(!report.dropped.contains(name));
+            assert!(
+                report.included.iter().any(|m| &m.name == name),
+                "truncated skill must also be included"
+            );
+        }
+
+        // Truncation fixture: a mixed set where one skill overflows with
+        // truncation room — truncated must be non-empty, ⊆ included, and
+        // the registered accounting (included + dropped) must still hold.
+        let mixed = SkillRegistry::new();
+        let fat = Skill::new(
+            "fat".to_string(),
+            "fat".to_string(),
+            "w".repeat(4000), // ~1000 tokens: fits the 1500 budget…
+            "Content".to_string(),
+        );
+        mixed.register(fat).unwrap();
+        let over = Skill::new(
+            "over".to_string(),
+            "over".to_string(),
+            "x".repeat(4000), // ~1000 tokens: overflows with room to truncate
+            "Content".to_string(),
+        );
+        mixed.register(over).unwrap();
+        let tiny = Skill::new(
+            "tiny".to_string(),
+            "tiny".to_string(),
+            "z".repeat(4000), // ~1000 tokens: cut entirely after the break
+            "Content".to_string(),
+        );
+        mixed.register(tiny).unwrap();
+
+        let report = mixed.available_skills_metadata_with_budget_report(1500);
+        assert_eq!(report.truncated, vec!["over".to_string()]);
+        assert_eq!(
+            report.included.len(),
+            2,
+            "fat + truncated over stay mounted"
+        );
+        assert_eq!(report.dropped, vec!["tiny".to_string()]);
+        // registered accounting holds under truncation: 2 + 1 = 3.
+        assert_eq!(report.included.len() + report.dropped.len(), 3);
+        // truncated ⊆ included (and marked with "...")
+        let over_entry = report
+            .included
+            .iter()
+            .find(|m| m.name == "over")
+            .expect("truncated skill included");
+        assert!(over_entry.description.ends_with("..."));
+
+        // A single over-budget skill under a budget that leaves truncation
+        // room must be reported as truncated (and marked in its description).
+        let solo = SkillRegistry::new();
+        let skill = Skill::new(
+            "verbose".to_string(),
+            "verbose".to_string(),
+            "word ".repeat(400),
+            "Content".to_string(),
+        );
+        solo.register(skill).unwrap();
+        let report = solo.available_skills_metadata_with_budget_report(15);
+        assert_eq!(report.included.len(), 1, "truncated entry stays listed");
+        assert_eq!(report.truncated, vec!["verbose".to_string()]);
+        assert!(report.dropped.is_empty());
+        assert!(report.included[0].description.ends_with("..."));
+        // Even with a truncated row: registered = included + dropped = 1.
+        assert_eq!(report.included.len() + report.dropped.len(), 1);
+
+        // A budget of zero cannot even truncate (remaining == 0) — the
+        // skill is dropped, not silently vanished.
+        let report = solo.available_skills_metadata_with_budget_report(0);
+        assert!(report.included.is_empty());
+        assert_eq!(report.dropped, vec!["verbose".to_string()]);
+        assert!(report.truncated.is_empty());
+    }
+
+    /// P0-3: an unlimited budget reports everything with nothing cut.
+    #[test]
+    fn test_budget_report_unlimited_has_no_cuts() {
+        let registry = SkillRegistry::new();
+        for i in 0..3 {
+            let skill = Skill::new(
+                format!("s{i}"),
+                format!("s{i}"),
+                "Some description".to_string(),
+                "Content".to_string(),
+            );
+            registry.register(skill).unwrap();
+        }
+        let report = registry.available_skills_metadata_with_budget_report(usize::MAX);
+        assert_eq!(report.included.len(), 3);
+        assert!(report.dropped.is_empty());
+        assert!(report.truncated.is_empty());
     }
 
     #[test]
