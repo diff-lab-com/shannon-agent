@@ -36,6 +36,13 @@ pub struct HookManager {
     /// a warn is invisible without a tracing subscriber — this record lets
     /// embedders (e.g. the assembly dump) surface skipped config files.
     load_failures: Vec<String>,
+    /// Mounted http/llm hooks whose `command` is empty (the serde default —
+    /// the definitions that previously failed the whole-file parse and are
+    /// active only since then), recorded by the most recent [`Self::load`].
+    /// The audit also warns, but a warn is invisible without a tracing
+    /// subscriber — this record makes the first activation observable to
+    /// embedders, like [`Self::load_failures`] does for skipped files.
+    first_activations: Vec<String>,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -75,6 +82,7 @@ impl HookManager {
             base_dir,
             llm_client: None,
             load_failures: Vec::new(),
+            first_activations: Vec::new(),
         }
     }
 
@@ -87,6 +95,7 @@ impl HookManager {
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             llm_client: None,
             load_failures: Vec::new(),
+            first_activations: Vec::new(),
         }
     }
 
@@ -106,6 +115,7 @@ impl HookManager {
             base_dir,
             llm_client: None,
             load_failures: Vec::new(),
+            first_activations: Vec::new(),
         }
     }
 
@@ -125,6 +135,13 @@ impl HookManager {
     /// - `.shannon/settings.json`
     /// - `.shannon/settings.local.json`
     /// - `.shannon/hooks.json`
+    ///
+    /// After parsing, runs the first-activation audit: every mounted http/llm
+    /// hook whose `command` is empty (the serde default for an omitted field)
+    /// gets one warning — those definitions previously failed the whole-file
+    /// parse, so their activation must not be silent. The audit is idempotent
+    /// per load and does not affect the load result or
+    /// [`Self::load_failures`]; see [`Self::first_activations`].
     pub fn load(&mut self) -> Result<(), HookError> {
         let mut combined = HooksFile::new();
         // Fresh attempt: a file that failed in a previous load but parses now
@@ -167,6 +184,7 @@ impl HookManager {
 
         self.hooks_file = combined;
         self.load_failures = load_failures;
+        self.first_activations = Self::audit_first_activations(&self.hooks_file);
         Ok(())
     }
 
@@ -175,6 +193,46 @@ impl HookManager {
         let hooks = HooksFile::load_from_file(path)?;
         self.hooks_file = hooks;
         Ok(())
+    }
+
+    /// First-activation audit (runs once per [`Self::load`]).
+    ///
+    /// `HookDef::command` serde-defaults to the empty string, so http/llm
+    /// definitions that omit the field now parse where they previously failed
+    /// the whole-file parse. Each such mounted hook gets exactly one warning
+    /// per load (idempotent — the audit re-runs from scratch on every load)
+    /// and one entry in the returned record, so the activation is visible
+    /// even without a tracing subscriber. `command`-type hooks with an empty
+    /// command are NOT audited: omitting `command` there is a misconfiguration
+    /// that surfaces at fire time via the empty-command guard.
+    fn audit_first_activations(hooks_file: &HooksFile) -> Vec<String> {
+        let mut activated = Vec::new();
+        for (event, configs) in &hooks_file.hooks {
+            for config in configs {
+                for def in &config.hooks {
+                    if !def.command.is_empty() {
+                        continue;
+                    }
+                    let (hook_type, target) = match &def.r#type {
+                        HookType::Http => ("http", def.url.as_deref().unwrap_or_default()),
+                        HookType::Llm => {
+                            ("llm", def.prompt_template.as_deref().unwrap_or_default())
+                        }
+                        _ => continue,
+                    };
+                    let hook = format!("{}/{}", event, config.matcher);
+                    tracing::warn!(
+                        event = %event,
+                        matcher = %config.matcher,
+                        hook_type = hook_type,
+                        target = %target,
+                        "hook '{hook}' ({hook_type}) 该钩子此前会因缺少 command 字段而解析失败,现已激活"
+                    );
+                    activated.push(hook);
+                }
+            }
+        }
+        activated
     }
 
     /// Run all matching hooks for a given event.
@@ -832,6 +890,21 @@ Do not include any other text, explanation, or formatting.";
         &self.load_failures
     }
 
+    /// Get the first-activation record of the most recent [`Self::load`]: one
+    /// `"<event>/<matcher>"` entry per mounted http/llm hook whose `command`
+    /// is empty (the serde default for an omitted field). Empty when no such
+    /// hook is mounted (or `load()` has not run yet). Each entry is also
+    /// emitted as a warning during `load()`, noting 该钩子此前会因缺少
+    /// command 字段而解析失败,现已激活 — this record makes that visible to
+    /// embedders without a tracing subscriber.
+    ///
+    /// Note the audit observes the parsed result, not the source text: a hook
+    /// written with an explicit `"command": ""` is indistinguishable from one
+    /// omitting the field and is audited the same way.
+    pub fn first_activations(&self) -> &[String] {
+        &self.first_activations
+    }
+
     /// Get the list of event types that have configured hooks
     pub fn configured_event_types(&self) -> Vec<HookEventType> {
         self.hooks_file
@@ -1102,6 +1175,234 @@ mod tests {
             "re-load must replace the previous failures (entry for the fixed \
              file must be gone): {:?}",
             mgr.load_failures()
+        );
+    }
+
+    // ── first-activation audit (HookDef.command serde default) ───────────
+
+    /// `load()` audits every mounted http/llm hook whose `command` is empty
+    /// (the serde default for an omitted field): one record entry per hook.
+    /// Explicit-command hooks and command-type hooks are not audited, and
+    /// `load_failures` is untouched. Assertions are scoped to the fixture's
+    /// unique matchers — `load()` also merges the running machine's real
+    /// home-dir hook configs, which are out of scope here.
+    #[test]
+    fn load_audits_omitted_command_http_llm_hooks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(
+            &project,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "FixtureWebFetch", "hooks": [
+                            {"type": "http", "url": "https://example.com/audit"}
+                        ]},
+                        {"matcher": "FixtureBash", "hooks": [
+                            {"type": "llm", "promptTemplate": "Review {{tool_name}}"}
+                        ]},
+                        {"matcher": "FixtureGuard", "hooks": [
+                            {"type": "command", "command": "echo ok"}
+                        ]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut mgr = HookManager::with_paths(user, project);
+        mgr.load()
+            .expect("omitted-command http/llm defs parse since the serde default");
+
+        let activations = mgr.first_activations();
+        assert!(
+            activations
+                .iter()
+                .any(|e| e == "PreToolUse/FixtureWebFetch"),
+            "omitted-command http hook must be audited: {activations:?}"
+        );
+        assert!(
+            activations.iter().any(|e| e == "PreToolUse/FixtureBash"),
+            "omitted-command llm hook must be audited: {activations:?}"
+        );
+        assert!(
+            !activations.iter().any(|e| e == "PreToolUse/FixtureGuard"),
+            "explicit-command hook must not be audited: {activations:?}"
+        );
+        assert!(
+            !mgr.load_failures()
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "audit must not affect load_failures: {:?}",
+            mgr.load_failures()
+        );
+    }
+
+    /// The audit is idempotent per load: each load re-runs it from scratch,
+    /// so a hook mounted across many loads yields exactly one entry per
+    /// load — records never accumulate.
+    #[test]
+    fn first_activations_are_per_load_not_cumulative() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(
+            &project,
+            r#"{"hooks":{"SessionStart":[{"matcher":"FixtureStart","hooks":[
+                {"type":"llm","promptTemplate":"greet"}]}]}}"#,
+        )
+        .unwrap();
+
+        let count_fixture_entries = |mgr: &HookManager| {
+            mgr.first_activations()
+                .iter()
+                .filter(|e| *e == "SessionStart/FixtureStart")
+                .count()
+        };
+
+        let mut mgr = HookManager::with_paths(user, project);
+        mgr.load().unwrap();
+        assert_eq!(count_fixture_entries(&mgr), 1);
+        mgr.load().unwrap();
+        assert_eq!(
+            count_fixture_entries(&mgr),
+            1,
+            "re-load must replace the record, not append to it"
+        );
+    }
+
+    /// An http definition omitting `command` executes the HTTP arm: the
+    /// runner keys on `url` and never reads `command`. `http://127.0.0.1` is
+    /// rejected by the SSRF guard before any I/O — which proves the hook got
+    /// all the way to the http runner's URL validation with an empty command
+    /// (the command arm's "Hook command is empty" guard is NOT hit). No
+    /// network is involved.
+    #[tokio::test]
+    async fn http_hook_without_command_executes_http_arm() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let hooks_path = temp_dir.path().join("hooks.json");
+        std::fs::write(
+            &hooks_path,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [
+                            {"type": "http", "url": "http://127.0.0.1:9/audit", "timeout": 5}
+                        ]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
+        manager.load_from_path(&hooks_path).unwrap();
+
+        let event = HookEvent::PreToolUse {
+            tool_name: "Bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        let err = manager
+            .run_hooks(&event)
+            .await
+            .expect_err("loopback URL must be blocked by the SSRF guard")
+            .to_string();
+        assert!(
+            err.contains("non-public IP"),
+            "hook must reach the http runner's URL validation: {err}"
+        );
+        assert!(
+            !err.contains("command is empty"),
+            "empty command must not trip the shell-command guard: {err}"
+        );
+    }
+
+    /// An llm definition omitting `command` executes with its prompt
+    /// template: without an `LlmClient` it denies by default and labels the
+    /// result with the template. The empty `command` is never consulted —
+    /// it is only the fallback prompt when no template is set.
+    #[tokio::test]
+    async fn llm_hook_without_command_executes_with_prompt_template() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let hooks_path = temp_dir.path().join("hooks.json");
+        std::fs::write(
+            &hooks_path,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [
+                            {"type": "llm", "promptTemplate": "Review {{tool_name}}", "timeout": 5}
+                        ]}
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
+        manager.load_from_path(&hooks_path).unwrap();
+
+        let event = HookEvent::PreToolUse {
+            tool_name: "Bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        let results = manager.run_hooks(&event).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].is_denied(),
+            "no LlmClient configured → deny by default: {:?}",
+            results[0]
+        );
+        assert_eq!(results[0].command, "llm: Review {{tool_name}}");
+        assert!(
+            results[0].stderr.contains("No LLM client"),
+            "denial reason must name the missing client: {:?}",
+            results[0]
+        );
+    }
+
+    /// A command-type definition omitting `command` parses since the serde
+    /// default — but it is NOT first-activation audited (that is http/llm
+    /// only) and still fails at fire time via the empty-command guard. The
+    /// default must not turn a shell hook into a silent no-op.
+    #[tokio::test]
+    async fn command_hook_without_command_parses_but_guarded_at_fire_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(
+            &project,
+            r#"{"hooks":{"PreToolUse":[{"matcher":"FixtureShell","hooks":[
+                {"type":"command"}]}]}}"#,
+        )
+        .unwrap();
+
+        let mut mgr = HookManager::with_paths(user, project);
+        mgr.load()
+            .expect("the serde default makes the definition parse");
+        assert!(
+            !mgr.first_activations()
+                .iter()
+                .any(|e| e.contains("FixtureShell")),
+            "command-type hooks are not first-activation audited: {:?}",
+            mgr.first_activations()
+        );
+
+        let event = HookEvent::PreToolUse {
+            tool_name: "FixtureShell".to_string(),
+            input: serde_json::json!({}),
+        };
+        let err = mgr
+            .run_hooks(&event)
+            .await
+            .expect_err("empty command must fail at fire time")
+            .to_string();
+        assert!(
+            err.contains("Hook command is empty"),
+            "empty-command guard must fire: {err}"
         );
     }
 
