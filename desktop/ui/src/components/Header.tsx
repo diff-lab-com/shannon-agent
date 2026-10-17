@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Menu } from '@base-ui/react/menu';
 import { useIntl, type PrimitiveType } from 'react-intl';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
@@ -20,29 +20,9 @@ import AskUserCard from '@/components/chat/AskUserCard';
 import { ModelPickerRowContent } from '@/components/shared/ModelPickerRow';
 import { modelWhyFor, type ModelWhyContext } from '@/lib/modelWhy';
 import { writeGlobalModelDefault } from '@/lib/modelSwitch';
-
-const TITLE_MAP: [string, string][] = [
-  ['/opc/task', 'header.title.opcTask'],
-  ['/opc', 'header.title.opc'],
-  ['/settings', 'header.title.settings'],
-  ['/tasks', 'header.title.tasks'],
-  ['/extensions', 'header.title.extensions'],
-  ['/memory', 'header.title.memory'],
-  ['/triage', 'header.title.triage'],
-  ['/quickfix', 'header.title.quickfix'],
-  ['/welcome', 'header.title.welcome'],
-  ['/usage', 'header.title.usage'],
-  ['/files', 'header.title.files'],
-  ['/timeline', 'header.title.timeline'],
-  ['/chat', 'header.title.chat'],
-]
-
-function getTitleKey(pathname: string): string {
-  for (const [prefix, key] of TITLE_MAP) {
-    if (pathname.includes(prefix)) return key
-  }
-  return 'header.title.chat'
-}
+// H3 (导航批): the page-title mapping moved to lib/pageTitle so the window
+// document.title (useDocumentTitle) reads the SAME source as this Header.
+import { getTitleKey } from '@/lib/pageTitle';
 
 /**
  * The non-chat header model selector (w4 refactor/header-menus-baseui).
@@ -189,6 +169,32 @@ export function Header() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
+  // H3 (导航批, plan §2.3-2): back-arrow reachability. React Router v7 has
+  // no useNavigate canGoBack, so track an in-app DEPTH counter keyed off
+  // useNavigationType:
+  //   PUSH    → one level deeper (depth + 1)
+  //   REPLACE → the entry was swapped in place (root/legacy redirects, the
+  //             boot-restore navigate) — depth unchanged, and right so: back
+  //             would exit the app, not return in-app.
+  //   POP     → direction unknowable (back? forward?) — depth unchanged.
+  // The approximation's known skew: after POP-back onto the boot entry the
+  // arrow can overstay (depth still > 0); the extra press is a React Router
+  // no-op, which is exactly the plan's「栈不可动 → no-op」contract. The
+  // location dep (not navigationType alone) is load-bearing: consecutive
+  // same-type navigations keep the same navigationType value, so the effect
+  // must re-run on every navigation, not on type transitions.
+  const [depth, setDepth] = useState(0);
+  const navigationType = useNavigationType();
+  // location.key is unique per history entry — the guard makes the counter
+  // idempotent per entry (StrictMode's double-invoked mount effects, or any
+  // future re-render replay, can't double-count).
+  const countedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (countedKeyRef.current === location.key) return
+    countedKeyRef.current = location.key
+    if (navigationType === 'PUSH') setDepth(d => d + 1)
+  }, [location, navigationType]);
+  const canGoBack = depth > 0;
   const { permissionRequest, respondPermission } = useCatalog();
   const { sessions, currentSessionId, windowSessionId } = useSessions();
   const { contextPanelOpen, toggleContextPanel, isQuerying, isCancelInFlight, cancelQuery } = useChat();
@@ -292,6 +298,22 @@ export function Header() {
           </Button>
         )}
         <div className="flex items-center gap-md relative w-full overflow-hidden">
+          {/* H3 (导航批, plan §2.3-2): Claude-style in-header back arrow —
+              only rendered while the depth tracker says an in-app entry
+              exists behind the current one (see canGoBack above); clicking
+              it is navigate(-1), a no-op when the stack cannot move. */}
+          {canGoBack && (
+            <Button
+              variant="ghost"
+              aria-label={t('header.back.aria')}
+              title={t('header.back.aria')}
+              data-testid="header-back"
+              className="p-sm rounded-lg shrink-0 hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors"
+              onClick={() => navigate(-1)}
+            >
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_back</span>
+            </Button>
+          )}
           {/* S6 (parity review 2026-10-15, 页头层级): the top bar carries a
               14px/600 CONTEXT title (session name on /chat, page name
               elsewhere) — the design's topbar title, not a 24px page
