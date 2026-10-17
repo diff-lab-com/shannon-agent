@@ -24,6 +24,12 @@ uuid = { workspace = true }
 base64 = { workspace = true }
 shannon-core = { path = "../shannon-core" }
 shannon-engine = { path = "../shannon-engine" }
+# AI-chat-ux C7: GET /v1/skills lists the same skill roots the desktop does.
+shannon-skills = { path = "../shannon-skills" }
+dirs = "5.0"
+# C7: the skills wire DTOs live in the stable api-protocol contract crate
+# (promoted from dev-dependencies — production routes now reference them).
+shannon-api-protocol = { path = "../shannon-api-protocol" }
 
 [features]
 default = []

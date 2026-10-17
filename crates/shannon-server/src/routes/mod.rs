@@ -642,3 +642,156 @@ mod tests {
         );
     }
 }
+
+
+// ── Skills listing (AI-chat-ux C7, 2026-10) ─────────────────────────────
+
+/// Wire shape of `GET /v1/skills`. The CONTRACT lives in
+/// `shannon-api-protocol::{SkillsResponse, SkillSummary}` (that is what
+/// gen-ts and remote clients build against); these locals exist only
+/// because the openapi macro needs utoipa::ToSchema and api-protocol
+/// deliberately depends on schemars alone. Shape parity is enforced by
+/// `skills_wire_contract_matches_api_protocol` below.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SkillsResponse {
+    pub skills: Vec<SkillSummary>,
+}
+
+/// See [`SkillsResponse`] — local openapi mirror of
+/// `shannon_api_protocol::SkillSummary`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    /// Always carries the leading `/` (REPL convention).
+    pub trigger: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
+/// `GET /v1/skills` — user-invocable skills for remote/multi-client slash
+/// menus. The desktop keeps its in-process Tauri `list_skills` (which also
+/// hot-registers skill chat tools); this REST read only LISTS, so a fresh
+/// registry per request is fine (skill listing is rare, loads are cheap).
+#[utoipa::path(get, path = "/v1/skills", responses((status = 200, body = SkillsResponse)))]
+pub async fn list_skills() -> Json<SkillsResponse> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    Json(SkillsResponse {
+        skills: skills_for_roots(dirs::home_dir(), cwd),
+    })
+}
+
+/// Roots mirror the desktop's `skill_roots` (commands_mcp.rs): the home
+/// `~/.shannon/skills` (where the extensions hub installs) plus the process
+/// cwd's project dirs. Pure over `(home, cwd)` so tests drive it with temp
+/// directories; per-directory load failures are skipped (same degrade
+/// contract as the desktop).
+fn skills_for_roots(home: Option<std::path::PathBuf>, cwd: std::path::PathBuf) -> Vec<SkillSummary> {
+    use shannon_skills::{SkillRegistry, SkillSource};
+    let roots: Vec<(std::path::PathBuf, SkillSource)> = [
+        home.map(|h| (h.join(".shannon").join("skills"), SkillSource::User)),
+        Some((cwd.join(".shannon").join("skills"), SkillSource::Project)),
+        Some((cwd.join(".claude").join("skills"), SkillSource::Project)),
+        Some((
+            cwd.join(".claude").join("commands"),
+            SkillSource::CommandsDeprecated,
+        )),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let registry = SkillRegistry::new();
+    for (dir, source) in &roots {
+        if dir.exists() {
+            let _ = registry.load_from_directory(dir, source);
+        }
+    }
+    registry
+        .list()
+        .into_iter()
+        .filter(|skill| skill.user_invocable && !skill.is_hidden)
+        .map(|skill| {
+            let source_tag = match &skill.source {
+                shannon_skills::SkillSource::Bundled => "bundled",
+                shannon_skills::SkillSource::User => "user",
+                shannon_skills::SkillSource::Project => "project",
+                shannon_skills::SkillSource::Managed => "managed",
+                shannon_skills::SkillSource::Mcp => "mcp",
+                shannon_skills::SkillSource::CommandsDeprecated => "commands_deprecated",
+                shannon_skills::SkillSource::Plugin => "plugin",
+            };
+            SkillSummary {
+                trigger: if skill.aliases.is_empty() {
+                    format!("/{}", skill.name)
+                } else {
+                    format!("/{}", skill.aliases.first().unwrap_or(&skill.name))
+                },
+                name: skill.name,
+                description: skill.description,
+                source: source_tag.to_string(),
+                category: None,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod skills_tests {
+    use super::*;
+
+    #[test]
+    fn skills_wire_contract_matches_api_protocol() {
+        // The route-local SkillsResponse is an openapi-only mirror of the
+        // CONTRACT crate (api-protocol feeds gen-ts/remote clients). This
+        // test fails when the two shapes drift.
+        let local = SkillsResponse {
+            skills: vec![SkillSummary {
+                name: "s".into(),
+                description: "d".into(),
+                trigger: "/s".into(),
+                source: "user".into(),
+                category: None,
+            }],
+        };
+        let contract = shannon_api_protocol::SkillsResponse {
+            skills: vec![shannon_api_protocol::SkillSummary {
+                name: "s".into(),
+                description: "d".into(),
+                trigger: "/s".into(),
+                source: "user".into(),
+                category: None,
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&local).expect("local json"),
+            serde_json::to_value(&contract).expect("contract json"),
+        );
+    }
+
+    #[test]
+    fn empty_roots_yield_no_skills() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(skills_for_roots(Some(tmp.path().to_path_buf()), tmp.path().to_path_buf()).is_empty());
+    }
+
+    #[test]
+    fn home_user_skills_are_listed_with_trigger_and_source() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join(".shannon").join("skills");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        // The loader walks depth ≤ 2 for SKILL.md files (loader.rs).
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: summarize\ndescription: Condense text\n---\nBody",
+        )
+        .expect("write skill");
+        let skills = skills_for_roots(Some(tmp.path().to_path_buf()), tmp.path().join("nonexistent-cwd"));
+        assert_eq!(skills.len(), 1);
+        let s = &skills[0];
+        assert_eq!(s.name, "summarize");
+        assert_eq!(s.trigger, "/summarize");
+        assert_eq!(s.source, "user");
+        assert!(s.description.contains("Condense"));
+    }
+}

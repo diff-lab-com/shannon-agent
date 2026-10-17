@@ -51,6 +51,7 @@ pub struct AppState {
         routes::create_session,
         routes::get_session,
         routes::post_message,
+        routes::list_skills,
         routes::trigger_routine,
         github::github_hook
     ),
@@ -58,6 +59,8 @@ pub struct AppState {
         routes::CreateSessionRequest,
         routes::CreateSessionResponse,
         routes::MessageRequest,
+        routes::SkillsResponse,
+        routes::SkillSummary,
         routes::TriggerRoutineRequest,
         routes::TriggerAccepted,
         routes::TriggerError,
@@ -229,6 +232,7 @@ fn router_full_with_shutdown(
         .route("/v1/sessions", post(routes::create_session))
         .route("/v1/sessions/:id", get(routes::get_session))
         .route("/v1/sessions/:id/messages", post(routes::post_message))
+        .route("/v1/skills", get(routes::list_skills))
         .route("/routines/:id/trigger", post(routes::trigger_routine))
         .route(github::GITHUB_HOOK_PATH, post(github::github_hook))
         .route(
