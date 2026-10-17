@@ -203,7 +203,7 @@ const fn row_for(event: HookEventType) -> HookEventSemantics {
             failure_semantics: "no producer: nothing runs",
             cc_compat: CcCompat::Standard,
             producers: &[],
-            notes: "CC standard event; enumerated but never constructed in-repo",
+            notes: "CC standard event; no production producer (constructed in tests only)",
         },
         HookEventType::UserPromptSubmit => HookEventSemantics {
             event,

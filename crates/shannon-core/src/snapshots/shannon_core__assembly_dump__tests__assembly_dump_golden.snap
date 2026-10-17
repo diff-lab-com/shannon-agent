@@ -1,6 +1,5 @@
 ---
 source: crates/shannon-core/src/assembly_dump.rs
-assertion_line: 1109
 expression: json
 ---
 {
@@ -39,6 +38,7 @@ expression: json
       "PreToolUse",
       "SessionStart"
     ],
+    "load_failures": [],
     "mount_count": 3,
     "mounts": [
       {
