@@ -1,0 +1,15 @@
+# ACP error-path samples — adapter @agentclientprotocol/claude-agent-acp@0.93.0
+# Generated 2026-10-17 by driving the bridge over stdio (newline-delimited JSON-RPC).
+# Reproduce: see spikes/acp-client/README.md; driver pattern identical to src/main.rs.
+# Case A (id=2): session/new with RELATIVE cwd "." -> expect -32602 invalid params.
+# Case B (id=3): session/prompt with placeholder sessionId -> expect -32603 "Session not found".
+--> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}
+<-- {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"_meta":{"claudeCode":{"promptQueueing":true},"authStatus":{}},"promptCapabilities":{"image":true,"embeddedContext":true},"mcpCapabilities":{"http":true,"sse":true},"auth":{"logout":{}},"providers":{},"loadSession":true,"sessionCapabilities":{"additionalDirectories":{},"close":{},"delete":{},"fork":{},"list":{},"resume":{},"systemPrompt":{"mode":{"override":{}}}}},"agentInfo":{"name":"@agentclientprotocol/claude-agent-acp","title":"Claude Agent","version":"0.93.0"},"authMethods":[],"_meta":{"steering":{"supported":true}}}}
+# Case A: relative cwd
+--> {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":".","mcpServers":[]}}
+<-- {"jsonrpc":"2.0","id":2,"error":{"code":-32602,"message":"Invalid params: `cwd` must be an absolute path, but received: .","data":{"cwd":"."}}}
+# Case A response error code=-32602
+# Case B: placeholder sessionId
+--> {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"placeholder-not-a-session","prompt":[{"type":"text","text":"ping"}]}}
+<-- {"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"Internal error","data":{"details":"Session not found"}}}
+# Case B response error code=-32603
