@@ -55,6 +55,16 @@ ignore = [
     "RUSTSEC-2026-0186",
     # RUSTSEC-2026-0002 (lru IterMut) removed 2026-09-16: no longer matches
     # the tree (same cargo-deny 0.20 unused-ignore failure class).
+    # zip 8.6.0 (via calamine 0.36.1 — xlsx/ods reader, desktop +
+    # shannon-tools dev-deps). Three extract-to-disk advisories: 0367
+    # (SUID/SGID bit preservation), 0368 (symlink path escape), 0369
+    # (permissions through symlinks). Not reachable here: calamine only
+    # streams zip::read::ZipArchive reads in memory and never calls
+    # `.extract(`; our first-party zip usage is 9.0.3. Re-evaluate when
+    # calamine ships a zip >=9 build.
+    "RUSTSEC-2026-0367", # zip SUID/SGID preservation on extract — via calamine 0.36.1 read-only ZipArchive path, no extract call
+    "RUSTSEC-2026-0368", # zip symlink escape on extract — same calamine read-only path, no extract call
+    "RUSTSEC-2026-0369", # zip perms-through-symlinks on extract — same calamine read-only path, no extract call
 ]
 
 [licenses]
