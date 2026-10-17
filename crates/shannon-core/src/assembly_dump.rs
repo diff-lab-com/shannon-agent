@@ -288,10 +288,12 @@ fn hook_type_str(t: &HookType) -> &'static str {
 
 /// Payload rendered in a mount row's `command` field: the shell command, or —
 /// for http/llm hooks whose `command` is empty (`HookDef::new_http` /
-/// `HookDef::new_llm` keep the target in `url` / `prompt_template`) — the
-/// URL, then the prompt template. An empty-string URL is not a target and
-/// falls through to the prompt template. Previously non-command mounts
-/// rendered `"command": ""`, hiding what the hook actually targets.
+/// `HookDef::new_llm` keep the target in `url` / `prompt_template`; the same
+/// empty string results from a config omitting the key, which
+/// `HookDef::command` serde-defaults) — the URL, then the prompt template.
+/// An empty-string URL is not a target and falls through to the prompt
+/// template. Previously non-command mounts rendered `"command": ""`,
+/// hiding what the hook actually targets.
 fn hook_mount_command(def: &HookDef) -> String {
     if !def.command.is_empty() {
         return def.command.clone();
@@ -975,11 +977,11 @@ mod tests {
     }
 
     /// HookManager whose project config mounts http/llm hooks with an empty
-    /// `command` — the shape `HookDef::new_http` / `new_llm` produce
-    /// (`command` has no serde default, so JSON configs must write
-    /// `"command": ""` explicitly; a def without the key fails the whole
-    /// file's parse). Their target lives in `url` / `promptTemplate` — the
-    /// exact case that used to render `"command": ""`.
+    /// `command` — the shape `HookDef::new_http` / `new_llm` produce, whether
+    /// the config writes `"command": ""` explicitly or omits the key (serde
+    /// default; before the default an omitted key failed the whole file's
+    /// parse). Their target lives in `url` / `promptTemplate` — the exact
+    /// case that used to render `"command": ""`.
     ///
     /// Hermetic by construction: the path-scoped `load_from_path` merges
     /// only this fixture file — never the running machine's real home-dir
@@ -1047,6 +1049,57 @@ mod tests {
         assert_eq!(empty_url.hook_type, "llm");
 
         // No mount renders an empty payload any more.
+        assert!(section.mounts.iter().all(|m| !m.command.is_empty()));
+    }
+
+    /// Definitions that OMIT the `command` key entirely (the serde default
+    /// shape; they previously failed the whole file's parse) parse and render
+    /// their URL / prompt payload in the dump, same as explicit-`""` defs.
+    /// Hermetic: `load_from_path` merges only this fixture file (this test
+    /// does not exercise `load_failures`).
+    #[test]
+    fn hooks_section_renders_defs_that_omit_command_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(
+            &project,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "WebFetch",
+                            "hooks": [
+                                {"type": "http", "url": "https://example.com/omitted-key"},
+                                {"type": "llm", "promptTemplate": "Omitted-key {{tool_name}} check"}
+                            ]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load_from_path(&project)
+            .expect("defs omitting command parse since the serde default");
+
+        let section = hooks_section(&mgr);
+        assert_eq!(section.mount_count, 2, "both defs parse and mount");
+
+        let http = section
+            .mounts
+            .iter()
+            .find(|m| m.command == "https://example.com/omitted-key")
+            .expect("http mount renders the url payload");
+        assert_eq!(http.hook_type, "http");
+
+        let llm = section
+            .mounts
+            .iter()
+            .find(|m| m.command == "Omitted-key {{tool_name}} check")
+            .expect("llm mount renders the prompt payload");
+        assert_eq!(llm.hook_type, "llm");
+
         assert!(section.mounts.iter().all(|m| !m.command.is_empty()));
     }
 

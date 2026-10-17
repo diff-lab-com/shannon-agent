@@ -133,7 +133,13 @@ impl Default for HookType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookDef {
-    /// Shell command to execute (required for command type)
+    /// Shell command to execute (required for command type). Serde-defaults
+    /// to the empty string, matching [`HookDef::new_http`] /
+    /// [`HookDef::new_llm`], so http/llm definitions may omit the field —
+    /// their target lives in `url` / `prompt_template`. A `command`-type
+    /// definition without a command still parses; it errors when it fires
+    /// (see `HookManager`'s empty-command guard).
+    #[serde(default)]
     pub command: String,
     /// Hook execution type (default: "command")
     #[serde(default)]
@@ -668,6 +674,82 @@ mod tests {
         let json = hf.to_json().unwrap();
         let hf2 = HooksFile::from_json(&json).unwrap();
         assert!(hf2.hooks.contains_key("PostToolUse"));
+    }
+
+    // ── HookDef.command serde default (A-2) ────────────────────────────────
+
+    /// An http definition omitting `command` parses — before the serde
+    /// default this failed the whole file's parse.
+    #[test]
+    fn test_hook_def_http_without_command_key_parses() {
+        let json = r#"{"type":"http","url":"https://example.com/audit"}"#;
+        let def: HookDef = serde_json::from_str(json).unwrap();
+        assert_eq!(def.command, "", "omitted command defaults to empty string");
+        assert_eq!(def.r#type, HookType::Http);
+        assert_eq!(def.url.as_deref(), Some("https://example.com/audit"));
+    }
+
+    /// Same for an llm definition: target lives in `promptTemplate`.
+    #[test]
+    fn test_hook_def_llm_without_command_key_parses() {
+        let json = r#"{"type":"llm","promptTemplate":"Is {{tool_name}} safe?"}"#;
+        let def: HookDef = serde_json::from_str(json).unwrap();
+        assert_eq!(def.command, "");
+        assert_eq!(def.r#type, HookType::Llm);
+        assert_eq!(
+            def.prompt_template.as_deref(),
+            Some("Is {{tool_name}} safe?")
+        );
+    }
+
+    /// The serde default must match the `new_http` / `new_llm` constructors:
+    /// serializing a constructor-built def re-parses to the same value, and
+    /// the JSON it emits omits nothing a defaulted parse would need.
+    #[test]
+    fn test_hook_def_constructor_serde_path_consistency() {
+        for def in [
+            HookDef::new_http("https://example.com/hook"),
+            HookDef::new_llm("Check {{tool_name}}"),
+        ] {
+            let json = serde_json::to_string(&def).unwrap();
+            let reparsed: HookDef = serde_json::from_str(&json).unwrap();
+            assert_eq!(reparsed.command, def.command);
+            assert_eq!(reparsed.r#type, def.r#type);
+            assert_eq!(reparsed.url, def.url);
+            assert_eq!(reparsed.prompt_template, def.prompt_template);
+        }
+    }
+
+    /// Whole-file path (the way configs actually load): an http/llm group
+    /// without any `command` key parses, and explicit commands are untouched.
+    #[test]
+    fn test_hooks_file_mixed_command_presence_parses() {
+        let json = r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "WebFetch",
+                        "hooks": [
+                            {"type": "http", "url": "https://example.com/a"},
+                            {"type": "llm", "promptTemplate": "Review {{tool_name}}"},
+                            {"type": "command", "command": "echo audit"}
+                        ]
+                    }
+                ]
+            }
+        }"#;
+        let hf = HooksFile::from_json(json).unwrap();
+        let defs = &hf.hooks["PreToolUse"][0].hooks;
+        assert_eq!(defs.len(), 3);
+        assert_eq!(
+            defs[0].command, "",
+            "http def without the key defaults empty"
+        );
+        assert_eq!(
+            defs[1].command, "",
+            "llm def without the key defaults empty"
+        );
+        assert_eq!(defs[2].command, "echo audit", "explicit command preserved");
     }
 
     // ── Send + Sync ────────────────────────────────────────────────────────
