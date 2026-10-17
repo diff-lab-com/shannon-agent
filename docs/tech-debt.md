@@ -116,3 +116,25 @@
 **预估成本**:0.5–1d(开发工具链 hook 改造,非 Shannon 代码)。
 
 **Owner**:TBD。**参考**:memory `auto-commit-hook-splits-edits`。
+
+---
+
+## TD-6 · zip 8.6.0 三条 RUSTSEC ignore(calamine 只读路径)
+
+**Status**: ⏸️ **known,按仓库惯例 ignore,升级被上游阻塞**(登记 2026-10-17)
+
+**当前状态**:
+- zip 8.6.0 命中 RUSTSEC-2026-0367/0368/0369(`ZipArchive::extract()` 提权逃逸家族:SUID/SGID 位保留 + 符号链接权限/目标逃逸;修复版 zip ≥9.0.0)。
+- 引入路径**只读**:经 calamine 0.36.1(^8.6)的 xlsx/ods reader——desktop 解析管线常规依赖 + shannon-tools dev-deps;同链还有 rust_xlsxwriter 0.99.x(^8.3)与 utoipa-swagger-ui 10.x(^8.6)。第一方 `extract()` 调用点全部运行在工作区已迁移的 zip 9.0.x 上;8.6.0 消费方从不 `extract()` 攻击者可控档案,逃逸路径不可达。
+- 已按仓库惯例在 `deny.toml` `[advisories] ignore` 落账(`.cargo/audit.toml` 按 one-policy-two-jobs 规则同步)。
+
+**为什么不升级**:升级被上游阻塞——crates.io 2026-10-17 显示 calamine 0.36.1 / rust_xlsxwriter 0.99.1 / utoipa-swagger-ui 10.0.1 均为最新且仍钉 zip ^8.x,无 zip ≥9 兼容版本可选。
+
+**触发条件(任一即应还清)**:
+1. 📦 **任一上游(calamine / rust_xlsxwriter / utoipa-swagger-ui)发布 zip ≥9 兼容版本** — 升级依赖并移除 ignore。
+
+**预估成本**:~0.5d(依赖升级 + `deny.toml`/`audit.toml` ignore 移除 + cargo-deny/cargo-audit 全绿确认)。
+
+**Owner**:TBD(触发时指派)。
+
+**参考**:`deny.toml` `[advisories] ignore` 中 RUSTSEC-2026-0367/0368/0369 注释块(含完整论证);`.cargo/audit.toml` 同名条目。
