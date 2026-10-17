@@ -225,12 +225,21 @@ fn router_full_with_shutdown(
         inbox,
         shutdown,
     };
+    // P0 dump follow-up: `GET /api/assembly` — the assembly dump fronted on
+    // the stack `shannon serve` actually runs (remote/headless
+    // observability). Merged the same way core merges embedder extras: its
+    // own dedicated state, so the bearer + Host-guard layers below apply to
+    // it exactly like every built-in route.
+    let assembly_router = Router::new()
+        .route("/api/assembly", get(assembly_handler))
+        .with_state(serve_assembly_state());
     let mut router = Router::new()
         .route("/v1/sessions", post(routes::create_session))
         .route("/v1/sessions/:id", get(routes::get_session))
         .route("/v1/sessions/:id/messages", post(routes::post_message))
         .route("/routines/:id/trigger", post(routes::trigger_routine))
         .route(github::GITHUB_HOOK_PATH, post(github::github_hook))
+        .merge(assembly_router)
         .route(
             "/openapi.json",
             get(|| async { axum::Json(ApiDoc::openapi()) }),
@@ -259,6 +268,89 @@ fn router_full_with_shutdown(
         ));
     }
     router.with_state(state)
+}
+
+// ── GET /api/assembly (P0 dump follow-up) ──────────────────────────────
+
+/// Dedicated route state for `GET /api/assembly` on the serve stack — the
+/// same pattern as `shannon_core::api_server::AssemblyRouteState` (kept
+/// separate from [`AppState`] so the endpoint adds nothing to the existing
+/// state construction). The dump itself is core's
+/// `shannon_core::assembly_dump::build_assembly_dump` — no dump logic lives
+/// here.
+#[derive(Clone)]
+struct AssemblyRouteState {
+    /// What served sessions genuinely mount: [`crate::routes::
+    /// build_engine`] (and the GitHub routine fallback) construct every
+    /// served engine with a bare registry, so this is deliberately an EMPTY
+    /// [`shannon_core::tools::ToolRegistry`] — the dump must describe the
+    /// serve runtime, not the CLI's session-unwired registry.
+    tools: std::sync::Arc<shannon_core::tools::ToolRegistry>,
+    /// Serve-time sources — see [`serve_assembly_state`] for what is wired
+    /// and what degrades.
+    sources: std::sync::Arc<shannon_core::assembly_dump::AssemblySources>,
+}
+
+/// The serve stack's assembly sources, resolved once at router construction:
+///
+/// - **hooks** — `HookManager::new()` + `load()`, the same construction
+///   every served engine performs per session (`QueryEngine`'s internal
+///   `hook_mgr()`); a load error degrades the section (the same
+///   loud-degrade contract the CLI dump follows).
+/// - **compaction** — `QueryEngineConfig::default()`: served engines are
+///   built via `QueryEngine::with_defaults` (defaults + env overrides), and
+///   the env overrides touch no compaction field, so the default config IS
+///   the effective projection source.
+/// - **skills / sandbox** — `None` on purpose: the serve stack builds no
+///   skill registry and holds no sandbox world (sessions mount no tools),
+///   so both degrade to `"unavailable"` per the P0-3 contract instead of
+///   being fabricated here (the construction surface must not grow just
+///   for the dump).
+fn serve_assembly_state() -> AssemblyRouteState {
+    let mut hooks = shannon_engine::hooks::HookManager::new();
+    let hooks = match hooks.load() {
+        Ok(()) => Some(std::sync::Arc::new(hooks)),
+        Err(e) => {
+            tracing::warn!("assembly dump: hooks config failed to load; section degrades: {e}");
+            None
+        }
+    };
+    AssemblyRouteState {
+        tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+        sources: std::sync::Arc::new(shannon_core::assembly_dump::AssemblySources {
+            hooks,
+            skills: None,
+            config: Some(shannon_core::query_engine::QueryEngineConfig::default()),
+            sandbox: None,
+            known_plugins: Vec::new(),
+        }),
+    }
+}
+
+/// `GET /api/assembly` — the effective-assembly dump of the serve stack,
+/// the same JSON shape core's embedder endpoint and `--dump-assembly`
+/// print. Sources the serve stack never builds render `"unavailable"`
+/// (`partial: true`); this handler never errors.
+async fn assembly_handler(
+    axum::extract::State(state): axum::extract::State<AssemblyRouteState>,
+) -> axum::Json<shannon_core::assembly_dump::AssemblyDump> {
+    let sources = &state.sources;
+    let known_plugins: Vec<&str> = sources.known_plugins.iter().map(String::as_str).collect();
+    let mut dump = shannon_core::assembly_dump::build_assembly_dump(
+        Some(&state.tools),
+        sources.hooks.as_deref(),
+        sources.skills.as_deref(),
+        sources.config.as_ref(),
+        sources.sandbox.as_ref(),
+        &known_plugins,
+    );
+    dump.notes.push(
+        "serve: sessions mount a bare ToolRegistry (the serve stack \
+         registers no tools); skills/sandbox are host constructs and \
+         degrade here"
+            .to_string(),
+    );
+    axum::Json(dump)
 }
 
 /// [`router`] with only the legacy trigger-endpoint secret injected — the
@@ -905,6 +997,175 @@ mod tests {
             StatusCode::NOT_IMPLEMENTED,
             "valid bearer replaces HMAC at the trigger endpoint"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // P0 dump follow-up: GET /api/assembly on the serve stack
+    // -------------------------------------------------------------------
+
+    /// Router-level smoke: the route answers with the serve-time sources
+    /// populated (bare tool registry, engine-default compaction, best-effort
+    /// hooks) and everything the serve stack never builds degraded per the
+    /// P0-3 contract (`"unavailable"` + `partial: true`).
+    #[tokio::test]
+    async fn assembly_route_serves_the_serve_time_dump() {
+        let app = router_with_secret(test_config(), None, None);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assembly")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(res.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        // Tools: what served sessions genuinely mount — a bare registry.
+        assert_eq!(json["tools"]["count"], 0);
+        assert_eq!(json["tools"]["tools"].as_array().map(Vec::len), Some(0));
+        // Compaction: engine defaults are the effective serve-time config.
+        let names: Vec<&str> = json["compaction"]["thresholds"]
+            .as_array()
+            .expect("compaction section renders")
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "agent_loop_warning_floor",
+                "agent_loop_imminent_warning",
+                "effective_compression_threshold",
+                "compact_engine_trigger_threshold",
+            ]
+        );
+        // Skills/sandbox are host constructs the serve stack never builds.
+        assert_eq!(json["skills"], "unavailable");
+        assert_eq!(json["sandbox"], "unavailable");
+        assert_eq!(json["partial"], true);
+        // The serve-context disclosure note is present.
+        let notes = json["notes"].as_array().expect("notes render");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.as_str().unwrap_or_default().contains("serve:")),
+            "serve disclosure note missing: {notes:?}"
+        );
+        // Hooks load best-effort from the machine's config paths (the same
+        // load every served engine does): either a rendered mount table or
+        // the honest degrade — never an error.
+        assert!(
+            json["hooks"].is_object() || json["hooks"] == "unavailable",
+            "hooks must be an object or 'unavailable', got: {}",
+            json["hooks"]
+        );
+    }
+
+    /// Handler-level fidelity: with an injected temp-path HookManager the
+    /// hooks section renders the loaded mount table while the unwired
+    /// sources stay degraded.
+    #[tokio::test]
+    async fn assembly_handler_renders_loaded_hooks_and_degrades_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("hooks.json");
+        std::fs::write(
+            &project,
+            r#"{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo audit", "timeout": 15}]}]}}"#,
+        )
+        .unwrap();
+        let mut mgr = shannon_engine::hooks::HookManager::with_paths(
+            tmp.path().join("missing-user.json"),
+            project,
+        );
+        mgr.load().expect("hooks config loads");
+        let state = AssemblyRouteState {
+            tools: std::sync::Arc::new(shannon_core::tools::ToolRegistry::new()),
+            sources: std::sync::Arc::new(shannon_core::assembly_dump::AssemblySources {
+                hooks: Some(std::sync::Arc::new(mgr)),
+                skills: None,
+                config: Some(shannon_core::query_engine::QueryEngineConfig::default()),
+                sandbox: None,
+                known_plugins: Vec::new(),
+            }),
+        };
+        let dump = assembly_handler(axum::extract::State(state)).await.0;
+        let hooks = match &dump.hooks {
+            shannon_core::assembly_dump::Section::Available(h) => h,
+            other => panic!("hooks must render, got {other:?}"),
+        };
+        assert_eq!(hooks.mount_count, 1);
+        assert_eq!(hooks.mounts[0].command, "echo audit");
+        assert_eq!(hooks.mounts[0].event, "PreToolUse");
+        let tools = match &dump.tools {
+            shannon_core::assembly_dump::Section::Available(t) => t,
+            other => panic!("tools must render, got {other:?}"),
+        };
+        assert_eq!(tools.count, 0, "serve sessions mount a bare registry");
+        assert!(!dump.compaction.is_unavailable());
+        assert!(dump.skills.is_unavailable());
+        assert!(dump.sandbox.is_unavailable());
+        assert!(dump.partial, "unwired sources force partial");
+        assert!(
+            dump.notes
+                .iter()
+                .any(|n| n.contains("skills: SkillRegistry not supplied"))
+        );
+        assert!(
+            dump.notes
+                .iter()
+                .any(|n| n.contains("sandbox: settings not supplied"))
+        );
+    }
+
+    /// Middleware parity: the new route sits behind the same bearer
+    /// middleware as every built-in route.
+    #[tokio::test]
+    async fn assembly_route_requires_bearer_when_token_set() {
+        let app = router_with_secret(test_config(), Some("tok".into()), None);
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assembly")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assembly")
+                    .header("authorization", "Bearer tok")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// Middleware parity: the F15 Host guard (outermost layer) covers the
+    /// new route too — a rebound Host is rejected before the handler runs.
+    #[tokio::test]
+    async fn assembly_route_sits_behind_the_host_guard() {
+        let app = router_with_secret(test_config(), None, None);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/assembly")
+                    .header("host", "evil.com")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
     // -------------------------------------------------------------------

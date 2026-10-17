@@ -28,8 +28,10 @@
 //!
 //! Exposure note: the HTTP face is `GET /api/assembly` on
 //! [`crate::api_server::ShannonApiServer`] (embedder-supplied sources via
-//! `ShannonApiServer::with_assembly_sources`) — the `shannon-server` axum
-//! stack behind `shannon serve` does NOT front this route. Sources a host
+//! `ShannonApiServer::with_assembly_sources`) and on the `shannon-server`
+//! axum stack behind `shannon serve` (serve-time sources only: a bare tool
+//! registry — served sessions register no tools — best-effort hooks and
+//! engine-default compaction; skills/sandbox degrade). Sources a host
 //! never wired degrade to `"unavailable"`/`partial` rather than erroring.
 //!
 //! World-kind note: the sandbox world handles built by the §4.12 assemblies
