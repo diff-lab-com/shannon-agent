@@ -1,30 +1,23 @@
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 
-// U9: theme switching is registry-driven. Every selectable theme must land
-// its data-theme AND its scheme on <html data-theme-mode>; the light/dark
-// pair must observably change a token-derived background.
+// U9 → H1: theme switching is registry-driven, and since the H1 convergence
+// (2026-10-17 ruling) Aurora Ink is the ONLY user-visible theme. The spec
+// keeps its original shape narrowed to that single entry: the theme must
+// land its data-theme AND its registered scheme on <html data-theme-mode>;
+// the token-derived surface must observably match the registry.
+//
+// The 12 sibling themes remain in theme-source.json / the generated registry
+// as DORMANT INFRASTRUCTURE (UI-unreachable) — they are deliberately NOT
+// swept here anymore; re-importing one means re-adding its case.
 const THEME_CASES: { id: string; mode: 'light' | 'dark' }[] = [
-  { id: 'material', mode: 'light' },
   { id: 'aurora-ink', mode: 'dark' },
-  { id: 'tokyo-night', mode: 'dark' },
-  { id: 'tokyo-night-light', mode: 'light' },
-  { id: 'catppuccin', mode: 'dark' },
-  { id: 'nord', mode: 'dark' },
-  { id: 'ember', mode: 'light' },
-  { id: 'slate', mode: 'light' },
-  { id: 'solarized', mode: 'dark' },
-  { id: 'solarized-light', mode: 'light' },
-  { id: 'dracula', mode: 'dark' },
-  { id: 'gruvbox', mode: 'dark' },
-  { id: 'gruvbox-light', mode: 'light' },
 ]
 
 test('every theme sets data-theme and the registered scheme on <html>', async ({ page }) => {
   for (const { id, mode } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
-      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
@@ -33,21 +26,22 @@ test('every theme sets data-theme and the registered scheme on <html>', async ({
   }
 })
 
-test('light and dark themes observably change the surface color', async ({ page }) => {
-  const bgFor = async (theme: string) => {
+// H1 migration: any non-aurora-ink stored value — dormant theme picks and
+// the retired 'system' mode alike — normalizes to aurora-ink on boot and is
+// written back, so the pre-H1 localStorage values can never surface a
+// different look.
+test('stored pre-H1 theme values (tokyo-night, material, system) migrate to aurora-ink', async ({ page }) => {
+  for (const stored of ['tokyo-night', 'material', 'system']) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
-      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
-    }, theme)
+    }, stored)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
-    return page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+    expect(await page.getAttribute('html', 'data-theme'), stored).toBe('aurora-ink')
+    expect(await page.getAttribute('html', 'data-theme-mode'), stored).toBe('dark')
+    // The migration commits: the storage key now carries aurora-ink.
+    expect(await page.evaluate(() => window.localStorage.getItem('shannon-theme'))).toBe('aurora-ink')
   }
-  const light = await bgFor('material')
-  const dark = await bgFor('tokyo-night')
-  expect(light).toBeTruthy()
-  expect(dark).toBeTruthy()
-  expect(dark, 'dark surface must differ from light').not.toBe(light)
 })
 
 // Average sRGB channel of an "rgb(r, g, b)" string, normalized to 0..1.
@@ -61,12 +55,13 @@ function surfaceLuminance(rgb: string): number {
 
 // The registry (ThemeContext THEME_SCHEMES) must describe the theme's actual
 // token block, or the `dark:` variants fire on light surfaces (this caught
-// ember/slate being registered 'dark' over light token blocks).
+// ember/slate being registered 'dark' over light token blocks). H1: the
+// single shipped theme must render its registered dark surface — the old
+// light↔dark pair assertion lost its light leg with the retired themes.
 test('every theme’s registered scheme matches its actual surface luminance', async ({ page }) => {
   for (const { id, mode } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
-      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })
@@ -89,7 +84,6 @@ test('every theme passes axe color-contrast on the chat page', async ({ page }) 
   for (const { id } of THEME_CASES) {
     await page.addInitScript(t => {
       window.localStorage.setItem('shannon-theme', t as string)
-      window.localStorage.setItem('shannon.theme.darkDefaultMigrated', '1')
     }, id)
     await page.goto('/')
     await page.getByRole('listitem').first().waitFor({ state: 'visible' })

@@ -396,6 +396,33 @@ describe('Header component', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }))
     expect(screen.getByTestId('header-location')).toHaveTextContent('/settings')
   })
+
+  // ── H3 (导航批, plan §2.3-2): header back arrow ──────────────────────
+  // Depth approximation: hidden at boot (no in-app entry behind), shown
+  // after the first PUSH, click = navigate(-1).
+  it('hides the back arrow on a fresh boot (no in-app history behind)', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.queryByTestId('header-back')).not.toBeInTheDocument()
+  })
+
+  it('shows the back arrow after an in-app PUSH and navigates back on click', () => {
+    render(
+      wrap(
+        <>
+          <Header />
+          <LocationProbe />
+        </>,
+        { route: '/chat' }
+      )
+    )
+    // PUSH: the avatar's navigate('/settings') deepens the in-app stack.
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }))
+    expect(screen.getByTestId('header-location')).toHaveTextContent('/settings')
+    const back = screen.getByTestId('header-back')
+    expect(back).toHaveAttribute('aria-label', 'Go back')
+    fireEvent.click(back)
+    expect(screen.getByTestId('header-location')).toHaveTextContent('/chat')
+  })
 })
 
 describe('Header — skill candidate badge', () => {

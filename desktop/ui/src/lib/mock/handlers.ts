@@ -1863,6 +1863,13 @@ export const handlers: Record<string, MockHandler> = {
     await delay(10)
     return `/Users/demo/.shannon/cache/pasted/${Date.now()}-demo.${args.ext || 'png'}`
   },
+  // H2 P1-4 long-text paste — demo mode persists nothing; like the image
+  // handler above, return a plausible absolute path so the converted paste
+  // enters the demo attachment list.
+  async save_pasted_text(_args: { content: string }) {
+    await delay(10)
+    return `/Users/demo/.shannon/cache/pasted/${Date.now()}-demo.txt`
+  },
   // office Wave 2: the Files page's missing-detection probe (and FileRefChip's
   // anti-hallucination backstop) — in demo mode only indexed demo paths exist.
   async path_exists(args: { path: string }) {

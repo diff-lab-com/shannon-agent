@@ -54,6 +54,12 @@ describe('KeyboardShortcutsHelp', () => {
     expect(screen.getByText('Toggle the terminal panel')).toBeInTheDocument()
   })
 
+  it('includes history back/forward under Navigation section (H3 导航批)', () => {
+    renderHelp()
+    expect(screen.getByText('Go back')).toBeInTheDocument()
+    expect(screen.getByText('Go forward')).toBeInTheDocument()
+  })
+
   it('includes diff-review shortcuts', () => {
     renderHelp()
     expect(screen.getAllByText('Next diff hunk').length).toBeGreaterThan(0)

@@ -540,6 +540,43 @@ pub async fn save_pasted_image(data_base64: String, ext: String) -> Result<Strin
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Core of [`save_pasted_text`] — pure over `(base_dir, content)` so tests
+/// drive it without app state.
+fn save_pasted_text_inner(base_dir: &Path, content: &str) -> Result<PathBuf, String> {
+    if content.is_empty() {
+        return Err("pasted text is empty".into());
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let rand8 = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+    // Same `<millis>-<rand8>.<ext>` shape as save_pasted_image — one naming
+    // convention for everything in the pasted cache.
+    let target = base_dir.join(format!("{millis}-{rand8}.txt"));
+    std::fs::create_dir_all(base_dir)
+        .map_err(|e| format!("failed to create pasted cache dir: {e}"))?;
+    std::fs::write(&target, content).map_err(|e| format!("failed to write pasted text: {e}"))?;
+    Ok(target)
+}
+
+/// H2 P1-4 (composer plan 2026-10-17 §1.3) — persist a long-text paste the
+/// composer intercepted, as a UTF-8 `.txt` in the same pasted cache as
+/// [`save_pasted_image`], so it rides the regular attachment pipeline
+/// (absolute path → preflight → read at send) instead of being dropped into
+/// the composer verbatim. Content is written verbatim: no base64, no
+/// magic-byte check, no image cap — the attachment size gate on the send
+/// path stays the single size authority for text files.
+#[tauri::command]
+pub async fn save_pasted_text(content: String) -> Result<String, String> {
+    let dir = crate::pasted_image_cache_dir()
+        .ok_or_else(|| "cannot resolve a home directory for the pasted cache".to_string())?;
+    let path = tokio::task::spawn_blocking(move || save_pasted_text_inner(&dir, &content))
+        .await
+        .map_err(|e| format!("pasted text task failed: {e}"))??;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Internal helper for [`check_attachment_paths`] — pure over
 /// (configured working dir, paths) so tests drive it without app state.
 pub(crate) fn check_attachment_paths_inner(
@@ -2169,6 +2206,36 @@ mod tests {
         let err =
             save_pasted_image_inner(dir.path(), "!!!not base64!!!", "png").expect_err("bad base64");
         assert!(err.contains("base64"), "{err}");
+    }
+
+    // ── H2 P1-4: save_pasted_text ───────────────────────────────────────
+
+    #[test]
+    fn save_pasted_text_writes_verbatim_utf8_to_timestamped_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let content = "中文 + emoji \u{1f600} + ascii — written verbatim";
+        let path = save_pasted_text_inner(dir.path(), content).expect("text saves");
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("txt"));
+        let name = path.file_name().and_then(|n| n.to_str()).expect("name");
+        let stem = name.trim_end_matches(".txt");
+        let (millis, rand) = stem.split_once('-').expect("timestamp-rand shape");
+        assert!(millis.bytes().all(|b| b.is_ascii_digit()), "{name}");
+        assert_eq!(rand.len(), 8);
+        assert!(rand.bytes().all(|b| b.is_ascii_hexdigit()), "{name}");
+        // Byte-exact round trip — no encoding transformation.
+        assert_eq!(std::fs::read(&path).expect("read back"), content.as_bytes());
+    }
+
+    #[test]
+    fn save_pasted_text_rejects_empty_content_without_writing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = save_pasted_text_inner(dir.path(), "").expect_err("empty refused");
+        assert!(err.contains("empty"), "{err}");
+        assert_eq!(
+            std::fs::read_dir(dir.path()).expect("read dir").count(),
+            0,
+            "nothing may be written for an empty payload"
+        );
     }
 
     #[test]

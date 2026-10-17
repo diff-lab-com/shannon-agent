@@ -2441,6 +2441,15 @@
       }
     },
     {
+      "identifier": "allow-save-pasted-text",
+      "description": "Enables the save_pasted_text command without any pre-configured scope.",
+      "commands": {
+        "allow": [
+          "save_pasted_text"
+        ]
+      }
+    },
+    {
       "identifier": "allow-save-provider",
       "description": "Enables the save_provider command without any pre-configured scope.",
       "commands": {
@@ -3306,6 +3315,7 @@
         "allow-register-file-index-entry",
         "allow-run-file-diagnostics",
         "allow-save-pasted-image",
+        "allow-save-pasted-text",
         "allow-save-text-file",
         "allow-save-text-file-via-dialog",
         "allow-set-file-index-favorite"

@@ -10,15 +10,13 @@
 //      setLocale entry point): /chat → Settings → 简体中文 → back — the
 //      stream keeps accumulating across the unmount/remount and the final
 //      bubble is the exact chunk sum (流式中切语言不丢流).
-//   3. LIVE theme switch mid-stream through the REAL settings UI (the only
-//      setTheme entry point): /chat → Settings → Material — the stream keeps
-//      accumulating and the final bubble is the exact chunk sum.
-//   4. LIVE OS scheme flip with theme='system' via colorScheme emulation
-//      (ThemeContext's media-query listener is a real user path, no reload):
-//      F-theme-system — data-theme/data-theme-mode recompute instantly both
-//      directions, the app-level Toaster follows the RESOLVED theme
-//      (App.tsx ThemedToaster → sonner's data-sonner-theme), and the
-//      parked stream survives the flips (流式中切主题不丢流).
+//   3. The H1 single-theme appearance page visited mid-stream through the
+//      REAL settings UI: exactly one theme card (Aurora Ink), the click is a
+//      no-op — <html> never flips, the Toaster keeps following the app theme
+//      and the parked stream survives the round trip (流式中逛外观不丢流).
+//   4. H1 migration at boot: a stored pre-H1 value ('system' or a dormant
+//      theme pick) normalizes to aurora-ink, a live OS scheme flip cannot
+//      move it, and the parked stream survives the boot (迁移后流式不丢).
 //   5. G14: the sidebar sessions skeleton in the boot's catalogLoading
 //      window (seeded empty roster), handing over to the empty-state card.
 // session-switch-overlay is NOT repeated here — chat-script.session-switch
@@ -100,14 +98,14 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     await expectNoConsoleErrors(page)
   })
 
-  test('live theme switch mid-stream: <html> flips, the Toaster follows the resolved theme, the stream survives', async ({ page }) => {
+  test('the single-theme appearance page is inert mid-stream: card click is a no-op, the Toaster follows the app theme, the stream survives', async ({ page }) => {
     await loadChatScriptObject(page, {
       name: 'theme-stream-hold',
-      description: 'parked stream so the theme flip happens mid-stream',
+      description: 'parked stream so the appearance-page visit happens mid-stream',
       seed: { config: { hasKey: true }, sessions: [{ id: 'theme-hold-sess', title: 'Theme hold', messages: [] }] },
       turns: [
         {
-          user: '边流式边切主题',
+          user: '边流式边逛外观设置',
           script: [
             { event: 'query:text', chunks: ['主题流一 ', '主题流二 '], chunkDelayMs: 50 },
             { waitFor: 'ui' },
@@ -139,27 +137,27 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     await summonToast()
     await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'dark')
 
-    await chat.send('边流式边切主题')
+    await chat.send('边流式边逛外观设置')
     await chat.expectStreamingCursor()
 
-    // The REAL switch path (ThemeSettings is the only setTheme caller):
-    // in-app navigation → click the theme card → <html> flips instantly,
-    // and the Toaster follows the RESOLVED theme (G4), not a fixed value.
+    // H1 theme convergence: the appearance page carries exactly ONE theme
+    // card (Aurora Ink) and it is not a picker — clicking it is a no-op,
+    // <html> never flips, and the Toaster keeps following the app theme.
     await page.getByRole('link', { name: 'Settings' }).click()
     // The settings nav link was renamed 'Appearance' (nav.theme, G1 parity
     // batch) — the old 'Theme' locator never matched and the spec timed out
     // here before reaching the assertions below.
     await page.getByRole('link', { name: 'Appearance' }).click()
-    // exact: 'Tokyo Night' must not substring-match "Tokyo Night Light".
-    await page.getByRole('button', { name: 'Tokyo Night', exact: true }).waitFor({ timeout: 10_000 })
-    await page.getByRole('button', { name: 'Material', exact: true }).click()
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'material')
-    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light')
+    await expect(page.getByText('Aurora Ink', { exact: true })).toBeVisible()
+    await expect(page.getByText('The theme is defined centrally by the app.')).toBeVisible()
+    await page.getByText('Aurora Ink', { exact: true }).click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'aurora-ink')
+    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
     await summonToast()
-    await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'light')
+    await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'dark')
 
-    // Mid-stream continuity across the theme swap: come back to a still
-    // parked stream, the already-streamed text untouched.
+    // Mid-stream continuity across the appearance visit: come back to a
+    // still parked stream, the already-streamed text untouched.
     await page.getByRole('link', { name: 'Chat' }).click()
     await expect(chat.composer()).toBeVisible({ timeout: 15_000 })
     await expect(page.getByText('主题流一 主题流二', { exact: false })).toBeVisible()
@@ -169,24 +167,21 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     await expectNoConsoleErrors(page)
   })
 
-  test('live OS scheme flip with theme=system: <html> recomputes, the Toaster follows, the stream survives', async ({ page }) => {
-    // F-theme-system, flipped from the pinned FINDING: ThemeContext's
-    // prefers-color-scheme listener used to "refresh" via
-    // setThemeState('system') — the SAME value — so React bailed out and a
-    // system-theme user's live OS switch (light↔dark) left data-theme
-    // stale. The listener now writes the real new scheme into state, so
-    // resolvedTheme, <html data-theme(-mode)> and the resolved-theme
-    // Toaster recompute instantly — mid-stream too.
+  test('a stored pre-H1 theme value (system / tokyo-night) migrates to aurora-ink at boot', async ({ page }) => {
+    // H1 theme convergence: the retired 'system' mode and every dormant
+    // theme pick normalize to aurora-ink on boot — the OS scheme (Playwright
+    // defaults to light) must NOT leak through a stale 'system' value, and
+    // <html> must land dark both ways.
     await page.addInitScript(() => {
       window.localStorage.setItem('shannon-theme', 'system')
     })
     await loadChatScriptObject(page, {
       name: 'theme-system-stream-hold',
-      description: 'parked stream so the OS scheme flip happens mid-stream',
+      description: 'parked stream to pin the migrated boot stays stable mid-flight',
       seed: { config: { hasKey: true }, sessions: [{ id: 'theme-system-hold-sess', title: 'System hold', messages: [] }] },
       turns: [
         {
-          user: '边流式边切系统主题',
+          user: '边流式边验证迁移',
           script: [
             { event: 'query:text', chunks: ['系统流一 ', '系统流二 '], chunkDelayMs: 50 },
             { waitFor: 'ui' },
@@ -197,47 +192,35 @@ test.describe('i18n / theme (G15, nightly-only)', () => {
     const chat = new ChatPage(page)
     await expect(chat.composer()).toBeVisible({ timeout: 15_000 })
 
-    // sonner mounts the [data-sonner-toaster] ol only while a toast lives;
-    // summon one through the app's own watchdog-clean path. Toasts stack,
-    // so visibility anchors on the FRONT toast only.
-    const frontToast = page.locator('[data-sonner-toast][data-front="true"]')
-    async function summonToast(): Promise<void> {
-      await page.evaluate(() => {
-        (window as unknown as {
-          __shannonMock: { control: { emitNow(name: string, payload?: Record<string, unknown>): void } }
-        }).__shannonMock.control.emitNow('session-auto-unarchived', { session_id: 'theme-system-hold-sess', title: 'System hold' })
-      })
-      await expect(frontToast).toBeVisible({ timeout: 10_000 })
-    }
-
-    // Playwright's default colorScheme is light → 'system' resolves to the
-    // light material scheme.
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'material')
-    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light')
-
-    // Park a stream mid-flight, then flip the OS scheme under it.
-    await chat.send('边流式边切系统主题')
-    await chat.expectStreamingCursor()
-
-    // OS flips to dark: the resolved theme recomputes LIVE, and the Toaster
-    // follows the RESOLVED theme (G4), not a fixed value.
-    await page.emulateMedia({ colorScheme: 'dark' })
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'tokyo-night')
+    // Stored 'system' + a light OS scheme: aurora-ink anyway (no OS-follow).
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'aurora-ink')
     await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
-    await summonToast()
-    await expect(page.locator('[data-sonner-toaster]')).toHaveAttribute('data-sonner-theme', 'dark')
+    // The migration commits to storage.
+    await expect(page.evaluate(() => window.localStorage.getItem('shannon-theme'))).resolves.toBe('aurora-ink')
 
-    // And back to light — both directions, still mid-stream.
-    await page.emulateMedia({ colorScheme: 'light' })
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'material')
-    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light')
+    // A live OS flip is a no-op now — nothing observes prefers-color-scheme.
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'aurora-ink')
+    await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
 
-    // Mid-stream continuity across the scheme flips: the parked stream is
-    // intact and settles into the EXACT chunk sum — nothing lost.
+    // The parked stream survives the boot/migration and settles into the
+    // EXACT chunk sum — nothing lost.
+    await chat.send('边流式边验证迁移')
+    await chat.expectStreamingCursor()
     await page.evaluate(() => (window as unknown as { __shannonMock: { control: { resume(): void } } }).__shannonMock.control.resume())
     await expect(page.getByText('系统流一 系统流二', { exact: false })).toBeVisible()
     await chat.expectBubbleText(1, '系统流一 系统流二')
     await expect(page.getByRole('button', { name: 'Stop generation' })).toHaveCount(0)
+
+    // And the dormant tokyo-night pick migrates identically.
+    const page2 = await page.context().newPage()
+    await page2.addInitScript(() => {
+      window.localStorage.setItem('shannon-theme', 'tokyo-night')
+    })
+    await page2.goto('/')
+    await expect(page2.locator('html')).toHaveAttribute('data-theme', 'aurora-ink')
+    await expect(page2.locator('html')).toHaveAttribute('data-theme-mode', 'dark')
+    await page2.close()
 
     await expectNoConsoleErrors(page)
   })

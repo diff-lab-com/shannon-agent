@@ -55,16 +55,22 @@ ignore = [
     "RUSTSEC-2026-0186",
     # RUSTSEC-2026-0002 (lru IterMut) removed 2026-09-16: no longer matches
     # the tree (same cargo-deny 0.20 unused-ignore failure class).
-    # zip 8.6.0 (via calamine 0.36.1 — xlsx/ods reader, desktop +
-    # shannon-tools dev-deps). Three extract-to-disk advisories: 0367
-    # (SUID/SGID bit preservation), 0368 (symlink path escape), 0369
-    # (permissions through symlinks). Not reachable here: calamine only
-    # streams zip::read::ZipArchive reads in memory and never calls
-    # `.extract(`; our first-party zip usage is 9.0.3. Re-evaluate when
-    # calamine ships a zip >=9 build.
-    "RUSTSEC-2026-0367", # zip SUID/SGID preservation on extract — via calamine 0.36.1 read-only ZipArchive path, no extract call
-    "RUSTSEC-2026-0368", # zip symlink escape on extract — same calamine read-only path, no extract call
-    "RUSTSEC-2026-0369", # zip perms-through-symlinks on extract — same calamine read-only path, no extract call
+    # zip 8.6.0 (transitive ONLY: calamine 0.36.1 ^8.6 / rust_xlsxwriter 0.99.x
+    # ^8.3 / utoipa-swagger-ui 10.x ^8.6). RUSTSEC-2026-0367/0368/0369 = a
+    # ZipArchive::extract() privilege-escape family (SUID/SGID bit preservation
+    # + symlink permission/target escapes); fixed in zip >=9.0.0. Our
+    # first-party extract() call sites (plugin installer / mcpb / document
+    # parse / materialize) run on the workspace's patched zip 9.0.x; the
+    # 8.6.0 consumers (calamine reader / xlsxwriter writer / swagger-ui
+    # embed) never call extract() on attacker-controlled archives, so the
+    # escape path is unreachable here. Upgrade is blocked upstream: crates.io
+    # 2026-10-17 shows calamine 0.36.1 / rust_xlsxwriter 0.99.1 /
+    # utoipa-swagger-ui 10.0.1 as latest and all still pin zip ^8.x — same
+    # trigger as the Semver/audit advisory gates (see .cargo/audit.toml).
+    # Re-enable when any upstream ships a zip-9-compatible release.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
 
 [licenses]

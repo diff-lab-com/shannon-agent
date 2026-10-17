@@ -17,6 +17,7 @@
 import * as api from '@/lib/tauri-api'
 import { toast } from 'sonner'
 import { exportSessionAsMarkdown } from '@/lib/sessionActions'
+import { subsequenceStart } from '@/lib/fileMention'
 
 export type {
   SessionContextStats,
@@ -32,6 +33,10 @@ export type SlashResult =
   | { kind: 'diff'; diff: api.GitDiffSummary; workingDir: string }
   | { kind: 'compact'; summary: api.CompactSessionSummary }
   | { kind: 'goalForm'; sessionId: string | null }
+  // H2 P1-3 — /help. No payload: the card assembles its roster live from
+  // SLASH_COMMANDS + fetchSlashSkills so it can never drift from the real
+  // registry (and a failed skill fetch degrades to commands only).
+  | { kind: 'help' }
   | { kind: 'error'; messageKey: string; values?: Record<string, string | number> }
 
 export interface SlashCommandContext {
@@ -230,6 +235,18 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'extensions', aliases: ['agents'], icon: 'grid_view', labelKey: 'nav.extensions', descriptionKey: 'slash.command.extensions.description', run: (ctx) => ctx.navigate('/extensions') },
   { name: 'editor', icon: 'code', labelKey: 'nav.editor', descriptionKey: 'slash.command.editor.description', run: (ctx) => { ctx.navigate('/chat'); window.dispatchEvent(new Event('shannon:open-editor')) } },
   { name: 'settings', icon: 'settings', labelKey: 'nav.settings', descriptionKey: 'slash.command.settings.description', run: (ctx) => ctx.navigate('/settings') },
+  // H2 P1-3 — appended LAST so the menu's index order (and the ArrowDown
+  // muscle memory trained on it) is untouched. Local-only: it renders the
+  // read-only roster card, never reaches the model.
+  {
+    name: 'help',
+    icon: 'help',
+    labelKey: 'slash.command.help.label',
+    descriptionKey: 'slash.command.help.description',
+    run: (ctx) => {
+      ctx.showResult({ kind: 'help' })
+    },
+  },
 ]
 
 /** `/name` or partial `/na` — single token only, so pasted paths never trip it. */
@@ -241,6 +258,16 @@ export function isSlashQuery(input: string): boolean {
 }
 
 /**
+ * Exact-name lookup over the static table (name or alias, case-insensitive).
+ * Shared by the bare-`/name` parser and the `/cmd args` hint state, so the
+ * two can never disagree about what "a real command" is.
+ */
+export function findSlashCommand(name: string): SlashCommand | null {
+  const n = name.toLowerCase()
+  return SLASH_COMMANDS.find(cmd => cmd.name === n || cmd.aliases?.includes(n)) ?? null
+}
+
+/**
  * Resolve a fully typed input to a command. Only a bare `/name` counts —
  * `/name args` and unknown `/tokens` (likely paths) return null and are
  * sent as text.
@@ -248,17 +275,56 @@ export function isSlashQuery(input: string): boolean {
 export function parseSlashInput(input: string): SlashCommand | null {
   const trimmed = input.trim()
   if (!SLASH_QUERY_RE.test(trimmed)) return null
-  const name = trimmed.slice(1).toLowerCase()
-  return SLASH_COMMANDS.find(cmd => cmd.name === name || cmd.aliases?.includes(name)) ?? null
+  return findSlashCommand(trimmed.slice(1))
 }
 
-/** Prefix/substring filter for the autocomplete menu. */
+/**
+ * H2 P1-2 — the command token of a `/name args…` input, i.e. the parameter
+ * state AFTER `isSlashQuery` stopped matching (whitespace plus at least one
+ * more character after the token). While the input is still a bare `/name`
+ * (or `/name ` with a trailing space) the autocomplete menu owns the state
+ * and this returns null; non-slash input is null too, so pasted paths and
+ * plain prompts never light the hint.
+ */
+export function slashArgsToken(input: string): string | null {
+  const m = /^\/([A-Za-z][\w-]*)\s+\S/.exec(input)
+  return m ? m[1] : null
+}
+
+/**
+ * The @ menu's four-band score (fileMention.filterMentionCandidates),
+ * narrowed to a bare command name: prefix > substring > subsequence, with
+ * longer names losing ties inside a band. Bands are spaced 100 apart so a
+ * real prefix ALWAYS outranks a fuzzy hit — typing `/co` keeps /cost,
+ * /context and /compact above any subsequence match.
+ */
+function scoreSlashName(candidate: string, q: string): number {
+  if (candidate.startsWith(q)) return 400 - candidate.length
+  if (candidate.includes(q)) return 300 - candidate.length
+  const seq = subsequenceStart(candidate, q)
+  if (seq !== -1) return 100 - seq
+  return -1
+}
+
+/**
+ * H2 P1-1 — fuzzy filter for the autocomplete menu, aligned with the @
+ * menu's scoring: name prefix (then alias prefix) > substring > in-order
+ * subsequence. The command's own name outranks its aliases at equal score
+ * (strict `>` keeps the first, i.e. the name's, score). Empty query returns
+ * the full table in registry order — the menu's default listing is stable.
+ */
 export function filterSlashCommands(query: string): SlashCommand[] {
-  const name = query.replace(/^\//, '').toLowerCase()
-  if (!name) return SLASH_COMMANDS
-  return SLASH_COMMANDS.filter(cmd =>
-    cmd.name.startsWith(name) ||
-    cmd.aliases?.some(a => a.startsWith(name)) ||
-    cmd.name.includes(name),
-  )
+  const q = query.replace(/^\//, '').toLowerCase()
+  if (!q) return SLASH_COMMANDS
+  const scored: { cmd: SlashCommand; score: number }[] = []
+  for (const cmd of SLASH_COMMANDS) {
+    let best = scoreSlashName(cmd.name, q)
+    for (const alias of cmd.aliases ?? []) {
+      const s = scoreSlashName(alias, q)
+      if (s > best) best = s
+    }
+    if (best >= 0) scored.push({ cmd, score: best })
+  }
+  scored.sort((a, b) => b.score - a.score || a.cmd.name.localeCompare(b.cmd.name))
+  return scored.map(s => s.cmd)
 }

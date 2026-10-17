@@ -8,10 +8,14 @@ import { useEffect, useState } from 'react';
  *
  * Shared by the theme-following surfaces that build their own palettes from
  * the resolved id (TerminalPanel's xtermTheme, CodeEditor's cmTheme).
+ *
+ * H1: the fallback is aurora-ink, not a second theme — the provider only
+ * ever writes aurora-ink, so a missing attribute (pre-mount frame) must
+ * preview the same look the app will settle on.
  */
 export function useResolvedThemeAttr(): string {
   const read = () =>
-    typeof document === 'undefined' ? 'material' : document.documentElement.getAttribute('data-theme') ?? 'material';
+    typeof document === 'undefined' ? 'aurora-ink' : document.documentElement.getAttribute('data-theme') ?? 'aurora-ink';
   const [theme, setTheme] = useState(read);
   useEffect(() => {
     if (typeof MutationObserver === 'undefined') return;
@@ -29,6 +33,6 @@ export function useResolvedThemeAttr(): string {
  */
 export function readResolvedThemeAttr(): string {
   return typeof document === 'undefined'
-    ? 'material'
-    : document.documentElement.getAttribute('data-theme') ?? 'material';
+    ? 'aurora-ink'
+    : document.documentElement.getAttribute('data-theme') ?? 'aurora-ink';
 }
