@@ -32,6 +32,9 @@ export interface DropdownMenuItem {
   icon?: string
   disabled?: boolean
   destructive?: boolean
+  /** Native tooltip — C1 (AI-chat-ux) uses it to explain WHY an item is
+   *  disabled (e.g. the attach item outside a Tauri runtime). */
+  title?: string
   /** Stable e2e/aria anchor (e.g. the composer's memory-bypass item keeps
    *  the retired standalone button's `memory-bypass-toggle`). */
   testid?: string
@@ -46,24 +49,42 @@ export interface DropdownMenuSeparatorItem {
   id: string
 }
 
-/** Anything the menu can render: a regular item or a separator. Plain
- *  `DropdownMenuItem[]` call sites remain assignable (existing menus never
- *  grow separators unless they opt in). */
-export type DropdownMenuEntry = DropdownMenuItem | DropdownMenuSeparatorItem
+/** AI-chat-ux C5 — a non-interactive group header row (「附件」/「工具」),
+ *  the third entry kind for the flat items[] API. Like separators, headers
+ *  are skipped by the roving index. */
+export interface DropdownMenuHeaderItem {
+  kind: 'header'
+  id: string
+  label: string
+}
+
+/** Anything the menu can render: a regular item, a separator, or a group
+ *  header. Plain `DropdownMenuItem[]` call sites remain assignable
+ *  (existing menus never grow separators unless they opt in). */
+export type DropdownMenuEntry = DropdownMenuItem | DropdownMenuSeparatorItem | DropdownMenuHeaderItem
 
 /** shadcn-style `DropdownMenuSeparator` factory for the flat items[] API. */
 export function DropdownMenuSeparator(id: string): DropdownMenuSeparatorItem {
   return { kind: 'separator', id }
 }
 
+/** Group-header factory (AI-chat-ux C5). */
+export function DropdownMenuHeader(id: string, label: string): DropdownMenuHeaderItem {
+  return { kind: 'header', id, label }
+}
+
 const isSeparator = (item: DropdownMenuEntry): item is DropdownMenuSeparatorItem =>
-  'kind' in item
+  'kind' in item && item.kind === 'separator'
+
+const isHeader = (item: DropdownMenuEntry): item is DropdownMenuHeaderItem =>
+  'kind' in item && item.kind === 'header'
 
 /** Positive predicate — TS does not narrow a union through a negated
  *  custom predicate, so the focus-roving guards use this form to reach
- *  `.disabled`/`.onSelect` on the item branch. */
+ *  `.disabled`/`.onSelect` on the item branch. Headers count as
+ *  non-items: the roving index must skip them like separators. */
 const isRegularItem = (item: DropdownMenuEntry): item is DropdownMenuItem =>
-  !isSeparator(item)
+  !isSeparator(item) && !isHeader(item)
 
 export interface DropdownMenuProps {
   open: boolean
@@ -200,6 +221,17 @@ export function DropdownMenu({
             data-slot="dropdown-menu-separator"
             className="my-xs h-px bg-outline-variant/25"
           />
+        ) : isHeader(item) ? (
+          // Group header (C5): a quiet uppercase label row, non-interactive
+          // and excluded from the roving index like separators.
+          <div
+            key={item.id}
+            role="presentation"
+            data-slot="dropdown-menu-header"
+            className="px-md pt-xs pb-[2px] text-label-2xs font-bold uppercase tracking-wider text-on-surface-variant"
+          >
+            {item.label}
+          </div>
         ) : (
           <button
             key={item.id}
@@ -209,6 +241,7 @@ export function DropdownMenu({
             data-testid={item.testid}
             aria-disabled={item.disabled}
             disabled={item.disabled}
+            title={item.title}
             className={cn(
               "w-full text-left px-md py-sm flex items-center gap-sm text-label-md transition-colors",
               "focus:bg-primary/10 focus:text-primary focus:outline-none",

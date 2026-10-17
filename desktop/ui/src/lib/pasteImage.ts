@@ -22,6 +22,16 @@ export const PASTE_IMAGE_MIME_TO_EXT: Record<string, string> = {
 /** Shared image cap — mirrors `shannon_core::attachments::MAX_IMAGE_BYTES`. */
 export const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024
 
+/**
+ * AI-chat-ux C6 — non-image FILE cap. The webview clipboard hands over File
+ * objects with content but no absolute path, so pasted files are persisted
+ * via `save_pasted_file` (name + base64) into the same pasted cache, then
+ * ride the normal attachment pipeline. The cap mirrors the backend's
+ * `MAX_ATTACHMENT_SIZE` (25 MiB, commands_files.rs) — the attachment
+ * ceiling, not the tighter image one.
+ */
+export const MAX_PASTED_FILE_BYTES = 25 * 1024 * 1024
+
 /** Minimal structural shape of `DataTransfer` (keeps tests free of jsdom Event plumbing). */
 export interface ClipboardDataLike {
   items?: ArrayLike<{ kind: string; type: string; getAsFile: () => File | null }>
@@ -41,6 +51,26 @@ export function imageFilesFromClipboard(data: ClipboardDataLike | null | undefin
     if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
     const file = item.getAsFile()
     if (file) out.push(file)
+  }
+  return out
+}
+
+/**
+ * AI-chat-ux C6 — the non-image FILE items of a paste (a copied PDF/docx/
+ * zip from the OS file manager, an "Copy File" in another tool, …). The
+ * webview exposes their CONTENT (never the absolute path), so each is
+ * persisted backend-side under its own name and attached like any chip.
+ * Images are excluded (they take the `save_pasted_image` path), and empty
+ * items (`kind: 'file'` with no backing File) are skipped.
+ */
+export function nonImageFilesFromClipboard(data: ClipboardDataLike | null | undefined): File[] {
+  const items = data?.items
+  if (!items) return []
+  const out: File[] = []
+  for (const item of Array.from(items)) {
+    if (item.kind !== 'file' || item.type.startsWith('image/')) continue
+    const file = item.getAsFile()
+    if (file && file.size > 0) out.push(file)
   }
   return out
 }

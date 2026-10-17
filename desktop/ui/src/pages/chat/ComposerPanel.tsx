@@ -24,7 +24,7 @@ interface ComposerPanelProps {
 // Cmd/Ctrl+D WD-picker shortcut is handled by this panel too — it owns the
 // picker button).
 export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: ComposerPanelProps) {
-  const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit } = useComposer()
+  const { input, setInput, handleSend, handleSteer, attachedFiles, handleAttach, handleDetachAll, executeSlash, slashResult, dismissSlashResult, editing, cancelEdit, mentionPaths, setMentionPaths } = useComposer()
   const { isQuerying, isCancelInFlight, cancelQuery, usage } = useChat()
   const { sessions, currentSessionId } = useSessions()
   const { config } = useCatalog()
@@ -87,6 +87,9 @@ export default function ComposerPanel({ setQuickFixOpen, setEditorOpen }: Compos
             // R2-1: model-chip switches scope to THIS session; the chip's
             // "Set as default" stays the global write.
             sessionId={currentSessionId}
+            // AI-chat-ux C3: the draft's resolved @ references flow back to
+            // the page for the send-time attachment merge.
+            onMentionPathsChange={setMentionPaths}
           />
         </div>
         {/* Aurora redesign 2026-10 (02-chat.html 状态条), slimmed by the 02c

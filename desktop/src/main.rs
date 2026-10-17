@@ -508,6 +508,9 @@ fn main() {
             // H2 P1-4 — long-text paste converts to a .txt in the same
             // pasted cache, riding the same attachment pipeline.
             commands_files::save_pasted_text,
+            // AI-chat-ux C6 — non-image file paste: content-only clipboard
+            // items are re-created under their own name in the pasted cache.
+            commands_files::save_pasted_file,
             // 2026-09-25 open pipeline (§4 P0-B / P1-C) — file-ref existence
             // probes and capped text reads for disk artifacts
             commands_files::path_exists,

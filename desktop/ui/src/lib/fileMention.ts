@@ -62,6 +62,87 @@ export function caretAfterMentionInsert(query: MentionQuery, path: string, worki
   return query.startPos + 1 + relativeToWorkingDir(path, workingDir).length + 1
 }
 
+/**
+ * Insert a DIRECTORY mention (AI-chat-ux C4): `@rel/dir/` with NO trailing
+ * space, so the whitespace-anchored query keeps matching and the menu
+ * drills straight into the folder's children (the Cursor @Folders move).
+ */
+export function insertDirectoryMention(
+  value: string,
+  query: MentionQuery,
+  path: string,
+  workingDir: string | null | undefined,
+): string {
+  const rest = value.slice(query.endPos)
+  const rel = relativeToWorkingDir(path, workingDir)
+  const insertion = `@${rel}${rel.endsWith('/') ? '' : '/'}`
+  return value.slice(0, query.startPos) + insertion + rest
+}
+
+/** Caret position after a directory mention insert (inside the trailing `/`). */
+export function caretAfterDirectoryMentionInsert(query: MentionQuery, path: string, workingDir: string | null | undefined): number {
+  const rel = relativeToWorkingDir(path, workingDir)
+  return query.startPos + 1 + rel.length + (rel.endsWith('/') ? 0 : 1)
+}
+
+// ── AI-chat-ux C2/C3 — committed mentions as structured references ──────
+
+/** One `@token` occurrence in the composer text. `start`/`end` bound the
+ *  `@token` span itself (excluding the anchor whitespace). */
+export interface MentionToken {
+  raw: string
+  start: number
+  end: number
+}
+
+const MENTION_TOKEN_RE = /(^|\s)@([^\s@]+)/g
+
+/**
+ * Every @-mention token in the composer text (global form of
+ * `activeMentionQuery`). The whitespace anchor keeps emails out, exactly
+ * like the live menu trigger. Powers the composer's reference chips and
+ * the send-time deterministic attachment merge (C3).
+ */
+export function mentionTokensIn(value: string): MentionToken[] {
+  const out: MentionToken[] = []
+  for (const m of value.matchAll(MENTION_TOKEN_RE)) {
+    const start = m.index + m[1].length
+    out.push({ raw: m[2], start, end: start + 1 + m[2].length })
+  }
+  return out
+}
+
+/**
+ * Resolve a mention token to a real candidate path. Tokens are stored
+ * relative to the working dir when possible (`insertMention`), so both the
+ * verbatim candidate and its relative form match; absolute tokens match
+ * directly.
+ */
+export function resolveMentionToken(
+  token: string,
+  candidates: string[],
+  workingDir: string | null | undefined,
+): string | null {
+  for (const c of candidates) {
+    if (c === token) return c
+    if (relativeToWorkingDir(c, workingDir) === token) return c
+  }
+  return null
+}
+
+/**
+ * Remove a mention token (the span INCLUDES its `@`), swallowing ONE
+ * adjacent space (preceding side preferred, else trailing) so removal
+ * never leaves double whitespace behind.
+ */
+export function removeMentionToken(value: string, token: MentionToken): string {
+  let start = token.start
+  let end = token.end
+  if (start > 0 && value[start - 1] === ' ') start -= 1
+  else if (end < value.length && value[end] === ' ') end += 1
+  return value.slice(0, start) + value.slice(end)
+}
+
 /** Relative form when the path lives under the working dir, else verbatim. */
 export function relativeToWorkingDir(path: string, workingDir: string | null | undefined): string {
   if (!workingDir) return path
@@ -101,6 +182,29 @@ export function flattenFileTree(root: FileNode[] | FileNode | null | undefined, 
   return out
 }
 
+/**
+ * AI-chat-ux C4 — the DIRECTORY paths of the same walk (parent dirs first),
+ * feeding the `@folders` half of the mention menu. Same pruning/cap
+ * contract as [`flattenFileTree`]; the walk itself stays files-first
+ * (`flattenFileTree` runs its own traversal), so the two lists are
+ * independent.
+ */
+export function flattenFileTreeDirs(root: FileNode[] | FileNode | null | undefined, cap = 200): string[] {
+  const out: string[] = []
+  if (!root) return out
+  const stack = Array.isArray(root) ? [...root].reverse() : [root]
+  while (stack.length > 0 && out.length < cap) {
+    const node = stack.pop()!
+    if (node.type !== 'directory') continue
+    const base = node.name.split('/').pop() ?? node.name
+    if (IGNORED_DIRS.has(base)) continue
+    out.push(node.path)
+    const children = node.children ?? []
+    for (let i = children.length - 1; i >= 0; i--) stack.push(children[i])
+  }
+  return out
+}
+
 /** Contiguous-free fuzzy check: does `q` appear as an in-order subsequence
  *  of `s`? Returns the index of the FIRST character match of the earliest
  *  match, or −1. */
@@ -123,10 +227,26 @@ export function subsequenceStart(s: string, q: string): number {
  * Rank paths against the query: basename prefix > basename substring >
  * anywhere substring > subsequence; shorter names win ties, then
  * alphabetical. Empty query = everything (index order). Result is capped.
+ *
+ * AI-chat-ux C4 — `recency` optionally boosts recently-touched paths
+ * (higher weight = more recent; the composer feeds it from the session
+ * file index's registration time). Recency never outranks a basename
+ * prefix — it only reorders within/across the weaker bands (a recency
+ * bump of 50 cannot lift a subsequence hit over a basename substring).
  */
-export function filterMentionCandidates(paths: string[], query: string, limit = 8): string[] {
+export function filterMentionCandidates(
+  paths: string[],
+  query: string,
+  limit = 8,
+  recency?: Map<string, number>,
+): string[] {
   const q = query.toLowerCase()
-  if (q === '') return paths.slice(0, limit)
+  if (q === '') {
+    if (!recency || recency.size === 0) return paths.slice(0, limit)
+    return [...paths]
+      .sort((a, b) => (recency.get(b) ?? 0) - (recency.get(a) ?? 0))
+      .slice(0, limit)
+  }
   const scored: { path: string; score: number }[] = []
   for (const path of paths) {
     const norm = path.replace(/\\/g, '/')
@@ -141,7 +261,12 @@ export function filterMentionCandidates(paths: string[], query: string, limit = 
       const seq = subsequenceStart(bl, q)
       if (seq !== -1) score = 100 - seq
     }
-    if (score >= 0) scored.push({ path, score })
+    if (score >= 0) {
+      // Recency tiebreaker: capped below the band gap (100) so it reorders
+      // within a band instead of across bands.
+      const boost = Math.min(50, recency?.get(path) ?? 0)
+      scored.push({ path, score: score + boost })
+    }
   }
   scored.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
   return scored.slice(0, limit).map(s => s.path)

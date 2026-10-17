@@ -108,26 +108,31 @@ describe('fetchSlashSkills', () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: 'my-skill', description: 'Does things', trigger: '/my-skill', source: 'User', category: null },
     ])
-    const result = await fetchSlashSkills()
-    expect(result).toEqual([
+    const { entries, degraded } = await fetchSlashSkills()
+    expect(entries).toEqual([
       { name: 'my-skill', description: 'Does things', trigger: '/my-skill', source: 'User' },
     ])
+    // A clean fetch is NOT degraded (C1: the menu only announces real
+    // fetch failures, never an honest "no skills installed").
+    expect(degraded).toBe(false)
   })
 
-  it('falls back to [] when the backend rejects (static table stays usable)', async () => {
+  it('falls back to [] + degraded when the backend rejects (static table stays usable)', async () => {
     vi.mocked(api.listSkills).mockRejectedValue(new Error('backend down'))
-    const result = await fetchSlashSkills()
-    expect(result).toEqual([])
+    const { entries, degraded } = await fetchSlashSkills()
+    expect(entries).toEqual([])
+    expect(degraded).toBe(true)
     // The merge still yields the full static table.
-    expect(mergeSlashMenu(result, '')).toHaveLength(SLASH_COMMANDS.length)
+    expect(mergeSlashMenu(entries, '')).toHaveLength(SLASH_COMMANDS.length)
   })
 
-  it('falls back to [] on timeout', async () => {
+  it('falls back to [] + degraded on timeout', async () => {
     vi.mocked(api.listSkills).mockImplementation(
       () => new Promise(() => {}), // never settles
     )
-    const result = await fetchSlashSkills(25)
-    expect(result).toEqual([])
+    const { entries, degraded } = await fetchSlashSkills(25)
+    expect(entries).toEqual([])
+    expect(degraded).toBe(true)
   }, 5000)
 
   it('toSlashSkillEntry repairs a missing trigger', () => {

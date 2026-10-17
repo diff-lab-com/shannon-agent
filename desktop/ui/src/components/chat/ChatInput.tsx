@@ -22,7 +22,7 @@ function RecordingTimer({ startedAt }: { startedAt: number }) {
 }
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DropdownMenu, DropdownMenuSeparator, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuHeader, DropdownMenuSeparator, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
 import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
@@ -38,12 +38,27 @@ import { fetchSlashSkills, mergeSlashMenu, type SlashMenuItem, type SlashSkillEn
 import {
   activeMentionQuery,
   caretAfterMentionInsert,
+  caretAfterDirectoryMentionInsert,
   filterMentionCandidates,
   flattenFileTree,
+  flattenFileTreeDirs,
   insertMention,
+  insertDirectoryMention,
+  mentionTokensIn,
   relativeToWorkingDir,
+  removeMentionToken,
+  resolveMentionToken,
 } from '@/lib/fileMention'
-import { imageFilesFromClipboard, clipboardHasText, blobToBase64, PASTE_IMAGE_MIME_TO_EXT, MAX_PASTED_IMAGE_BYTES } from '@/lib/pasteImage'
+import { changeSessionWorkingDir } from '@/lib/sessionActions'
+import {
+  blobToBase64,
+  clipboardHasText,
+  imageFilesFromClipboard,
+  nonImageFilesFromClipboard,
+  PASTE_IMAGE_MIME_TO_EXT,
+  MAX_PASTED_IMAGE_BYTES,
+  MAX_PASTED_FILE_BYTES,
+} from '@/lib/pasteImage'
 import * as api from '@/lib/tauri-api'
 import type { RejectedAttachmentReason, AttachmentExtractionReport, SendCostEstimate, UsagePayload } from '@/types'
 import { toastError } from '@/lib/errorToast'
@@ -188,6 +203,14 @@ interface ChatInputProps {
    *  chip menu performs the global configure. Omitted → legacy global
    *  behavior (no session context to scope to). */
   sessionId?: string | null
+  /**
+   * AI-chat-ux C3 — the resolved `@` reference paths of the CURRENT draft
+   * text, reported whenever they change. The page merges them into the
+   * send's attachment list (deterministic injection: the model is
+   * guaranteed the content, not just a path string). Absent (tests, other
+   * surfaces) → no reporting, no injection.
+   */
+  onMentionPathsChange?: (paths: string[]) => void
 }
 
 // U2 removed the composer's model Select; the ZCode delta P0-③ brings a
@@ -216,6 +239,7 @@ export default function ChatInput({
   usageTick,
   usage,
   sessionId,
+  onMentionPathsChange,
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -247,14 +271,19 @@ export default function ChatInput({
   const [slashActive, setSlashActive] = useState(0)
   // G1 P0-2.2 — installed skills join the menu as slash-triggered entries.
   // Fetched once on mount; error/timeout degrades to [] (static table only).
+  // AI-chat-ux C1: the degraded flag surfaces in the menu footer — a silent
+  // empty skill list read as "skills aren't implemented".
   const [skills, setSkills] = useState<SlashSkillEntry[]>([])
+  const [skillsDegraded, setSkillsDegraded] = useState(false)
   useEffect(() => {
     let cancelled = false
-    fetchSlashSkills().then(entries => {
-      if (!cancelled) setSkills(entries)
+    fetchSlashSkills().then(({ entries, degraded }) => {
+      if (cancelled) return
+      setSkills(entries)
+      setSkillsDegraded(degraded)
     }).catch(() => {
       // fetchSlashSkills already swallows; this is belt-and-braces.
-      if (!cancelled) setSkills([])
+      if (!cancelled) { setSkills([]); setSkillsDegraded(true) }
     })
     return () => { cancelled = true }
   }, [])
@@ -294,18 +323,37 @@ export default function ChatInput({
   // working dir: the working-dir tree (backend-bounded walk) plus the
   // session file index (attachments/favorites). Both fail soft — the menu
   // just stays empty, never breaks the composer.
+  // AI-chat-ux C4 — the walk's directories join the menu (`@src/` drill-
+  // down), and the file index's registration recency becomes a sort
+  // booster (recently-touched files rank higher within a fuzzy band).
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([])
+  const [mentionDirs, setMentionDirs] = useState<Set<string>>(new Set())
+  const [mentionRecency, setMentionRecency] = useState<Map<string, number>>(new Map())
   useEffect(() => {
     let cancelled = false
-    const tree: Promise<string[]> = sessionWorkingDir
-      ? api.getFileTree(sessionWorkingDir).then(nodes => flattenFileTree(nodes)).catch(() => [])
-      : Promise.resolve([])
-    const index: Promise<string[]> = api.listFileIndex()
-      .then(rows => rows.map(r => r.path).filter((p): p is string => typeof p === 'string'))
+    const tree: Promise<{ files: string[]; dirs: string[] }> = sessionWorkingDir
+      ? api.getFileTree(sessionWorkingDir)
+        .then(nodes => ({ files: flattenFileTree(nodes), dirs: flattenFileTreeDirs(nodes) }))
+        .catch(() => ({ files: [], dirs: [] }))
+      : Promise.resolve({ files: [], dirs: [] })
+    const index: Promise<Array<{ path: string; at: number }>> = api.listFileIndex()
+      .then(rows => rows.map(r => ({
+        path: r.path,
+        at: Date.parse(r.registered_at) || 0,
+      })).filter(r => typeof r.path === 'string'))
       .catch(() => [])
-    Promise.all([tree, index]).then(([treePaths, indexPaths]) => {
+    void Promise.all([tree, index]).then(([treeSplit, rows]) => {
       if (cancelled) return
-      setMentionCandidates([...new Set([...treePaths, ...indexPaths])])
+      const indexPaths = rows.map(r => r.path)
+      // C4: directories join the candidate universe (menu marks them with
+      // the folder icon; picking one drills in). Dirs come first so an
+      // empty query shows the tree shape before the leaves.
+      setMentionCandidates([...new Set([...treeSplit.dirs, ...treeSplit.files, ...indexPaths])])
+      setMentionDirs(new Set(treeSplit.dirs))
+      // Recency weight = position among the recents, newest highest. The
+      // absolute timestamps don't matter — only the ordering.
+      const ordered = [...rows].filter(r => r.at > 0).sort((a, b) => b.at - a.at)
+      setMentionRecency(new Map(ordered.map((r, i) => [r.path, Math.max(1, ordered.length - i)])))
     })
     return () => { cancelled = true }
   }, [sessionWorkingDir])
@@ -322,10 +370,45 @@ export default function ChatInput({
   const [mentionDismissed, setMentionDismissed] = useState(false)
   const [mentionActive, setMentionActive] = useState(0)
   const mentionMatches = mentionQuery && !mentionDismissed
-    ? filterMentionCandidates(mentionCandidates, mentionQuery.token)
+    ? filterMentionCandidates(mentionCandidates, mentionQuery.token, 8, mentionRecency)
     : []
   const trackCaret = (el: HTMLTextAreaElement) => {
     caretRef.current = el.selectionStart ?? el.value.length
+  }
+
+  // ── AI-chat-ux C2 — committed mentions as reference chips ────────────
+  // Every `@token` in the draft text that resolves to a real candidate
+  // renders as a removable chip (× splices the token out of the text), and
+  // the resolved set is reported upward for the send-time deterministic
+  // attachment merge (C3). Pure derivation — chips can never drift from
+  // the text the model will actually see.
+  const mentionChips = useMemo(() => {
+    const out: Array<{ tok: ReturnType<typeof mentionTokensIn>[number]; path: string }> = []
+    for (const tok of mentionTokensIn(value)) {
+      const path = resolveMentionToken(tok.raw, mentionCandidates, sessionWorkingDir)
+      if (path != null) out.push({ tok, path })
+    }
+    return out
+  }, [value, mentionCandidates, sessionWorkingDir])
+  useEffect(() => {
+    // C3: only FILE references are reported — a directory reference keeps
+    // its text semantics (the model lists it); attaching a dir would just
+    // refuse on send.
+    onMentionPathsChange?.(mentionChips.filter(c => !mentionDirs.has(c.path)).map(c => c.path))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- report on identity change; the callback is a setState-style sink
+  }, [mentionChips])
+
+  /** Splice one reference chip's `@token` out of the draft. */
+  const removeMentionChip = (tok: { raw: string; start: number; end: number }) => {
+    const next = removeMentionToken(value, tok)
+    onChange(next)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      el.focus()
+      const caret = Math.min(tok.start, next.length)
+      el.setSelectionRange(caret, caret)
+    })
   }
 
   // P2-3: the id the textarea's aria-controls points at — present exactly
@@ -413,9 +496,26 @@ export default function ChatInput({
   }, [value])
 
   /** GB P2-10b: replace the live `@query` with the picked path (plain text,
-   *  TUI-style reference — no attachment semantics). */
+   *  TUI-style reference — no attachment semantics).
+   *  AI-chat-ux C4: a picked DIRECTORY inserts `@dir/` WITHOUT the trailing
+   *  space and keeps the menu open — the query keeps matching and drills
+   *  into the folder (Cursor's @Folders move). */
   const commitMention = (path: string) => {
     if (!mentionQuery) return
+    const isDir = mentionDirs.has(path)
+    if (isDir) {
+      const next = insertDirectoryMention(value, mentionQuery, path, sessionWorkingDir)
+      const caret = caretAfterDirectoryMentionInsert(mentionQuery, path, sessionWorkingDir)
+      caretRef.current = caret
+      onChange(next)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        el.setSelectionRange(caret, caret)
+      })
+      return
+    }
     const next = insertMention(value, mentionQuery, path, sessionWorkingDir)
     const caret = caretAfterMentionInsert(mentionQuery, path, sessionWorkingDir)
     caretRef.current = caret
@@ -533,7 +633,7 @@ export default function ChatInput({
     }
   }
 
-  // R2 audit G2/I1 (02c A2 可选加分) — Shift+Tab walks the approval ladder
+  // R2 audit W6 (02c A2 可选加分) — Shift+Tab walks the approval ladder
   // (ask → auto-edit → plan → full-auto, wrapping), the Claude Code /
   // Gemini CLI muscle-memory key; the TUI side of the naming design already
   // plans the same loop. Same write surface as the pill's dropdown
@@ -932,6 +1032,31 @@ export default function ChatInput({
       duration: 10000,
     })
   }
+  // AI-chat-ux C6 — non-image file paste. OS file-manager copies put
+  // `kind: 'file'` items (pdf/docx/zip/…) on the clipboard with their
+  // CONTENT but no absolute path, so each is persisted via
+  // `save_pasted_file` under its own name into the pasted cache, then rides
+  // the regular attachment pipeline. Images never reach here (the branch
+  // above), and a paste that also carries text keeps the default text
+  // insertion — same contract as the image path.
+  const handlePastedFiles = async (files: File[]) => {
+    for (const file of files) {
+      if (file.size > MAX_PASTED_FILE_BYTES) {
+        toastError(
+          t('chat.input.paste.failed'),
+          intl.formatMessage({ id: 'chat.input.paste.tooLarge' }),
+        )
+        continue
+      }
+      try {
+        const dataBase64 = await blobToBase64(file)
+        const savedPath = await api.savePastedFile(dataBase64, pathExtension(file.name) || 'bin', file.name)
+        mergePathsRef.current([savedPath])
+      } catch (err) {
+        toastError(t('chat.input.paste.failed'), err)
+      }
+    }
+  }
   //
   // P2-2 — mixed image+text pastes (Excel ranges, "copy image with
   // caption") used to swallow the text: the handler preventDefault'd the
@@ -946,6 +1071,14 @@ export default function ChatInput({
     if (images.length > 0) {
       if (!clipboardHasText(e.clipboardData)) e.preventDefault()
       void handlePastedImages(images)
+      return
+    }
+    // C6 — non-image files take the content-persist path (no absolute path
+    // exists on webview clipboard items), same preventDefault contract.
+    const otherFiles = nonImageFilesFromClipboard(e.clipboardData)
+    if (otherFiles.length > 0) {
+      if (!clipboardHasText(e.clipboardData)) e.preventDefault()
+      void handlePastedFiles(otherFiles)
       return
     }
     // H2 P1-4 — no image on the clipboard: a very long TEXT paste converts
@@ -1302,10 +1435,22 @@ export default function ChatInput({
   // R2 audit W6 (02c S1): the menu rows use the design copy —「添加文件…」
   // (the shared attach key, single-surface) and a composer-specific「PPT
   // 大纲…」(office.ppt.title stays the dialog's own title, it is reused
-  // there), and a separator groups the editor tools apart from the
-  // low-frequency 临时会话 toggle at the bottom.
+  // there).
+  // AI-chat-ux C5: the menu grew into 附件/工具 groups with quiet headers —
+  // five flat rows read as an undifferentiated list.
+  // AI-chat-ux C1: outside a Tauri runtime (plain-browser dev against a
+  // remote backend) the native file dialog cannot open — the attach item
+  // is disabled with the reason on its tooltip instead of failing silently.
+  const isTauriLike =
+    import.meta.env.VITE_MOCK_MODE === '1'
+    || (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window)
   const plusItems: DropdownMenuEntry[] = [
-    { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file', onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
+    DropdownMenuHeader('plus-group-attach', t('chat.input.plus.group.attach')),
+    { id: 'attach', label: t('chat.input.attach.aria'), icon: 'attach_file',
+      disabled: !isTauriLike,
+      title: isTauriLike ? undefined : t('chat.input.plus.attach.disabledHint'),
+      onSelect: () => { setPlusOpen(false); void handleAttachClick() } },
+    DropdownMenuHeader('plus-group-tools', t('chat.input.plus.group.tools')),
     { id: 'ppt', label: t('chat.input.plus.ppt'), icon: 'slideshow', onSelect: () => { setPlusOpen(false); setPptOpen(true) } },
     { id: 'quickfix', label: t('nav.quickFix'), icon: 'build', onSelect: () => { setPlusOpen(false); onOpenQuickFix() } },
     { id: 'editor', label: t('nav.editor'), icon: 'code', onSelect: () => { setPlusOpen(false); onOpenEditor() } },
@@ -1400,6 +1545,13 @@ export default function ChatInput({
           </ul>
           <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
             {t('slash.menu.hint')}
+            {/* C1 (AI-chat-ux): a failed/timeout skill fetch is announced —
+                an empty skill half read as "skills aren't implemented". */}
+            {skillsDegraded && (
+              <span data-testid="slash-skills-degraded" className="block text-warning mt-[2px]">
+                {t('slash.menu.skillsUnavailable')}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -1429,7 +1581,8 @@ export default function ChatInput({
 
       {/* GB P2-10b — @ file-reference popover. Same shape and protocol as
           the slash menu: keyboard-first listbox, Escape dismisses until the
-          query changes, selection inserts plain text. */}
+          query changes, selection inserts plain text. C4: directory rows
+          wear the folder icon and drill down on pick. */}
       {mentionMatches.length > 0 && (
         <div
           id={`${mentionListboxId}`}
@@ -1438,33 +1591,83 @@ export default function ChatInput({
           className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 overflow-hidden"
         >
           <ul className="max-h-64 overflow-y-auto py-xs">
-            {mentionMatches.map((path, i) => (
-              <li key={path}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={i === mentionActive}
-                  onMouseDown={e => {
-                    e.preventDefault()
-                    commitMention(path)
-                  }}
-                  onMouseEnter={() => setMentionActive(i)}
-                  className={cn(
-                    'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
-                    i === mentionActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
-                  )}
-                >
-                  <span className="material-symbols-outlined icon-sm text-primary shrink-0">description</span>
-                  <span className="font-mono text-label-md text-on-surface truncate flex-1" title={path}>
-                    {relativeToWorkingDir(path, sessionWorkingDir)}
-                  </span>
-                </button>
-              </li>
-            ))}
+            {mentionMatches.map((path, i) => {
+              const isDir = mentionDirs.has(path)
+              return (
+                <li key={path}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={i === mentionActive}
+                    onMouseDown={e => {
+                      e.preventDefault()
+                      commitMention(path)
+                    }}
+                    onMouseEnter={() => setMentionActive(i)}
+                    className={cn(
+                      'w-full flex items-center gap-sm px-md py-xs text-left cursor-pointer transition-colors',
+                      i === mentionActive ? 'bg-surface-container-high' : 'hover:bg-surface-container',
+                    )}
+                  >
+                    <span className="material-symbols-outlined icon-sm text-primary shrink-0">
+                      {isDir ? 'folder' : 'description'}
+                    </span>
+                    <span className="font-mono text-label-md text-on-surface truncate flex-1" title={path}>
+                      {relativeToWorkingDir(path, sessionWorkingDir)}
+                    </span>
+                    {isDir && (
+                      <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0" aria-hidden="true">
+                        chevron_right
+                      </span>
+                    )}
+                  </button>
+                </li>
+              )
+            })}
           </ul>
           <div className="px-md py-xs border-t border-outline-variant/20 text-label-xs text-on-surface-variant">
             {t('chat.input.mention.hint')}
           </div>
+        </div>
+      )}
+      {/* C1 (AI-chat-ux) — the empty side of the same popover. The old
+          behavior was silence: with no working dir (or no matches) the menu
+          simply never appeared, which read as "the @ feature isn't
+          implemented". An explicit empty state with the dir chooser turns
+          the dead end into the next step. */}
+      {mentionQuery && !mentionDismissed && mentionMatches.length === 0 && (
+        <div
+          data-testid="mention-empty-state"
+          className="absolute left-0 right-0 bottom-full mb-sm z-modal rounded-2xl border border-outline-variant/30 bg-surface-container-low shadow-e3 px-md py-sm"
+        >
+          {!sessionWorkingDir ? (
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0">folder_off</span>
+              <span className="font-label-sm text-on-surface-variant flex-1">
+                {t('chat.input.mention.empty.noWorkingDir')}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="mention-empty-choose-dir"
+                className="shrink-0 text-primary hover:bg-primary/10"
+                onClick={() => {
+                  setMentionDismissed(true)
+                  void changeSessionWorkingDir(sessionId ?? null, t)
+                }}
+              >
+                <span className="material-symbols-outlined icon-sm">folder_open</span>
+                {t('chat.input.mention.empty.chooseDir')}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-sm">
+              <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0">search_off</span>
+              <span className="font-label-sm text-on-surface-variant">
+                {t('chat.input.mention.empty.noMatches')}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {mentionMatches.length > 0 && (
@@ -1608,6 +1811,48 @@ export default function ChatInput({
                 {t('chat.input.attach.detachAll')}
               </Button>
             )}
+          </div>
+        )}
+
+        {/* C2 (AI-chat-ux) — live reference chips for the draft's `@tokens`.
+            Outline-styled (distinct from attachment fills) with the `@`
+            prefix; × splices the token out of the text. A reference is both
+            the text the model reads AND (C3) content attached on send — the
+            chip is the single visible handle for both. Cap the row at 6 and
+            summarize the tail; the text itself stays the source of truth. */}
+        {mentionChips.length > 0 && (
+          <div
+            data-testid="mention-chips"
+            className="flex flex-wrap items-center gap-xs px-md pt-md"
+          >
+            {mentionChips.slice(0, 6).map(({ tok, path }) => (
+              <span
+                key={`${tok.start}-${path}`}
+                className="inline-flex max-w-[240px] items-center gap-xs rounded-lg border border-outline-variant/50 bg-surface-container-low px-sm py-xs font-label-sm text-on-surface"
+              >
+                <span className="material-symbols-outlined icon-sm text-primary shrink-0">
+                  {mentionDirs.has(path) ? 'folder' : 'description'}
+                </span>
+                <span className="font-mono truncate" title={path}>{relativeToWorkingDir(path, sessionWorkingDir)}</span>
+                <button
+                  type="button"
+                  aria-label={intl.formatMessage({ id: 'chat.input.mention.removeChip' }, { path: relativeToWorkingDir(path, sessionWorkingDir) })}
+                  title={t('chat.input.mention.removeChip')}
+                  onClick={() => removeMentionChip(tok)}
+                  className="rounded-sm p-0 -mr-[2px] text-on-surface-variant hover:text-error hover:bg-surface-container-high shrink-0 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined icon-sm" aria-hidden="true">close</span>
+                </button>
+              </span>
+            ))}
+            {mentionChips.length > 6 && (
+              <span className="font-label-xs text-on-surface-variant">
+                +{mentionChips.length - 6}
+              </span>
+            )}
+            <span className="font-label-xs text-on-surface-variant/70 ml-xs">
+              {t('chat.input.mention.chipsHint')}
+            </span>
           </div>
         )}
 

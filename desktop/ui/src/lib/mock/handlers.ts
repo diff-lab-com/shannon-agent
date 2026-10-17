@@ -735,6 +735,13 @@ export const handlers: Record<string, MockHandler> = {
   // Fixed transcripts are deliberately DIFFERENT per command so a journey
   // can prove WHICH provider served a recording (cloud default vs local
   // whisper after the config switch below).
+  // AI-chat-ux C6: demo twin of the pasted-file cache — a fake path keyed
+  // by the original name so the chip shows something recognizable.
+  async save_pasted_file({ fileName }: { fileName?: string }) {
+    await delay()
+    const safe = (fileName ?? 'pasted-file').replace(/[/\\]/g, '_')
+    return `/home/demo/.shannon/cache/pasted/${Date.now()}-demo-${safe}`
+  },
   async transcribe_audio() {
     await delay(60)
     return { text: 'Cloud transcript: stand up the staging cluster.' }
