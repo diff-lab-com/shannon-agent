@@ -264,10 +264,10 @@ pub struct HookMount {
     pub if_condition: Option<String>,
     /// Execution strategy (`command` / `http` / `llm` / `prompt` / ...).
     pub hook_type: String,
-    /// 命令,或 http/llm 钩子的 URL/prompt 载荷 — the shell command, or for
-    /// http/llm hooks (whose `command` is empty; see
-    /// `HookDef::new_http`/`new_llm`) the URL / prompt template they
-    /// target. Fallback order: command → url → prompt_template.
+    /// Shell command; for http/llm hooks (empty `command`, see
+    /// `HookDef::new_http`/`new_llm`) the URL / prompt payload they target —
+    /// 命令,或 http/llm 钩子的 URL/prompt 载荷. Fallback order:
+    /// command → url → prompt_template.
     pub command: String,
     /// Per-hook timeout in seconds.
     pub timeout_secs: u64,
@@ -289,14 +289,16 @@ fn hook_type_str(t: &HookType) -> &'static str {
 /// Payload rendered in a mount row's `command` field: the shell command, or —
 /// for http/llm hooks whose `command` is empty (`HookDef::new_http` /
 /// `HookDef::new_llm` keep the target in `url` / `prompt_template`) — the
-/// URL, then the prompt template. Previously non-command mounts rendered
-/// `"command": ""`, hiding what the hook actually targets.
+/// URL, then the prompt template. An empty-string URL is not a target and
+/// falls through to the prompt template. Previously non-command mounts
+/// rendered `"command": ""`, hiding what the hook actually targets.
 fn hook_mount_command(def: &HookDef) -> String {
     if !def.command.is_empty() {
         return def.command.clone();
     }
     def.url
         .clone()
+        .filter(|u| !u.is_empty())
         .or_else(|| def.prompt_template.clone())
         .unwrap_or_default()
 }
@@ -974,6 +976,10 @@ mod tests {
     /// `"command": ""` explicitly; a def without the key fails the whole
     /// file's parse). Their target lives in `url` / `promptTemplate` — the
     /// exact case that used to render `"command": ""`.
+    ///
+    /// Hermetic by construction: the path-scoped `load_from_path` merges
+    /// only this fixture file — never the running machine's real home-dir
+    /// hook configs (this test does not exercise `load_failures`).
     fn fixture_http_llm_manager() -> HookManager {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user-hooks.json");
@@ -988,7 +994,8 @@ mod tests {
                             "hooks": [
                                 {"type": "http", "command": "", "url": "https://example.com/audit"},
                                 {"type": "llm", "command": "", "promptTemplate": "Is {{tool_name}} safe?"},
-                                {"type": "llm", "command": "", "url": "https://example.com/both", "promptTemplate": "should-not-win"}
+                                {"type": "llm", "command": "", "url": "https://example.com/both", "promptTemplate": "should-not-win"},
+                                {"type": "llm", "command": "", "url": "", "promptTemplate": "fallback-after-empty-url"}
                             ]
                         }
                     ]
@@ -996,8 +1003,9 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let mut mgr = HookManager::with_paths(user, project);
-        mgr.load().expect("hooks config loads");
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load_from_path(&project)
+            .expect("hooks config loads from the fixture path");
         mgr
     }
 
@@ -1007,7 +1015,7 @@ mod tests {
     fn hooks_section_falls_back_to_url_and_prompt_payload() {
         let mgr = fixture_http_llm_manager();
         let section = hooks_section(&mgr);
-        assert_eq!(section.mount_count, 3);
+        assert_eq!(section.mount_count, 4);
 
         let payload = |url: &str| {
             section
@@ -1028,6 +1036,11 @@ mod tests {
         // Fallback order: url wins over prompt_template.
         let both = payload("https://example.com/both");
         assert_eq!(both.hook_type, "llm");
+
+        // Degenerate `url: ""` is not a target — falls through to the
+        // prompt template instead of rendering an empty payload.
+        let empty_url = payload("fallback-after-empty-url");
+        assert_eq!(empty_url.hook_type, "llm");
 
         // No mount renders an empty payload any more.
         assert!(section.mounts.iter().all(|m| !m.command.is_empty()));
