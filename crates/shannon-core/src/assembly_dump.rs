@@ -933,8 +933,11 @@ mod tests {
 
     // ── Hooks section ───────────────────────────────────────────────────
 
-    /// HookManager loaded from a temp project config (user path pointed at a
-    /// nonexistent file — loads as empty by contract).
+    /// HookManager loaded from a temp project config.
+    ///
+    /// Hermetic by construction: the path-scoped `load_from_path` merges
+    /// only this fixture file — never the running machine's real home-dir
+    /// hook configs (this fixture does not exercise `load_failures`).
     fn fixture_hook_manager() -> HookManager {
         let tmp = tempfile::tempdir().unwrap();
         let user = tmp.path().join("user-hooks.json");
@@ -965,8 +968,9 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let mut mgr = HookManager::with_paths(user, project);
-        mgr.load().expect("hooks config loads");
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load_from_path(&project)
+            .expect("hooks config loads from the fixture path");
         mgr
     }
 
@@ -1325,8 +1329,9 @@ mod tests {
     /// source derivation, budget accounting and compaction provenance
     /// against silent drift. `generated_at` and the hook config paths are
     /// blanked — they are environment data (clock / tempdir), not shape —
-    /// and so is `hooks.load_failures` (which picks up whatever real
-    /// home-dir configs fail to parse on the running machine).
+    /// and so is `hooks.load_failures` (always empty under the hermetic
+    /// fixture; blanked so the snapshot does not encode fixture-loading
+    /// details).
     #[test]
     fn assembly_dump_golden_snapshot() {
         let dump = fixture_dump();
