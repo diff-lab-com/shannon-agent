@@ -293,7 +293,8 @@ let nextTerminalSeq = 1
 // settings card shows the same effective-value behavior in demo mode.
 const demoTerminalSettings: TerminalSettings = {
   shell: null,
-  fontSize: 12,
+  // AI-chat-ux T2: mirrors the backend's raised default (13, was 12).
+  fontSize: 13,
   scrollback: 5000,
   drawerHeight: 320,
   screenReaderMode: false,

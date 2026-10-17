@@ -47,9 +47,11 @@ import type { TerminalInfo, TerminalSettings } from '@/types';
 import { decodeTerminalOutput, listenTerminalExit, listenTerminalOutput } from '@/lib/runtime/terminalEvents';
 import { xtermTheme } from './xtermTheme';
 import { readResolvedThemeAttr, useResolvedThemeAttr } from '@/hooks/useResolvedThemeAttr';
+import { MONO_FONT_STACK } from '@/theme/fonts';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { Terminal as XTerm } from '@xterm/xterm';
 import type { FitAddon as XTermFitAddon } from '@xterm/addon-fit';
+import type { WebglAddon as XTermWebglAddon } from '@xterm/addon-webgl';
 
 /**
  * Hook form lives in `@/hooks/useResolvedThemeAttr` (shared with the
@@ -94,8 +96,13 @@ const TERMINAL_TOGGLE_EVENT = 'shannon:terminal-toggle';
 const TERMINAL_OPEN_EVENT = 'shannon:terminal-open-changed';
 
 /** xterm defaults matching the backend's `[terminal]` fallbacks. */
-const DEFAULT_FONT_SIZE = 12;
+const DEFAULT_FONT_SIZE = 13;
 const DEFAULT_SCROLLBACK = 5000;
+
+/** Default line-height multiplier (AI-chat-ux T2): xterm's 1.0 packs rows
+ *  solid against each other; 1.15 reads like an editor at 13px. Matches
+ *  the backend's shipped default — changing one means changing both. */
+const DEFAULT_LINE_HEIGHT = 1.15;
 
 /**
  * US6 follow-up: in-stream dim notice written BEFORE the replayed history
@@ -107,10 +114,6 @@ const DEFAULT_SCROLLBACK = 5000;
  */
 const REPLAY_TRUNCATION_NOTICE =
   '\r\n\u{1b}[2m[shannon: replayed only the most recent output — earlier scrollback was dropped]\u{1b}[0m\r\n';
-
-/** Monospace fallback stack (brief: 字体回退等宽栈). */
-const FONT_FAMILY =
-  "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
 
 interface TerminalTab {
   info: TerminalInfo;
@@ -202,18 +205,28 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
   // xterm is loaded on first mount, not at module import: the chat bundle
   // stays free of xterm until a terminal is actually opened, and jsdom
   // test trees never load it at all (its module init touches canvas).
+  // T3 (AI-chat-ux): the WebGL renderer rides along — `null` when the
+  // module fails to load or the runtime has no WebGL, and the stock DOM
+  // renderer stays (VS Code's `gpuAcceleration: auto` shape).
   const xtermModuleRef = useRef<{
     Terminal: new (options: ConstructorParameters<typeof Object>[0] & Record<string, unknown>) => XTerm;
     FitAddon: new () => XTermFitAddon;
+    WebglAddon: (new () => XTermWebglAddon) | null;
   } | null>(null);
   const [xtermReady, setXtermReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')]).then(
-      ([xterm, fit]) => {
+    void Promise.all([
+      import('@xterm/xterm'),
+      import('@xterm/addon-fit'),
+      // A failed WebGL module load (bundle split, exotic webview) must not
+      // take the terminal down — degrade to the DOM renderer instead.
+      import('@xterm/addon-webgl').then(m => m.WebglAddon).catch(() => null),
+    ]).then(
+      ([xterm, fit, webgl]) => {
         if (cancelled) return;
-        xtermModuleRef.current = { Terminal: xterm.Terminal, FitAddon: fit.FitAddon };
+        xtermModuleRef.current = { Terminal: xterm.Terminal, FitAddon: fit.FitAddon, WebglAddon: webgl };
         setXtermReady(true);
       },
     );
@@ -274,9 +287,14 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       convertEol: false,
       cursorBlink: true,
       // Task 12: configurable font family; unset/blank on disk falls back
-      // to the built-in monospace stack.
-      fontFamily: settings?.fontFamily || FONT_FAMILY,
+      // to the built-in monospace stack (T1: now actually renders the
+      // bundled JetBrains Mono Variable — see @/theme/fonts).
+      fontFamily: settings?.fontFamily || MONO_FONT_STACK,
       fontSize: settings?.fontSize ?? DEFAULT_FONT_SIZE,
+      // T2: a little air between rows (xterm's default 1.0 reads dense at
+      // 13px) and a VS Code-parity minimum contrast floor for dim colors.
+      lineHeight: DEFAULT_LINE_HEIGHT,
+      minimumContrastRatio: 4.5,
       scrollback: settings?.scrollback ?? DEFAULT_SCROLLBACK,
       screenReaderMode: settings?.screenReaderMode ?? false,
       // P1-36: read the CURRENT theme off `<html data-theme>` at creation —
@@ -286,6 +304,31 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       theme: xtermTheme(readResolvedThemeAttr()),
     });
     term.loadAddon(fit);
+
+    // T3 (AI-chat-ux): prefer the WebGL renderer when the addon loaded and
+    // the context actually activates — sharper glyphs and far cheaper large
+    // scrolls than the DOM renderer. Any failure (no WebGL2, context loss,
+    // exotic webview) degrades to the stock DOM renderer: `loadAddon`
+    // throws synchronously on a dead context, and xterm fires
+    // `onContextLoss` when a live context dies (e.g. GPU reset) — both
+    // paths dispose the addon so xterm falls back cleanly. Mirrors VS
+    // Code's `terminal.integrated.gpuAcceleration: "auto"`.
+    const WebglAddon = xtermModuleRef.current?.WebglAddon;
+    if (WebglAddon) {
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          try {
+            webgl.dispose();
+          } catch {
+            /* already gone — the DOM renderer is active either way */
+          }
+        });
+        term.loadAddon(webgl);
+      } catch {
+        /* no usable WebGL context — DOM renderer stays */
+      }
+    }
 
     term.onData(data => {
       void api.terminalWrite(info.terminalId, data).catch(() => {
@@ -906,7 +949,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
           role="tabpanel"
           id="terminal-tab-panel"
           aria-labelledby={activeTab ? `terminal-tab-${activeTab.info.terminalId}` : undefined}
-          className="absolute inset-0 overflow-hidden px-xs py-xs"
+          // T4 (AI-chat-ux): `shannon-terminal-scroll` themes xterm's
+          // viewport scrollbar; T5 bumps the inset from 4px to 12/8px so
+          // glyphs stop hugging the drawer edges.
+          className="shannon-terminal-scroll absolute inset-0 overflow-hidden px-md py-sm"
         />
         {/* US7: the empty state also covers "terminals exist but none for
             this project" — deliberately NOT auto-spawning one. */}

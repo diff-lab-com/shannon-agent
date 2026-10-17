@@ -6,10 +6,11 @@ import { Switch } from '@/components/ui/switch'
 import EffectBadge from '@/components/settings/EffectBadge'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import { MONO_FONT_STACK } from '@/theme/fonts'
 import type { TerminalSettings as TerminalSettingsDto } from '@/types'
 
-/** Task 12: placeholder mirroring the built-in monospace fallback stack. */
-const FONT_FAMILY_PLACEHOLDER = "'JetBrains Mono', 'Fira Code', monospace"
+/** Task 12 placeholder — the shared built-in monospace stack (@/theme/fonts). */
+const FONT_FAMILY_PLACEHOLDER = MONO_FONT_STACK
 
 /**
  * P3-1 — Advanced-settings card for the integrated terminal's persisted
