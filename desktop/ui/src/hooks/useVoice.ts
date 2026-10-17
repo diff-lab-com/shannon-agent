@@ -6,7 +6,6 @@ import {
   type VoiceProviderConfig,
   type VoiceProviderError,
 } from '@/lib/voice'
-
 // B4 P2-5: the former TTS half of this hook (speak/stopSpeaking, the
 // cross-instance speaker cancellation and lib/voice/tts.ts) had zero
 // callers — assistant-voice playback is deferred as a future feature.
@@ -16,8 +15,14 @@ export type VoiceState = 'idle' | 'recording' | 'transcribing'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string) => void
-  /** Non-silent provider failures (rejected mic, bad key, network, …). */
-  onError?: (message: string) => void
+  /**
+   * Non-silent provider failures (rejected mic, bad key, network, …).
+   * AI-chat-ux V1: the FULL error (code + message) is handed over — the
+   * code drives the localized copy and the Settings action; the raw
+   * message stays available for the toast's debug line. The old
+   * message-only shape lost exactly the information the UI needed.
+   */
+  onError?: (error: VoiceProviderError) => void
   /**
    * P2-5e: force a specific STT provider. When unset, the hook
    * falls back to the cloud provider (default). Local recordings
@@ -106,7 +111,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const handleError = useCallback((err: VoiceProviderError) => {
     if (!err.silent) {
       setError(err.message)
-      errorRef.current?.(err.message)
+      errorRef.current?.(err)
     }
   }, [])
 

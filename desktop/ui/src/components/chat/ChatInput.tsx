@@ -11,6 +11,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
+import { voiceErrorKey, VOICE_ERROR_SETTINGS_CODES } from '@/lib/voice/errorCopy'
 import AttachmentChip from '@/components/chat/AttachmentChip'
 import SessionUsageDialog from '@/components/chat/SessionUsageDialog'
 import PptOutlineDialog from '@/components/chat/PptOutlineDialog'
@@ -428,12 +429,51 @@ export default function ChatInput({
     // dismissal re-arms automatically once the input stops matching.
     setSlashDismissed(true)
   }
+  // AI-chat-ux V3 — STT setup gate. The old `voice.supported` check only
+  // covered browser capabilities, so an unconfigured user got a mic that
+  // recorded fine and then failed with STT_NOT_CONFIGURED (V1's most
+  // common stop-after error). When the backend reports no provider+key,
+  // the mic renders in the needsSetup state and routes to the STT card
+  // instead. Demo mode keeps the mic live (the mock transcribes).
+  const [sttReady, setSttReady] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (import.meta.env.VITE_MOCK_MODE === '1') {
+      setSttReady(true)
+      return
+    }
+    // No Tauri runtime (jsdom tests, plain-browser dev): the probe would
+    // never answer honestly — leave the state unknown (mic behaves as
+    // before). The capability gate above already hides the mic where
+    // capture itself is impossible.
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+    let cancelled = false
+    api.getSttConfig()
+      .then(cfg => { if (!cancelled) setSttReady(Boolean(cfg?.provider && cfg?.api_key)) })
+      .catch(() => { if (!cancelled) setSttReady(null) })
+    return () => { cancelled = true }
+  }, [])
+
   const voice = useVoice({
     onTranscript: (text) => {
       const merged = value ? `${value} ${text}` : text
       onChange(merged)
     },
-    onError: (msg) => toastError(t('voice.error.title'), msg),
+    // AI-chat-ux V1/V2 — localized, actionable voice errors. The provider
+    // error's CODE picks the copy (the old toast showed the raw English
+    // DOMException under a generic「语音输入出错」title); settings-fixable
+    // codes get a「去设置」action that deep-links to the STT card, and the
+    // raw message rides along in the description for support.
+    onError: (err) => {
+      const localized = t(voiceErrorKey(err))
+      const raw = err.message?.trim()
+      const description = raw && raw !== localized ? `${localized}\n${raw}` : localized
+      toast.error(t('voice.error.title'), {
+        description,
+        action: VOICE_ERROR_SETTINGS_CODES.has(err.code)
+          ? { label: t('voice.error.action.settings'), onClick: () => navigate('/settings/advanced') }
+          : undefined,
+      })
+    },
     // P2-5e: prefer the local provider when the user has enabled
     // it in Settings → Voice. The cloud provider is the fallback
     // (the default) so existing users see no change.
@@ -2044,6 +2084,8 @@ export default function ChatInput({
               <MicButton
                 state={voice.state}
                 disabled={isQuerying}
+                needsSetup={sttReady === false}
+                onOpenSettings={() => navigate('/settings/advanced')}
                 onStart={() => void voice.startRecording()}
                 onStop={() => void voice.stopRecording()}
               />
