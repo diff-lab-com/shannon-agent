@@ -999,6 +999,9 @@ struct Cli {
     /// user-global (`~/.shannon/config.toml`) → project (`.shannon.toml`)
     /// → env-vars (`SHANNON_*`) → connected (`~/.shannon/providers.toml`)
     /// → cli-overlay (this invocation's flags).
+    ///
+    /// When passed together with `--dump-assembly`, `--dump-config` is
+    /// processed first and exits first.
     #[arg(long)]
     dump_config: bool,
 

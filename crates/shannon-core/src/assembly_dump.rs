@@ -28,9 +28,15 @@
 //!
 //! Exposure note: the HTTP face is `GET /api/assembly` on
 //! [`crate::api_server::ShannonApiServer`] (embedder-supplied sources via
-//! `ShannonApiServer::with_assembly_sources`) — the `shannon-server` axum
-//! stack behind `shannon serve` does NOT front this route. Sources a host
+//! `ShannonApiServer::with_assembly_sources`) and on the `shannon-server`
+//! axum stack behind `shannon serve` (serve-time sources only: a bare tool
+//! registry — served sessions register no tools — best-effort hooks and
+//! engine-default compaction; skills/sandbox degrade). Sources a host
 //! never wired degrade to `"unavailable"`/`partial` rather than erroring.
+//!
+//! Secret-disclosure note: hook commands and http/llm URL/prompt payloads
+//! appear verbatim in dump output and in `/api/assembly` — treat dumps as
+//! potentially containing secrets from hook config.
 //!
 //! World-kind note: the sandbox world handles built by the §4.12 assemblies
 //! are consumed by tool registration and not retained
@@ -42,7 +48,7 @@ use crate::query_engine::QueryEngineConfig;
 use crate::tools::ToolRegistry;
 use serde::{Serialize, Serializer};
 use shannon_engine::compact::CompactConfig;
-use shannon_engine::hooks::{HookManager, HookType};
+use shannon_engine::hooks::{HookDef, HookManager, HookType};
 use shannon_skills::{SkillRegistry, SkillSource};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -239,6 +245,11 @@ pub struct HooksSection {
     pub mount_count: usize,
     /// Per-matcher mounts, sorted by (event, matcher, command).
     pub mounts: Vec<HookMount>,
+    /// Hook config files that existed but failed to load in the manager's
+    /// most recent `load()` (`HookManager::load_failures`,
+    /// `"<path>: <error summary>"`) — previously only a tracing warning,
+    /// invisible without a subscriber.
+    pub load_failures: Vec<String>,
 }
 
 /// One hook mount: an event kind + matcher group with its command(s).
@@ -253,7 +264,10 @@ pub struct HookMount {
     pub if_condition: Option<String>,
     /// Execution strategy (`command` / `http` / `llm` / `prompt` / ...).
     pub hook_type: String,
-    /// Shell command (or prompt template / URL payload, per type).
+    /// Shell command; for http/llm hooks (empty `command`, see
+    /// `HookDef::new_http`/`new_llm`) the URL / prompt payload they target —
+    /// 命令,或 http/llm 钩子的 URL/prompt 载荷. Fallback order:
+    /// command → url → prompt_template.
     pub command: String,
     /// Per-hook timeout in seconds.
     pub timeout_secs: u64,
@@ -270,6 +284,23 @@ fn hook_type_str(t: &HookType) -> &'static str {
         HookType::McpTool => "mcp_tool",
         HookType::Agent => "agent",
     }
+}
+
+/// Payload rendered in a mount row's `command` field: the shell command, or —
+/// for http/llm hooks whose `command` is empty (`HookDef::new_http` /
+/// `HookDef::new_llm` keep the target in `url` / `prompt_template`) — the
+/// URL, then the prompt template. An empty-string URL is not a target and
+/// falls through to the prompt template. Previously non-command mounts
+/// rendered `"command": ""`, hiding what the hook actually targets.
+fn hook_mount_command(def: &HookDef) -> String {
+    if !def.command.is_empty() {
+        return def.command.clone();
+    }
+    def.url
+        .clone()
+        .filter(|u| !u.is_empty())
+        .or_else(|| def.prompt_template.clone())
+        .unwrap_or_default()
 }
 
 fn skill_source_str(s: &SkillSource) -> &'static str {
@@ -552,7 +583,7 @@ fn hooks_section(manager: &HookManager) -> HooksSection {
                     matcher: group.matcher.clone(),
                     if_condition: group.if_condition.clone(),
                     hook_type: hook_type_str(&def.r#type).to_string(),
-                    command: def.command.clone(),
+                    command: hook_mount_command(def),
                     timeout_secs: def.timeout,
                     blocking: def.blocking,
                 });
@@ -569,6 +600,7 @@ fn hooks_section(manager: &HookManager) -> HooksSection {
         configured_events: events.keys().map(|k| (*k).clone()).collect(),
         mount_count,
         mounts,
+        load_failures: manager.load_failures().to_vec(),
     }
 }
 
@@ -938,6 +970,82 @@ mod tests {
         mgr
     }
 
+    /// HookManager whose project config mounts http/llm hooks with an empty
+    /// `command` — the shape `HookDef::new_http` / `new_llm` produce
+    /// (`command` has no serde default, so JSON configs must write
+    /// `"command": ""` explicitly; a def without the key fails the whole
+    /// file's parse). Their target lives in `url` / `promptTemplate` — the
+    /// exact case that used to render `"command": ""`.
+    ///
+    /// Hermetic by construction: the path-scoped `load_from_path` merges
+    /// only this fixture file — never the running machine's real home-dir
+    /// hook configs (this test does not exercise `load_failures`).
+    fn fixture_http_llm_manager() -> HookManager {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(
+            &project,
+            r#"{
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "WebFetch",
+                            "hooks": [
+                                {"type": "http", "command": "", "url": "https://example.com/audit"},
+                                {"type": "llm", "command": "", "promptTemplate": "Is {{tool_name}} safe?"},
+                                {"type": "llm", "command": "", "url": "https://example.com/both", "promptTemplate": "should-not-win"},
+                                {"type": "llm", "command": "", "url": "", "promptTemplate": "fallback-after-empty-url"}
+                            ]
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load_from_path(&project)
+            .expect("hooks config loads from the fixture path");
+        mgr
+    }
+
+    /// http/llm mounts fall back to their URL / prompt payload instead of an
+    /// empty `command` string.
+    #[test]
+    fn hooks_section_falls_back_to_url_and_prompt_payload() {
+        let mgr = fixture_http_llm_manager();
+        let section = hooks_section(&mgr);
+        assert_eq!(section.mount_count, 4);
+
+        let payload = |url: &str| {
+            section
+                .mounts
+                .iter()
+                .find(|m| m.command == url)
+                .unwrap_or_else(|| panic!("no mount with payload {url}"))
+        };
+
+        // http hook: empty command falls back to the URL.
+        let http = payload("https://example.com/audit");
+        assert_eq!(http.hook_type, "http");
+
+        // llm hook with only a prompt template: falls back to it.
+        let llm = payload("Is {{tool_name}} safe?");
+        assert_eq!(llm.hook_type, "llm");
+
+        // Fallback order: url wins over prompt_template.
+        let both = payload("https://example.com/both");
+        assert_eq!(both.hook_type, "llm");
+
+        // Degenerate `url: ""` is not a target — falls through to the
+        // prompt template instead of rendering an empty payload.
+        let empty_url = payload("fallback-after-empty-url");
+        assert_eq!(empty_url.hook_type, "llm");
+
+        // No mount renders an empty payload any more.
+        assert!(section.mounts.iter().all(|m| !m.command.is_empty()));
+    }
+
     #[test]
     fn hooks_section_renders_mount_table() {
         let mgr = fixture_hook_manager();
@@ -986,6 +1094,43 @@ mod tests {
         let mut sorted = keys.clone();
         sorted.sort_unstable();
         assert_eq!(keys, sorted);
+    }
+
+    /// A malformed config file that `load()` warn-and-skips shows up in the
+    /// dump's `load_failures` — visible even with no tracing subscriber.
+    #[test]
+    fn hooks_section_surfaces_load_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(&project, "{ this is not valid json").unwrap();
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load()
+            .expect("bad file warns-and-skips; load still succeeds");
+
+        let section = hooks_section(&mgr);
+        assert!(
+            section
+                .load_failures
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "dump must show the skipped config file: {:?}",
+            section.load_failures
+        );
+
+        // Once the file parses again, its entry is gone — re-load replaces
+        // the record (other environment configs, e.g. real home-dir files,
+        // are out of scope).
+        std::fs::write(&project, r#"{"hooks":{}}"#).unwrap();
+        mgr.load().unwrap();
+        assert!(
+            !hooks_section(&mgr)
+                .load_failures
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "fixed file must not linger as a failure: {:?}",
+            hooks_section(&mgr).load_failures
+        );
     }
 
     // ── Skills section ──────────────────────────────────────────────────
@@ -1179,7 +1324,9 @@ mod tests {
     /// Golden snapshot (§4.10 verification standard): pins section shapes,
     /// source derivation, budget accounting and compaction provenance
     /// against silent drift. `generated_at` and the hook config paths are
-    /// blanked — they are environment data (clock / tempdir), not shape.
+    /// blanked — they are environment data (clock / tempdir), not shape —
+    /// and so is `hooks.load_failures` (which picks up whatever real
+    /// home-dir configs fail to parse on the running machine).
     #[test]
     fn assembly_dump_golden_snapshot() {
         let dump = fixture_dump();
@@ -1188,6 +1335,7 @@ mod tests {
         json["hooks"]["user_config_path"] = serde_json::Value::String("[user-hooks-config]".into());
         json["hooks"]["project_config_path"] =
             serde_json::Value::String("[project-hooks-config]".into());
+        json["hooks"]["load_failures"] = serde_json::Value::Array(Vec::new());
         insta::assert_json_snapshot!("assembly_dump_golden", json);
     }
 }

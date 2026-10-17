@@ -31,6 +31,11 @@ pub struct HookManager {
     base_dir: PathBuf,
     /// Optional LLM client for evaluating LLM-type hooks
     llm_client: Option<crate::api::client::LlmClient>,
+    /// Files that existed but failed to load in the most recent [`Self::load`]
+    /// (`"<path>: <error summary>"`). The loop already warn-and-skips them, but
+    /// a warn is invisible without a tracing subscriber — this record lets
+    /// embedders (e.g. the assembly dump) surface skipped config files.
+    load_failures: Vec<String>,
 }
 
 impl std::fmt::Debug for HookManager {
@@ -69,6 +74,7 @@ impl HookManager {
             project_config_path,
             base_dir,
             llm_client: None,
+            load_failures: Vec::new(),
         }
     }
 
@@ -80,6 +86,7 @@ impl HookManager {
             project_config_path: project_path,
             base_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             llm_client: None,
+            load_failures: Vec::new(),
         }
     }
 
@@ -98,6 +105,7 @@ impl HookManager {
             project_config_path,
             base_dir,
             llm_client: None,
+            load_failures: Vec::new(),
         }
     }
 
@@ -119,6 +127,9 @@ impl HookManager {
     /// - `.shannon/hooks.json`
     pub fn load(&mut self) -> Result<(), HookError> {
         let mut combined = HooksFile::new();
+        // Fresh attempt: a file that failed in a previous load but parses now
+        // must not stay reported. Built locally, assigned once at the end.
+        let mut load_failures = Vec::new();
 
         let home_dir = dirs::home_dir().ok_or(HookError::HomeNotFound)?;
         let base = &self.base_dir;
@@ -148,12 +159,14 @@ impl HookManager {
                     }
                     Err(e) => {
                         tracing::warn!("Failed to load hooks from {}: {e}", path.display());
+                        load_failures.push(format!("{}: {e}", path.display()));
                     }
                 }
             }
         }
 
         self.hooks_file = combined;
+        self.load_failures = load_failures;
         Ok(())
     }
 
@@ -810,6 +823,15 @@ Do not include any other text, explanation, or formatting.";
         &self.hooks_file
     }
 
+    /// Get the failures recorded by the most recent [`Self::load`]: one entry
+    /// per config file that existed but failed to parse, as
+    /// `"<path>: <error summary>"`. Empty when every file loaded clean (or
+    /// `load()` has not run yet). Complements the warn-and-skip in the load
+    /// loop, which is silent without a tracing subscriber.
+    pub fn load_failures(&self) -> &[String] {
+        &self.load_failures
+    }
+
     /// Get the list of event types that have configured hooks
     pub fn configured_event_types(&self) -> Vec<HookEventType> {
         self.hooks_file
@@ -1019,6 +1041,68 @@ mod tests {
         // load_from_file returns Ok(empty) for nonexistent files
         assert!(result.is_ok());
         assert!(mgr.hooks_file().hooks.is_empty());
+    }
+
+    // ── load failures (warn-and-skip made visible) ─────────────────────────
+
+    /// A malformed hooks config file is warn-and-skipped by `load()` — the
+    /// warn is invisible without a tracing subscriber, so the failure must
+    /// also land in [`HookManager::load_failures`].
+    #[test]
+    fn load_records_malformed_file_in_load_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+        std::fs::write(&project, "{ this is not valid json").unwrap();
+
+        let mut mgr = HookManager::with_paths(user, project);
+        // A bad file skips, it never fails the load.
+        mgr.load().expect("malformed file must not fail load()");
+
+        assert!(
+            !mgr.load_failures().is_empty(),
+            "malformed config file must be recorded in load_failures"
+        );
+        assert!(
+            mgr.load_failures()
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "failure entry must name the file: {:?}",
+            mgr.load_failures()
+        );
+    }
+
+    /// A clean load reports no failures for the loaded file, and a re-load
+    /// replaces the previous attempt's record (a fixed file must not linger
+    /// as a failure). Other environment configs (real home-dir files) are
+    /// out of scope — only this fixture's entry is asserted on.
+    #[test]
+    fn load_failures_reset_on_each_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user-hooks.json");
+        let project = tmp.path().join("project-hooks.json");
+
+        std::fs::write(&project, "{ broken").unwrap();
+        let mut mgr = HookManager::with_paths(user, project.clone());
+        mgr.load().unwrap();
+        assert!(
+            mgr.load_failures()
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "broken fixture file must be recorded: {:?}",
+            mgr.load_failures()
+        );
+
+        std::fs::write(&project, r#"{"hooks":{}}"#).unwrap();
+        mgr.load().unwrap();
+        assert!(
+            !mgr.load_failures()
+                .iter()
+                .any(|f| f.contains("project-hooks.json")),
+            "re-load must replace the previous failures (entry for the fixed \
+             file must be gone): {:?}",
+            mgr.load_failures()
+        );
     }
 
     // ── Debug trait ────────────────────────────────────────────────────────
