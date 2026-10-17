@@ -35,18 +35,21 @@ export function toSlashSkillEntry(info: SkillInfo): SlashSkillEntry {
 }
 
 /**
- * Fetch installed skills for the menu. Resolves to [] on error OR timeout
- * (default 3s) so the static command table remains immediately usable —
+ * Fetch installed skills for the menu. AI-chat-ux C1: resolves to
+ * `{ entries, degraded }` — `degraded` distinguishes "no skills installed"
+ * (a normal state) from "the backend never answered" (error OR timeout,
+ * default 3s), so the menu can say so instead of silently hiding half the
+ * surface. The static command table remains immediately usable either way —
  * the merge never blocks the composer on a slow backend.
  */
-export async function fetchSlashSkills(timeoutMs = 3000): Promise<SlashSkillEntry[]> {
+export async function fetchSlashSkills(timeoutMs = 3000): Promise<{ entries: SlashSkillEntry[]; degraded: boolean }> {
   const timeout = new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs))
   try {
     const result = await Promise.race([api.listSkills(), timeout])
-    if (!result) return []
-    return result.map(toSlashSkillEntry)
+    if (!result) return { entries: [], degraded: true }
+    return { entries: result.map(toSlashSkillEntry), degraded: false }
   } catch {
-    return []
+    return { entries: [], degraded: true }
   }
 }
 

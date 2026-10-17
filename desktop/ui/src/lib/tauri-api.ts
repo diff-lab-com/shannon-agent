@@ -155,6 +155,13 @@ export async function checkAttachmentPaths(paths: string[]): Promise<AttachmentP
 export async function savePastedImage(dataBase64: string, ext: string): Promise<string> {
   return invoke('save_pasted_image', { dataBase64, ext })
 }
+/** AI-chat-ux C6 — persist a non-image file pasted into the composer. The
+ *  webview clipboard carries the content, never an absolute path, so the
+ *  file is re-created under its own (sanitized) name in the pasted cache
+ *  and the absolute path comes back for the attachment pipeline. */
+export async function savePastedFile(dataBase64: string, ext: string, fileName: string): Promise<string> {
+  return invoke('save_pasted_file', { dataBase64, ext, fileName })
+}
 
 /**
  * H2 P1-4 — persist a long-text composer paste as a UTF-8 `.txt` in the

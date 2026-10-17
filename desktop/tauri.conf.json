@@ -43,6 +43,9 @@
                 ]
             }
         },
+        "macOS": {
+            "infoPlist": "./macos/InfoPlist.plist"
+        },
         "windows": {
             "nsis": {
                 "installerHooks": "./nsis/hooks.nsh"

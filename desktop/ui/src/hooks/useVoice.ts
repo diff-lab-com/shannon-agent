@@ -6,7 +6,6 @@ import {
   type VoiceProviderConfig,
   type VoiceProviderError,
 } from '@/lib/voice'
-
 // B4 P2-5: the former TTS half of this hook (speak/stopSpeaking, the
 // cross-instance speaker cancellation and lib/voice/tts.ts) had zero
 // callers — assistant-voice playback is deferred as a future feature.
@@ -16,8 +15,14 @@ export type VoiceState = 'idle' | 'recording' | 'transcribing'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string) => void
-  /** Non-silent provider failures (rejected mic, bad key, network, …). */
-  onError?: (message: string) => void
+  /**
+   * Non-silent provider failures (rejected mic, bad key, network, …).
+   * AI-chat-ux V1: the FULL error (code + message) is handed over — the
+   * code drives the localized copy and the Settings action; the raw
+   * message stays available for the toast's debug line. The old
+   * message-only shape lost exactly the information the UI needed.
+   */
+  onError?: (error: VoiceProviderError) => void
   /**
    * P2-5e: force a specific STT provider. When unset, the hook
    * falls back to the cloud provider (default). Local recordings
@@ -43,6 +48,11 @@ export interface UseVoiceResult {
   partialTranscript: string
   error: string | null
   supported: boolean
+  /** V5 — live capture loudness (0..1, ~10 Hz). 0 while idle. */
+  level: number
+  /** V5 — wall-clock ms timestamp of the current recording's start, for
+   *  elapsed-time display; null while not recording. */
+  recordingStartedAt: number | null
   startRecording: () => Promise<void>
   stopRecording: () => Promise<void>
   reset: () => void
@@ -73,6 +83,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // V5 — capture loudness + start wall clock for the recording strip.
+  const [level, setLevel] = useState(0)
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
 
   const transcriptRef = useRef(onTranscript)
   transcriptRef.current = onTranscript
@@ -106,7 +119,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const handleError = useCallback((err: VoiceProviderError) => {
     if (!err.silent) {
       setError(err.message)
-      errorRef.current?.(err.message)
+      errorRef.current?.(err)
     }
   }, [])
 
@@ -144,6 +157,8 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setError(null)
     setState('recording')
     setPartialTranscript('')
+    setLevel(0)
+    setRecordingStartedAt(Date.now())
     const provider = providerRef.current
     if (!provider) return
     try {
@@ -158,12 +173,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         },
         onError: (err) => {
           handleError(err)
+          setLevel(0)
+          setRecordingStartedAt(null)
           setState((s) => (s === 'recording' ? 'idle' : s))
         },
         onEnd: () => {
           setPartialTranscript('')
+          setLevel(0)
+          setRecordingStartedAt(null)
           setState((s) => (s === 'recording' || s === 'transcribing' ? 'idle' : s))
         },
+        onLevel: setLevel,
       })
     } catch (err) {
       handleError({
@@ -179,6 +199,8 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     if (!provider) return
     setState('transcribing')
     setPartialTranscript('')
+    setLevel(0)
+    setRecordingStartedAt(null)
     try {
       await provider.stop()
     } catch {
@@ -193,7 +215,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setState('idle')
     setPartialTranscript('')
     setError(null)
+    setLevel(0)
+    setRecordingStartedAt(null)
   }, [])
 
-  return { state, partialTranscript, error, supported, startRecording, stopRecording, reset }
+  return { state, partialTranscript, error, supported, level, recordingStartedAt, startRecording, stopRecording, reset }
 }

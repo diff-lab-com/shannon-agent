@@ -176,3 +176,91 @@ describe('ChatInput @ file mentions (GB P2-10b)', () => {
     expect(screen.queryByRole('listbox', { name: 'File mentions' })).not.toBeInTheDocument()
   })
 })
+
+// ── AI-chat-ux C1/C2/C4 — visibility + chips + folder drill-down ─────────
+
+describe('ChatInput @ mentions (C1 empty state / C2 chips / C4 directories)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    document.querySelectorAll('[role="listbox"]').forEach(n => n.remove())
+    document.querySelectorAll('[data-testid="mention-empty-state"]').forEach(n => n.remove())
+  })
+
+  it('C1: with no working dir the @ menu shows an explicit empty state + dir chooser', async () => {
+    // The file index still answers without a working dir — silence it too,
+    // so the candidate universe is genuinely empty.
+    vi.mocked(api.listFileIndex).mockResolvedValue([])
+    renderMentionHost({ sessionWorkingDir: undefined })
+    await waitFor(() => expect(api.listFileIndex).toHaveBeenCalled())
+    expect(api.getFileTree).not.toHaveBeenCalled()
+    fireEvent.change(textarea(), { target: { value: '@ma' } })
+    const empty = await screen.findByTestId('mention-empty-state')
+    expect(empty).toHaveTextContent('No working directory set')
+    expect(screen.getByTestId('mention-empty-choose-dir')).toBeTruthy()
+    // No listbox ever renders — the empty state replaces it.
+    expect(screen.queryByRole('listbox', { name: 'File mentions' })).not.toBeInTheDocument()
+  })
+
+  it('C1: with a working dir but no matches, the empty state says so', async () => {
+    renderMentionHost()
+    await waitFor(() => expect(api.getFileTree).toHaveBeenCalled())
+    fireEvent.change(textarea(), { target: { value: '@zzzznothing' } })
+    const empty = await screen.findByTestId('mention-empty-state')
+    expect(empty).toHaveTextContent('No matching files')
+  })
+
+  it('C4: picking a directory drills in (@docs/, menu stays open)', async () => {
+    renderMentionHost()
+    await waitFor(() => expect(api.getFileTree).toHaveBeenCalled())
+    fireEvent.change(textarea(), { target: { value: '@docs' } })
+    const listbox = await screen.findByRole('listbox', { name: 'File mentions' })
+    // Both the directory and its children match — the DIR row carries the
+    // folder icon and the drill-in chevron.
+    const dirOption = within(listbox)
+      .getAllByRole('option', { name: /docs/ })
+      .find(o => o.querySelector('.material-symbols-outlined')?.textContent === 'folder')
+    if (!dirOption) throw new Error('dir option not in the listbox')
+    fireEvent.mouseDown(dirOption)
+    // Trailing slash, NO trailing space — the query keeps matching so the
+    // menu drills into the folder.
+    expect(textarea()).toHaveValue('@docs/')
+    expect(screen.getByRole('listbox', { name: 'File mentions' })).toBeTruthy()
+  })
+
+  it('C2: picked mentions render as removable chips; × splices the token out', async () => {
+    renderMentionHost()
+    await waitFor(() => expect(api.getFileTree).toHaveBeenCalled())
+    fireEvent.change(textarea(), { target: { value: 'see @main' } })
+    const listbox = await screen.findByRole('listbox', { name: 'File mentions' })
+    fireEvent.mouseDown(within(listbox).getByRole('option', { name: /main\.rs/ }))
+    expect(textarea()).toHaveValue('see @main.rs ')
+
+    const chips = await screen.findByTestId('mention-chips')
+    expect(chips).toHaveTextContent('main.rs')
+    // Remove → the token and its preceding space leave the text (the
+    // trailing insertion space stays as the draft's separation).
+    fireEvent.click(within(chips).getByRole('button'))
+    expect(textarea()).toHaveValue('see ')
+    expect(screen.queryByTestId('mention-chips')).not.toBeInTheDocument()
+  })
+
+  it('C2: onMentionPathsChange reports the resolved reference paths', async () => {
+    const onMentionPathsChange = vi.fn()
+    renderMentionHost({ onMentionPathsChange })
+    await waitFor(() => expect(api.getFileTree).toHaveBeenCalled())
+    fireEvent.change(textarea(), { target: { value: 'look @guide' } })
+    const listbox = await screen.findByRole('listbox', { name: 'File mentions' })
+    fireEvent.mouseDown(within(listbox).getByRole('option', { name: /guide\.md/ }))
+    await waitFor(() =>
+      expect(onMentionPathsChange).toHaveBeenLastCalledWith(['/w/docs/guide.md']),
+    )
+    // Clearing the text reports an empty set (the send merge reads this).
+    fireEvent.change(textarea(), { target: { value: '' } })
+    await waitFor(() =>
+      expect(onMentionPathsChange).toHaveBeenLastCalledWith([]),
+    )
+  })
+})

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Partial Info.plist merged into the Tauri-generated one at bundle time
+  (`bundle > macOS > infoPlist` in tauri.conf.json — tauri-utils MacConfig
+  .info_plist deep-merges these keys over the template).
+
+  AI-chat-ux V4: without NSMicrophoneUsageDescription macOS TCC silently
+  denies getUserMedia to the signed app (tauri-apps/tauri#10898,
+  #11951) — the composer's mic button then fails with「语音输入出错 /
+  Permission denied」on every recording. The voice-input feature
+  (composer mic → whisper STT) is the only microphone consumer.
+
+  Note: TCC prompts only fire for a BUNDLED (and signed) app; `tauri dev`
+  runs unsigned and typically never prompts — test voice on a packaged
+  build.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Shannon uses the microphone for voice input in the chat composer. Recordings are transcribed to text by the speech-to-text provider you configure in Settings.</string>
+  </dict>
+</plist>

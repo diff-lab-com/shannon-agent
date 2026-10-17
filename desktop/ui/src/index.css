@@ -829,3 +829,28 @@
     -webkit-backdrop-filter: none !important;
   }
 }
+
+/* Integrated terminal drawer (AI-chat-ux T4): xterm's `.xterm-viewport`
+   otherwise renders the stock 15px OS scrollbar, which clashes with the
+   app's 6px themed `custom-scrollbar` everywhere else. Same visual
+   contract — 6px, transparent track, `--color-outline-variant` thumb —
+   written as a scoped descendant rule because the viewport div is created
+   by xterm itself (no place to put a utility class). */
+.shannon-terminal-scroll .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-outline-variant) transparent;
+}
+.shannon-terminal-scroll .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.shannon-terminal-scroll .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.shannon-terminal-scroll .xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 9999px;
+}
+.shannon-terminal-scroll .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}

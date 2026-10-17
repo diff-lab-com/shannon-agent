@@ -168,6 +168,32 @@ pub struct ToolEntry {
     pub description: String,
 }
 
+// ── Skills listing (AI-chat-ux C7, 2026-10) ─────────────────────────────
+
+/// JSON response for `GET /v1/skills`. The desktop keeps its in-process
+/// Tauri `list_skills`; this REST surface exists so remote/multi-client
+/// frontends can render the same slash-skill menu without a desktop sidecar.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct SkillsResponse {
+    pub skills: Vec<SkillSummary>,
+}
+
+/// One user-invocable skill, wire-shaped like the desktop's `SkillInfo` so
+/// a client can reuse its slash-menu rendering across surfaces. `trigger`
+/// always carries the leading `/` (REPL convention).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    pub trigger: String,
+    /// Loading origin: `user` | `project` | `bundled` | `managed` | `mcp` |
+    /// `commands_deprecated` | `plugin` (snake_case mirror of the engine's
+    /// `SkillSource`; new variants serialize as their snake_case name).
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+}
+
 // ── Approval wire types (P0-b) ──────────────────────────────────────────
 
 /// Wire representation of a human's approval decision for `POST

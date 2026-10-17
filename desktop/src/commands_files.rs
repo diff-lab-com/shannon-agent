@@ -577,6 +577,94 @@ pub async fn save_pasted_text(content: String) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// AI-chat-ux C6 — persist a NON-IMAGE file the composer pasted (OS
+/// file-manager copies carry content, never an absolute path, in the
+/// webview clipboard). The file is re-created under its own (sanitized)
+/// name in the same pasted cache as [`save_pasted_image`], so it rides the
+/// regular attachment pipeline (absolute path → preflight → read at send).
+/// The 25 MiB gate mirrors `MAX_ATTACHMENT_SIZE` — pasted files are
+/// attachments, not images, so the tighter 10 MiB image cap does not apply.
+/// No magic-byte check: the extension is decorative here (kept for the
+/// chip/preflight), the content is stored verbatim.
+#[tauri::command]
+pub async fn save_pasted_file(
+    data_base64: String,
+    ext: String,
+    file_name: String,
+) -> Result<String, String> {
+    let dir = crate::pasted_image_cache_dir()
+        .ok_or_else(|| "cannot resolve a home directory for the pasted cache".to_string())?;
+    let path = tokio::task::spawn_blocking(move || {
+        save_pasted_file_inner(&dir, &data_base64, &ext, &file_name)
+    })
+    .await
+    .map_err(|e| format!("pasted file task failed: {e}"))??;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Core of [`save_pasted_file`] — pure over `(base_dir, base64, ext, name)`.
+fn save_pasted_file_inner(
+    base_dir: &Path,
+    data_base64: &str,
+    ext: &str,
+    file_name: &str,
+) -> Result<PathBuf, String> {
+    use base64::Engine as _;
+
+    // Extension: decorative but bounded — lowercase alnum, ≤ 16 chars, no
+    // separators (a junk name degrades to `bin`, never smuggles a path).
+    let ext = {
+        let cleaned: String = ext
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(16)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if cleaned.is_empty() { "bin".to_string() } else { cleaned }
+    };
+    // Display name: basename only (any path separator ends the trusted
+    // region), control chars stripped, capped, never empty.
+    let safe_name = {
+        let base = file_name
+            .replace('\\', "/")
+            .rsplit('/')
+            .next()
+            .unwrap_or("pasted-file")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(120)
+            .collect::<String>();
+        if base.is_empty() { "pasted-file".to_string() } else { base }
+    };
+    if data_base64.is_empty() {
+        return Err("pasted file is empty".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("pasted file is not valid base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("pasted file is empty".into());
+    }
+    if bytes.len() as u64 > MAX_ATTACHMENT_SIZE {
+        return Err(format!(
+            "pasted file exceeds the {} MiB attachment cap",
+            MAX_ATTACHMENT_SIZE / (1024 * 1024)
+        ));
+    }
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let rand8 = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+    // `<millis>-<rand8>-<safe_name>` keeps the original name recognizable
+    // on the chip while staying unique inside the shared pasted cache.
+    let target = base_dir.join(format!("{millis}-{rand8}-{safe_name}.{ext}"));
+    std::fs::create_dir_all(base_dir)
+        .map_err(|e| format!("failed to create pasted cache dir: {e}"))?;
+    std::fs::write(&target, &bytes).map_err(|e| format!("failed to write pasted file: {e}"))?;
+    Ok(target)
+}
+
 /// Internal helper for [`check_attachment_paths`] — pure over
 /// (configured working dir, paths) so tests drive it without app state.
 pub(crate) fn check_attachment_paths_inner(

@@ -39,6 +39,11 @@ export interface ComposerContextValue {
   editing: EditingMessageState | null
   /** Exit edit mode and restore the pre-edit draft. */
   cancelEdit: () => void
+  /** AI-chat-ux C3 — the draft's resolved `@` reference paths, reported by
+   *  ChatInput on every change; the send paths merge them into the
+   *  attachment list (deterministic reference injection). */
+  mentionPaths: string[]
+  setMentionPaths: (paths: string[]) => void
 }
 
 export const ComposerContext = createContext<ComposerContextValue | null>(null)

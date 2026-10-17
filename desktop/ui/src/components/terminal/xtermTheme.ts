@@ -32,6 +32,25 @@ function readVar(name: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+/**
+ * Apply an alpha to a theme color. Generated theme tokens are all hex
+ * (`scripts/generate-themes.mjs` emits `#rrggbb`, no oklch/color-mix —
+ * see styles/README), which is exactly what xterm's theme parser accepts;
+ * anything else (already-rgba, named) comes back unchanged and the caller
+ * falls back to the opaque color. T5 (AI-chat-ux) uses this to dim the
+ * INACTIVE selection below the active one instead of reusing the border
+ * token, which was nearly invisible in light themes.
+ */
+function withAlpha(color: string, alpha: number): string {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!hex) return color;
+  const value = parseInt(hex[1], 16);
+  const r = (value >> 16) & 0xff;
+  const g = (value >> 8) & 0xff;
+  const b = value & 0xff;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 /** Light-scheme base + ANSI palette (AA on light surfaces) — the floor for
  * themes without an identity `ansi` block (material/ember/slate). */
 const ANSI_LIGHT: Pick<
@@ -104,9 +123,14 @@ export function xtermThemeFor(
       readVar('--color-on-primary') ?? palette?.background ?? (mode === 'dark' ? '#1a1b26' : '#ffffff');
   }
   const selection = readVar('--color-secondary-container');
-  if (selection) theme.selectionBackground = selection;
-  const border = readVar('--color-outline-variant');
-  if (border) theme.selectionInactiveBackground = border;
+  if (selection) {
+    theme.selectionBackground = selection;
+    // T5 (AI-chat-ux): the INACTIVE (unfocused) selection is the same tint
+    // at half strength — visible in both schemes, clearly secondary to the
+    // active selection. The old mapping reused `--color-outline-variant`
+    // (a border color ≈ the surface), which rendered nearly invisible.
+    theme.selectionInactiveBackground = withAlpha(selection, 0.5);
+  }
   return theme;
 }
 

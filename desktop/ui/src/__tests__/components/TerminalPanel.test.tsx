@@ -61,6 +61,12 @@ const h = vi.hoisted(() => ({
     dispose: () => void
     disposed: boolean
   }[],
+  /** T3: every WebglAddon the panel created (one per terminal), in order. */
+  webglAddons: [] as {
+    disposed: boolean
+    contextLossHandler: (() => void) | null
+    dispose: () => void
+  }[],
   outputHandler: null as ((payload: { terminalId: string; data: string; seq?: number }) => void) | null,
   exitHandler: null as ((payload: { terminalId: string }) => void) | null,
   unsubscribed: false,
@@ -141,6 +147,24 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }))
 
+// T3 (AI-chat-ux): the panel optionally loads the WebGL renderer on every
+// terminal it creates. The fake records the instances so the auto-fallback
+// contract (load → context-loss → dispose) is testable.
+vi.mock('@xterm/addon-webgl', () => ({
+  WebglAddon: class {
+    disposed = false
+    contextLossHandler: (() => void) | null = null
+    constructor() {
+      h.webglAddons.push(this)
+    }
+    onContextLoss(cb: () => void) {
+      this.contextLossHandler = cb
+      return { dispose: () => {} }
+    }
+    dispose() { this.disposed = true }
+  },
+}))
+
 vi.mock('@/lib/tauri-api', () => ({
   terminalSpawn: vi.fn(),
   terminalWrite: vi.fn(),
@@ -195,6 +219,7 @@ beforeEach(() => {
   document.documentElement.removeAttribute('data-theme')
   h.terminals.length = 0
   h.fits.length = 0
+  h.webglAddons.length = 0
   h.outputHandler = null
   h.exitHandler = null
   h.gateOutput = null
@@ -1141,6 +1166,71 @@ describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () =
     vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS, fontFamily: null })
     await openPanel()
     await waitFor(() => expect(h.terminals.length).toBe(1))
+    // T1 (AI-chat-ux): the built-in stack leads with the self-hosted
+    // variable-font name — the old static 'JetBrains Mono' first candidate
+    // never matched the bundled webfont.
+    expect(h.terminals[0].options.fontFamily).toContain('JetBrains Mono Variable')
     expect(h.terminals[0].options.fontFamily).toContain('monospace')
+  })
+
+  it('applies the T2 typography defaults when settings fail to load', async () => {
+    // T2 (AI-chat-ux): the built-in defaults apply on the no-settings path
+    // (backend down / plain browser) — 13px, 1.15 line-height, 4.5:1 floor.
+    vi.mocked(api.terminalGetSettings).mockRejectedValue(new Error('no backend'))
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    expect(h.terminals[0].options.fontSize).toBe(13)
+    expect(h.terminals[0].options.lineHeight).toBe(1.15)
+    expect(h.terminals[0].options.minimumContrastRatio).toBe(4.5)
+  })
+
+  it('loads the WebGL renderer per terminal and disposes it on context loss', async () => {
+    // T3 (AI-chat-ux): every created terminal attaches the WebGL addon
+    // (auto policy); a context-loss callback must dispose the addon so
+    // xterm falls back to the DOM renderer.
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    await waitFor(() => expect(h.webglAddons.length).toBe(1))
+    expect(h.webglAddons[0].disposed).toBe(false)
+    act(() => h.webglAddons[0].contextLossHandler?.())
+    expect(h.webglAddons[0].disposed).toBe(true)
+    // The terminal itself survives the fallback (no dispose, no exit).
+    expect(h.terminals[0].disposed).toBe(false)
+  })
+
+  it('hot-applies a settings save to LIVE terminals (T6)', async () => {
+    // T6 (AI-chat-ux): the Settings card's `shannon:terminal-settings-changed`
+    // event re-geometries live xterm instances (font/scrollback/screen
+    // reader) and the drawer height — no new tab required.
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:terminal-settings-changed', {
+        detail: { ...DEFAULT_SETTINGS, fontSize: 17, scrollback: 9000, drawerHeight: 540, screenReaderMode: true, fontFamily: "'Cascadia Mono'" },
+      }))
+    })
+    expect(h.terminals[0].options.fontSize).toBe(17)
+    expect(h.terminals[0].options.fontFamily).toBe("'Cascadia Mono'")
+    expect(h.terminals[0].options.scrollback).toBe(9000)
+    expect(h.terminals[0].options.screenReaderMode).toBe(true)
+    const region = screen.getByRole('region', { name: 'Integrated terminal' })
+    expect(region.getAttribute('style')).toContain('height: 540px')
+
+    // Later tabs are created straight from the updated settings.
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await waitFor(() => expect(h.terminals.length).toBe(2))
+    expect(h.terminals[1].options.fontSize).toBe(17)
+  })
+
+  it('ignores a malformed settings-changed payload (T6 robustness)', async () => {
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:terminal-settings-changed', { detail: undefined }))
+    })
+    expect(h.terminals[0].options.fontSize).toBe(12)
   })
 })

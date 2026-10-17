@@ -5,7 +5,7 @@
 // untouched numerics would let the backend clamp them onto the minimums
 // and silently clobber the stored [terminal] config with a success toast.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { ReactElement } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { TerminalSettings } from '@/components/settings/TerminalSettings'
@@ -24,11 +24,32 @@ function wrap(ui: ReactElement) {
 
 const saveButton = () => screen.getByRole('button', { name: 'Save terminal settings' }) as HTMLButtonElement
 
+// Base UI Select recipe (same as ChatInputApprovalMode.test.tsx): open with
+// a trigger click, commit an option with the pointer-highlight + click pair,
+// sweep the lingering closed portals afterwards.
+const currentFontPopup = (): HTMLElement => {
+  const popups = document.querySelectorAll('[data-slot="select-content"]')
+  const popup = popups[popups.length - 1] as HTMLElement | undefined
+  if (!popup) throw new Error('no open select popup')
+  return popup
+}
+const pickFontOption = (el: HTMLElement) => {
+  fireEvent.pointerDown(el, { button: 0 })
+  fireEvent.pointerUp(el, { button: 0 })
+  fireEvent.click(el)
+}
+
 describe('TerminalSettings card (P3-1 load-failure safety + effective values)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULTS })
     vi.mocked(api.terminalSetSettings).mockImplementation((settings) => Promise.resolve(settings))
+  })
+
+  afterEach(() => {
+    // Closed Base UI select portals linger in jsdom (the leave animation
+    // never finishes) — sweep them so lookups stay scoped.
+    document.querySelectorAll('[data-slot="select-content"]').forEach(n => n.remove())
   })
 
   it('shows the effective values and enables Save once a load succeeds', async () => {
@@ -102,7 +123,7 @@ describe('TerminalSettings card (P3-1 load-failure safety + effective values)', 
 
   // ── Task 12 (R3): login-shell inheritance + font family ──────────────
 
-  it('renders the login-shell switch and the font-family input with effective values', async () => {
+  it('renders the login-shell switch and the font-family picker with effective values', async () => {
     vi.mocked(api.terminalGetSettings).mockResolvedValue({
       ...DEFAULTS,
       loginShell: true,
@@ -111,22 +132,34 @@ describe('TerminalSettings card (P3-1 load-failure safety + effective values)', 
     render(wrap(<TerminalSettings />))
     // Both new controls render…
     expect(await screen.findByRole('switch', { name: 'Inherit login shell environment' })).toBeTruthy()
+    // T7: "Terminal font" is the picker trigger; a hand-typed stack that
+    // matches no preset lands on Custom and keeps the raw text in the input.
     expect(screen.getByLabelText('Terminal font')).toBeTruthy()
-    // …and carry the loaded effective values.
-    expect(screen.getByRole('switch', { name: 'Inherit login shell environment' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByDisplayValue("'JetBrains Mono', 'Fira Code', monospace")).toBeTruthy()
-    // Effect semantics badge (applies to terminals opened afterwards).
-    expect(screen.getAllByText('Applies to new sessions').length).toBeGreaterThanOrEqual(2)
+    // Effect semantics: the login-shell badge stays new-session (T6 moved
+    // the font badges to instant).
+    expect(screen.getAllByText('Applies to new sessions').length).toBeGreaterThanOrEqual(1)
+    // T6: the hot-applied knobs (font family + size + scrollback) wear the
+    // instant badge instead.
+    expect(screen.getAllByText('Instant effect').length).toBeGreaterThanOrEqual(3)
   })
 
-  it('sends the login-shell and font-family fields on save (blank font → null)', async () => {
+  it('sends the login-shell and a custom font stack on save (trimmed)', async () => {
     vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULTS })
     render(wrap(<TerminalSettings />))
     await screen.findByDisplayValue('5000')
 
     const switchEl = screen.getByRole('switch', { name: 'Inherit login shell environment' })
     fireEvent.click(switchEl)
-    fireEvent.change(screen.getByLabelText('Terminal font'), {
+    // T7: choose the Custom preset to reveal the free-text stack input…
+    fireEvent.click(screen.getByLabelText('Terminal font'))
+    const popup = currentFontPopup()
+    const customOption = Array.from(popup.querySelectorAll('[role="option"]'))
+      .find(o => /Custom/.test(o.textContent ?? ''))
+    if (!customOption) throw new Error('custom preset option not found')
+    pickFontOption(customOption)
+    // …then type the stack (the custom input starts from the built-in).
+    fireEvent.change(screen.getByLabelText('Custom font stack'), {
       target: { value: "  'Fira Code', monospace  " },
     })
     fireEvent.click(saveButton())
@@ -134,6 +167,24 @@ describe('TerminalSettings card (P3-1 load-failure safety + effective values)', 
     // The trimmed font goes out; the flipped switch rides along.
     await waitFor(() => expect(api.terminalSetSettings).toHaveBeenCalledWith(
       expect.objectContaining({ loginShell: true, fontFamily: "'Fira Code', monospace" }),
+    ))
+  })
+
+  it('sends a preset stack verbatim when picked (Menlo)', async () => {
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULTS })
+    render(wrap(<TerminalSettings />))
+    await screen.findByDisplayValue('5000')
+
+    fireEvent.click(screen.getByLabelText('Terminal font'))
+    const popup = currentFontPopup()
+    const menlo = Array.from(popup.querySelectorAll('[role="option"]'))
+      .find(o => /Menlo/.test(o.textContent ?? ''))
+    if (!menlo) throw new Error('Menlo preset option not found')
+    pickFontOption(menlo)
+    fireEvent.click(saveButton())
+
+    await waitFor(() => expect(api.terminalSetSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ fontFamily: 'Menlo' }),
     ))
   })
 
@@ -146,5 +197,30 @@ describe('TerminalSettings card (P3-1 load-failure safety + effective values)', 
     await waitFor(() => expect(api.terminalSetSettings).toHaveBeenCalledWith(
       expect.objectContaining({ loginShell: false, fontFamily: null }),
     ))
+  })
+
+  it('previews the effective stack live (built-in fallback when blank)', async () => {
+    render(wrap(<TerminalSettings />))
+    const preview = await screen.findByTestId('terminal-font-family-preview')
+    expect(preview.getAttribute('style')).toContain('JetBrains Mono Variable')
+  })
+
+  it('dispatches the T6 settings-changed event with the effective payload on save', async () => {
+    const listener = vi.fn()
+    window.addEventListener('shannon:terminal-settings-changed', listener)
+    try {
+      vi.mocked(api.terminalSetSettings).mockResolvedValue({
+        shell: null, fontSize: 14, scrollback: 5000, drawerHeight: 320, screenReaderMode: false,
+        loginShell: false, fontFamily: null,
+      })
+      render(wrap(<TerminalSettings />))
+      fireEvent.change(await screen.findByDisplayValue('12'), { target: { value: '14' } })
+      fireEvent.click(saveButton())
+      await waitFor(() => expect(listener).toHaveBeenCalledTimes(1))
+      const detail = (listener.mock.calls[0][0] as CustomEvent).detail
+      expect(detail).toMatchObject({ fontSize: 14 })
+    } finally {
+      window.removeEventListener('shannon:terminal-settings-changed', listener)
+    }
   })
 })

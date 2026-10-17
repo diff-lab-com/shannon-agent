@@ -3,11 +3,17 @@
 import { describe, it, expect } from 'vitest'
 import {
   activeMentionQuery,
+  caretAfterDirectoryMentionInsert,
   caretAfterMentionInsert,
   filterMentionCandidates,
   flattenFileTree,
+  flattenFileTreeDirs,
+  insertDirectoryMention,
   insertMention,
+  mentionTokensIn,
   relativeToWorkingDir,
+  removeMentionToken,
+  resolveMentionToken,
   subsequenceStart,
 } from '@/lib/fileMention'
 import type { FileNode } from '@/lib/tauri-api'
@@ -136,5 +142,77 @@ describe('flattenFileTree', () => {
     expect(flattenFileTree(null)).toEqual([])
     const many: FileNode[] = Array.from({ length: 20 }, (_, i) => ({ name: `f${i}`, path: `/f${i}`, type: 'file' }))
     expect(flattenFileTree(many, 5)).toHaveLength(5)
+  })
+})
+
+// ── AI-chat-ux C2/C3/C4 — committed-mention helpers ──────────────────────
+
+describe('mentionTokensIn / resolveMentionToken / removeMentionToken (C2/C3)', () => {
+  it('extracts every @token with its exact span, emails untouched', () => {
+    expect(mentionTokensIn('@a.ts')).toEqual([{ raw: 'a.ts', start: 0, end: 5 }])
+    const spans = mentionTokensIn('see @src/a.ts and mail user@example.com then @b')
+    expect(spans.map(t => t.raw)).toEqual(['src/a.ts', 'b'])
+    // Spans point AT the `@` and end after the token.
+    const text = 'see @src/a.ts'
+    expect(text.slice(spans[0].start, spans[0].end)).toBe('@src/a.ts')
+  })
+
+  it('resolves relative and verbatim tokens against the candidates', () => {
+    const candidates = ['/w/src/a.ts', '/outside/x.md']
+    expect(resolveMentionToken('src/a.ts', candidates, '/w')).toBe('/w/src/a.ts')
+    expect(resolveMentionToken('/outside/x.md', candidates, '/w')).toBe('/outside/x.md')
+    expect(resolveMentionToken('missing.ts', candidates, '/w')).toBeNull()
+  })
+
+  it('removeMentionToken splices the @token plus one space per side', () => {
+    // Preceding + trailing space both swallowed.
+    expect(removeMentionToken('see @a.ts now', { raw: 'a.ts', start: 4, end: 9 })).toBe('see now')
+    // Token at start: only the trailing space goes.
+    expect(removeMentionToken('@a.ts now', { raw: 'a.ts', start: 0, end: 5 })).toBe('now')
+    // No spaces around: clean cut.
+    expect(removeMentionToken('@a.ts', { raw: 'a.ts', start: 0, end: 5 })).toBe('')
+  })
+})
+
+describe('insertDirectoryMention (C4)', () => {
+  const query = { token: 'doc', startPos: 0, endPos: 4 }
+  it('inserts @dir/ with NO trailing space (the query keeps matching)', () => {
+    expect(insertDirectoryMention('@doc', query, '/w/docs', '/w')).toBe('@docs/')
+  })
+  it('computes the caret inside the trailing slash', () => {
+    expect(caretAfterDirectoryMentionInsert(query, '/w/docs', '/w')).toBe(6)
+  })
+})
+
+describe('flattenFileTreeDirs (C4)', () => {
+  const tree: FileNode[] = [
+    {
+      name: 'w', path: '/w', type: 'directory',
+      children: [
+        { name: 'src', path: '/w/src', type: 'directory', children: [
+          { name: 'a.ts', path: '/w/src/a.ts', type: 'file' },
+        ] },
+        { name: 'node_modules', path: '/w/node_modules', type: 'directory', children: [] },
+      ],
+    },
+  ]
+  it('collects directory paths parent-first and prunes ignored dirs', () => {
+    expect(flattenFileTreeDirs(tree)).toEqual(['/w', '/w/src'])
+  })
+})
+
+describe('filterMentionCandidates recency (C4)', () => {
+  it('reorders within a fuzzy band without beating a stronger band', () => {
+    const paths = ['/w/old-report.md', '/w/new-report.md', '/w/repotools']
+    // new-report is the recent one: inside the same basename-substring band
+    // it overtakes old-report…
+    const recency = new Map([['/w/new-report.md', 10]])
+    expect(filterMentionCandidates(paths, 'report', 8, recency)[0]).toBe('/w/new-report.md')
+    // …but recency never lifts a substring hit over a basename PREFIX.
+    expect(filterMentionCandidates(paths, 'repo', 8, recency)[0]).toBe('/w/repotools')
+  })
+  it('empty query sorts by recency', () => {
+    const paths = ['/w/a', '/w/b']
+    expect(filterMentionCandidates(paths, '', 8, new Map([['/w/b', 5]]))[0]).toBe('/w/b')
   })
 })

@@ -199,6 +199,83 @@ describe('MicButton', () => {
     renderWithI18n(<MicButton state="idle" disabled onStart={() => {}} onStop={() => {}} />)
     expect(screen.getByRole('button')).toBeDisabled()
   })
+
+  // ── V6 (AI-chat-ux): tap = toggle, hold = push-to-talk ────────────────
+
+  function pointerPress(btn: HTMLElement, holdMs: number) {
+    const now = Date.now()
+    const at = vi.spyOn(Date, 'now')
+    at.mockReturnValueOnce(now) // pointerdown
+    fireEvent.pointerDown(btn, { isPrimary: true, pointerId: 1 })
+    at.mockRestore()
+    const up = vi.spyOn(Date, 'now')
+    up.mockReturnValue(now + holdMs) // pointerup
+    fireEvent.pointerUp(btn, { isPrimary: true, pointerId: 1 })
+    up.mockRestore()
+  }
+
+  it('V6: a short tap starts the recording and keeps it running (toggle ON)', () => {
+    const onStart = vi.fn()
+    const onStop = vi.fn()
+    renderWithI18n(<MicButton state="idle" onStart={onStart} onStop={onStop} />)
+    const btn = screen.getByRole('button')
+    pointerPress(btn, 80)
+    expect(onStart).toHaveBeenCalledTimes(1)
+    expect(onStop).not.toHaveBeenCalled()
+  })
+
+  it('V6: a second short tap on a running recording stops it (toggle OFF)', () => {
+    const onStart = vi.fn()
+    const onStop = vi.fn()
+    const { rerender } = renderWithI18n(<MicButton state="idle" onStart={onStart} onStop={onStop} />)
+    const btn = screen.getByRole('button')
+    pointerPress(btn, 80)
+    expect(onStop).not.toHaveBeenCalled()
+    // Parent flips state to recording (the real useVoice does on start).
+    rerender(<I18nProvider><MicButton state="recording" onStart={onStart} onStop={onStop} /></I18nProvider>)
+    pointerPress(btn, 80)
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('V6: a long hold is push-to-talk — release stops the recording', () => {
+    const onStart = vi.fn()
+    const onStop = vi.fn()
+    const { rerender } = renderWithI18n(<MicButton state="idle" onStart={onStart} onStop={onStop} />)
+    const btn = screen.getByRole('button')
+    // Press → capture starts; the parent flips state while the pointer is
+    // still held (the real useVoice does this async).
+    const t0 = Date.now()
+    const down = vi.spyOn(Date, 'now')
+    down.mockReturnValueOnce(t0)
+    fireEvent.pointerDown(btn, { isPrimary: true, pointerId: 1 })
+    down.mockRestore()
+    expect(onStart).toHaveBeenCalledTimes(1)
+    rerender(<I18nProvider><MicButton state="recording" onStart={onStart} onStop={onStop} /></I18nProvider>)
+    // Release 600ms later (≥ PTT_THRESHOLD_MS) → push-to-talk stop.
+    const up = vi.spyOn(Date, 'now')
+    up.mockReturnValue(t0 + 600)
+    fireEvent.pointerUp(btn, { isPrimary: true, pointerId: 1 })
+    up.mockRestore()
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('V6: keyboard activation (click detail 0) still toggles', () => {
+    const onStart = vi.fn()
+    const onStop = vi.fn()
+    renderWithI18n(<MicButton state="idle" onStart={onStart} onStop={onStop} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(onStart).toHaveBeenCalledTimes(1)
+  })
+
+  it('V3: needsSetup routes to settings instead of recording', () => {
+    const onStart = vi.fn()
+    const onOpenSettings = vi.fn()
+    renderWithI18n(<MicButton state="idle" onStart={onStart} needsSetup onOpenSettings={onOpenSettings} />)
+    const btn = screen.getByTestId('mic-button-needs-setup')
+    fireEvent.click(btn)
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onStart).not.toHaveBeenCalled()
+  })
 })
 
 describe('VoiceOrb', () => {

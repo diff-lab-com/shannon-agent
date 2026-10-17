@@ -314,7 +314,9 @@ pub struct TerminalSettings {
     /// missing = unset. Skipped when unset because TOML has no null.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shell: Option<String>,
-    /// Font size (px) for xterm.js. Default 12.
+    /// Font size (px) for xterm.js. Default 13 (AI-chat-ux T2 — raised
+    /// from 12 for comfortable reading; keep in sync with the frontend's
+    /// `DEFAULT_FONT_SIZE` in TerminalPanel.tsx).
     pub font_size: u32,
     /// Scrollback lines kept by xterm.js. Default 5000.
     pub scrollback: u32,
@@ -339,7 +341,7 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             shell: None,
-            font_size: 12,
+            font_size: 13,
             scrollback: 5000,
             drawer_height: 320,
             screen_reader_mode: false,
@@ -1743,7 +1745,9 @@ mod tests {
     fn terminal_settings_defaults_match_the_brief() {
         let s = TerminalSettings::default();
         assert_eq!(s.shell, None, "shell None → env fallback");
-        assert_eq!(s.font_size, 12);
+        // AI-chat-ux T2: the shipped default moved 12 → 13 (frontend
+        // DEFAULT_FONT_SIZE parity).
+        assert_eq!(s.font_size, 13);
         assert_eq!(s.scrollback, 5000);
         assert_eq!(s.drawer_height, 320);
         assert!(!s.screen_reader_mode);

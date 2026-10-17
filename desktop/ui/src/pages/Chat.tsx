@@ -10,6 +10,7 @@ import { useCatalog } from '@/context/CatalogContext'
 import { useSessions } from '@/context/SessionContext'
 import { parseSlashInput, type SlashCommand, type SlashResult } from '@/lib/slash/commands'
 import { recordInputHistory } from '@/lib/inputHistory'
+import { MAX_ATTACHMENT_COUNT } from '@/lib/tauri-api'
 import { clearDraft, DRAFT_MAX_KB, readDraft, writeDraft } from '@/lib/composerDraft'
 import { clearDiffStatsCache } from '@/components/chat/diffStats'
 import { toastError } from '@/lib/errorToast'
@@ -89,6 +90,13 @@ export default function Chat() {
   // of receiving it (plus handlers) through two layers of props.
   const [input, setInput] = useState('')
   const [attachedFiles, setAttachedFiles] = useState<string[]>([])
+  // AI-chat-ux C3 — the draft's resolved `@` reference paths (reported by
+  // ChatInput via the composer context). Merged into every send's
+  // attachment list so a reference is guaranteed content, not just a path
+  // string the model may never read.
+  const [mentionPaths, setMentionPaths] = useState<string[]>([])
+  const mentionPathsRef = useRef(mentionPaths)
+  useEffect(() => { mentionPathsRef.current = mentionPaths })
   const [diffPath, setDiffPath] = useState<string | null>(null)
   // T7 (03 页 review-wrap): a set review target makes the review session
   // active — the main region swaps the transcript for the review workspace.
@@ -496,7 +504,8 @@ export default function Chat() {
       return
     }
     setEditing(null)
-    const attachments = attachedFiles
+    // C3: the edited resend carries chips ∪ the draft's @ references.
+    const attachments = attachmentsForSend()
     const ok = await sendMessage(newText, attachments.length > 0 ? attachments : undefined)
     if (!ok) {
       // The backend rejected the send AFTER the rewind landed (budget
@@ -510,7 +519,7 @@ export default function Chat() {
     setInput('')
     setAttachedFiles([])
     if (visibleSessionId) clearDraft(visibleSessionId)
-  }, [editing, attachedFiles, rewindSession, sendMessage, visibleSessionId, t])
+  }, [editing, attachedFiles, mentionPathsRef, rewindSession, sendMessage, visibleSessionId, t])
 
   const handleSend = () => {
     const trimmed = input.trim()
@@ -548,7 +557,9 @@ export default function Chat() {
       void commitEdit(trimmed)
       return
     }
-    const filePaths = hasAttachments ? attachedFiles : undefined
+    // C3: every delivery surface carries chips ∪ the draft's @ references.
+    const mergedFiles = attachmentsForSend()
+    const filePaths = mergedFiles.length > 0 ? mergedFiles : undefined
     // B1 §4-9: while THIS session streams, sends join its FIFO queue instead
     // of being dropped. Accepted items clear the draft (they render as
     // removable chips); an overflow keeps it. Attachments-only sends join
@@ -566,7 +577,7 @@ export default function Chat() {
         handleSteer()
         return
       }
-      const accepted = enqueuePrompt(trimmed, hasAttachments ? attachedFiles : [])
+      const accepted = enqueuePrompt(trimmed, mergedFiles)
       if (accepted) {
         // A-22: an accepted queue join is "sent" in the user's mental model
         // ("what did I just send") — record it for ArrowUp recall now. The
@@ -619,7 +630,9 @@ export default function Chat() {
       setInput('')
       return
     }
-    const accepted = steer(trimmed, hasAttachments ? attachedFiles : [])
+    // C3: the steer delivers chips ∪ the draft's @ references.
+    const mergedFiles = attachmentsForSend()
+    const accepted = steer(trimmed, mergedFiles)
     if (accepted) {
       setInput('')
       setAttachedFiles([])
@@ -707,11 +720,35 @@ export default function Chat() {
     setAttachedFiles([])
   }
 
+  // ── AI-chat-ux C3 — deterministic @ reference injection ───────────────
+  // A send's attachment list = the composer's attachment chips ∪ the
+  // draft's resolved `@` references (dedup, capped at the backend's count
+  // limit). Synchronous on purpose: the queue/steer/blocked-recovery
+  // machinery below is built on synchronous dispatch, and the backend send
+  // re-validates every path with refusal receipts — a second async
+  // preflight here would only add a race window.
+  const attachmentsForSend = (): string[] => {
+    const extras = mentionPathsRef.current.filter(p => !attachedFiles.includes(p))
+    if (extras.length === 0) return attachedFiles
+    const cap = MAX_ATTACHMENT_COUNT
+    const merged = [...new Set([...attachedFiles, ...extras])]
+    if (merged.length > cap) {
+      // Over the shared cap with the references folded in: refuse the merge
+      // (the send keeps the user's explicit chips only) — the text tokens
+      // remain readable paths either way.
+      toastError(t('chat.input.mention.mergeFailed'), t('chat.input.attach.tooMany', { max: cap }))
+      return attachedFiles
+    }
+    toast.info(t('chat.input.mention.attachedNotice', { count: extras.length }))
+    return merged
+  }
+
   const composerValue = {
     input, setInput, handleSend, handleSteer,
     attachedFiles, handleAttach, handleDetachAll,
     executeSlash, slashResult, dismissSlashResult,
     editing, cancelEdit,
+    mentionPaths, setMentionPaths,
   }
 
   // ── Aurora 2026-10 diff-review loop (03 页, 数据全部现成) ──────────────
