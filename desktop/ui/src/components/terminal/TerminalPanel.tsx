@@ -10,8 +10,10 @@
  *  - bottom drawer, full-height toggle; NO free-form drag layout (T11);
  *  - persisted settings (`terminal_get_settings`, P3-1) are fetched once
  *    on first open: they set the drawer's initial height and the options
- *    of every xterm created this session — live instances are never
- *    re-geometried;
+ *    of every xterm created this session. Since T6 (AI-chat-ux) a
+ *    successful settings save is ALSO hot-applied to live instances via
+ *    the `shannon:terminal-settings-changed` event (font/scrollback/
+ *    height); shell + login-shell remain spawn-time only;
  *  - tabs are scoped to the panel's project (US7): the chat page passes
  *    the session's working dir and the tablist shows only matching
  *    terminals (raw spawn-request dir first, via the additive
@@ -94,6 +96,15 @@ const TERMINAL_TOGGLE_EVENT = 'shannon:terminal-toggle';
  * so the Header toggle's aria-pressed state tracks the drawer.
  */
 const TERMINAL_OPEN_EVENT = 'shannon:terminal-open-changed';
+
+/**
+ * Window CustomEvent from the Settings card (components/settings/
+ * TerminalSettings, T6 AI-chat-ux) after a successful save — payload is
+ * the backend's EFFECTIVE settings. The drawer hot-applies font family/
+ * size, scrollback and drawer height to LIVE terminals instead of waiting
+ * for new tabs (shell/login-shell stay spawn-time only).
+ */
+const TERMINAL_SETTINGS_CHANGED_EVENT = 'shannon:terminal-settings-changed';
 
 /** xterm defaults matching the backend's `[terminal]` fallbacks. */
 const DEFAULT_FONT_SIZE = 13;
@@ -279,9 +290,10 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
     if (!xterm) return null; // module still loading — next effect run mounts
 
     const fit = new xterm.FitAddon();
-    // P3-1: persisted preferences apply at CREATION only — never mutate a
-    // live instance's geometry (font/scrollback changes land in terminals
-    // opened afterwards).
+    // P3-1: persisted preferences apply at CREATION time. Since T6
+    // (AI-chat-ux) a settings save additionally hot-applies to live
+    // instances via the settings-changed event above — creation-time
+    // values are just the starting point now.
     const settings = settingsRef.current;
     const term = new xterm.Terminal({
       convertEol: false,
@@ -482,6 +494,36 @@ export function TerminalPanel({ projectDir }: TerminalPanelProps) {
       term.options.theme = theme;
     });
   }, [resolvedTheme]);
+
+  // T6 (AI-chat-ux): hot-apply a settings save to LIVE terminals. The
+  // Settings card dispatches `shannon:terminal-settings-changed` with the
+  // backend's effective payload; the drawer re-reads the settings ref
+  // (creation-time defaults stay in sync for later tabs), re-geometries
+  // every live xterm (font family/size, scrollback, screen-reader mode —
+  // all legal live option writes) and refits the active surface. Drawer
+  // height follows immediately. Deliberately a refetch-free event read:
+  // the payload IS the authoritative effective state (the save response).
+  useEffect(() => {
+    const onSettingsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<TerminalSettings | undefined>).detail;
+      if (!detail || typeof detail !== 'object') return;
+      settingsRef.current = detail;
+      setDrawerHeight(detail.drawerHeight);
+      termsRef.current.forEach(({ term, fit }) => {
+        term.options.fontFamily = detail.fontFamily || MONO_FONT_STACK;
+        term.options.fontSize = detail.fontSize;
+        term.options.scrollback = detail.scrollback;
+        term.options.screenReaderMode = detail.screenReaderMode;
+        try {
+          fit.fit();
+        } catch {
+          /* no measurable layout yet */
+        }
+      });
+    };
+    window.addEventListener(TERMINAL_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(TERMINAL_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+  }, []);
 
   // Mount/unmount the active terminal into the drawer body.
   useEffect(() => {

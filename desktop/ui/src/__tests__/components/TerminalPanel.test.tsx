@@ -1197,4 +1197,40 @@ describe('TerminalPanel (P2-4: resize IPC, cleanup, list merge, settings)', () =
     // The terminal itself survives the fallback (no dispose, no exit).
     expect(h.terminals[0].disposed).toBe(false)
   })
+
+  it('hot-applies a settings save to LIVE terminals (T6)', async () => {
+    // T6 (AI-chat-ux): the Settings card's `shannon:terminal-settings-changed`
+    // event re-geometries live xterm instances (font/scrollback/screen
+    // reader) and the drawer height — no new tab required.
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:terminal-settings-changed', {
+        detail: { ...DEFAULT_SETTINGS, fontSize: 17, scrollback: 9000, drawerHeight: 540, screenReaderMode: true, fontFamily: "'Cascadia Mono'" },
+      }))
+    })
+    expect(h.terminals[0].options.fontSize).toBe(17)
+    expect(h.terminals[0].options.fontFamily).toBe("'Cascadia Mono'")
+    expect(h.terminals[0].options.scrollback).toBe(9000)
+    expect(h.terminals[0].options.screenReaderMode).toBe(true)
+    const region = screen.getByRole('region', { name: 'Integrated terminal' })
+    expect(region.getAttribute('style')).toContain('height: 540px')
+
+    // Later tabs are created straight from the updated settings.
+    fireEvent.click(screen.getByRole('button', { name: 'New terminal' }))
+    await waitFor(() => expect(h.terminals.length).toBe(2))
+    expect(h.terminals[1].options.fontSize).toBe(17)
+  })
+
+  it('ignores a malformed settings-changed payload (T6 robustness)', async () => {
+    vi.mocked(api.terminalGetSettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    await openPanel()
+    await waitFor(() => expect(h.terminals.length).toBe(1))
+    act(() => {
+      window.dispatchEvent(new CustomEvent('shannon:terminal-settings-changed', { detail: undefined }))
+    })
+    expect(h.terminals[0].options.fontSize).toBe(12)
+  })
 })
