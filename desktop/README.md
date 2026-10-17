@@ -69,6 +69,30 @@ cargo run
 For full setup, contribution guide, and engine architecture, see the
 [monorepo root README](../README.md).
 
+## Voice input (speech-to-text)
+
+The chat composer's mic button records via the webview and transcribes
+through the STT provider configured in **Settings → Advanced → Voice**
+(Groq / OpenAI Whisper-compatible, or local whisper-rs when built with the
+`voice-local` Cargo feature). Platform notes — when capture fails the
+composer surfaces the specific cause and a Settings shortcut (AI-chat-ux
+V1–V4):
+
+- **macOS**: microphone access is TCC-gated for the *signed, bundled* app —
+  the packager merges `macos/InfoPlist.plist` (NSMicrophoneUsageDescription)
+  via `bundle.macOS.infoPlist`. `tauri dev` is unsigned and typically never
+  prompts; test voice on a packaged build.
+- **Linux**: getUserMedia in WebKitGTK needs the GStreamer media backend
+  (`gstreamer1.0-plugins-good` / `gstreamer1.0-libav` on Debian-likes,
+  `gstreamer1-plugins-good` / `gstreamer1-libav` on Fedora) plus a running
+  audio server (PipeWire ≥ 0.3.65 recommended — the deb/rpm depends already
+  pull `libpipewire-0.3-0` / `pipewire-libs`). wry's permission bridge is
+  still incomplete upstream (tauri-apps/wry#1195): if the webview path
+  cannot capture, the mic reports the platform cause instead of a generic
+  error.
+- **Windows**: WebView2 handles capture natively; the first click asks for
+  the system microphone toggle (Settings → Privacy → Microphone).
+
 ## Product strategy
 
 For the full positioning analysis — competitive matrix, blue-ocean ERRC,
