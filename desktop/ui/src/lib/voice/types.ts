@@ -69,6 +69,13 @@ export interface VoiceProvider {
     onResult: VoiceResultHandler
     onError: VoiceErrorHandler
     onEnd?: () => void
+    /**
+     * AI-chat-ux V5 — optional live loudness (RMS, 0..1, ~10 Hz) from the
+     * capture stream. Providers that capture audio attach a level meter
+     * when present; environments without an AudioContext simply never
+     * call it.
+     */
+    onLevel?: (level: number) => void
   }): Promise<void>
   /** Stop capturing; the engine should emit any pending final result. */
   stop(): Promise<void>

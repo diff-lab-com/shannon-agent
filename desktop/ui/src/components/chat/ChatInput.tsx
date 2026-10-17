@@ -4,6 +4,22 @@ import { useNavigate } from 'react-router-dom'
 import { open } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import { Menu } from '@base-ui/react/menu'
+
+/** V5 — recording elapsed-time readout (m:ss) for the voice strip. */
+function RecordingTimer({ startedAt }: { startedAt: number }) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    const timer = window.setInterval(() => force(n => n + 1), 500)
+    return () => window.clearInterval(timer)
+  }, [])
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+  const label = `${Math.floor(elapsedSec / 60)}:${String(elapsedSec % 60).padStart(2, '0')}`
+  return (
+    <span className="font-mono text-label-md tabular-nums text-on-primary-container" aria-hidden="true">
+      {label}
+    </span>
+  )
+}
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { DropdownMenu, DropdownMenuSeparator, type DropdownMenuEntry } from '@/components/ui/dropdown-menu'
@@ -485,6 +501,27 @@ export default function ChatInput({
         }
       : undefined,
   })
+
+  // V5 — Escape discards an in-flight recording without transcribing (the
+  // VS Code dictation contract). Window-level + capture: focus usually sits
+  // on the mic button or elsewhere while recording, not on this textarea.
+  // Takes precedence over the textarea's edit-cancel/query-cancel Escapes —
+  // a live capture is the most immediate thing on screen.
+  const voiceStateRef = useRef(voice.state)
+  useEffect(() => { voiceStateRef.current = voice.state })
+  useEffect(() => {
+    if (voice.state !== 'recording') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (voiceStateRef.current !== 'recording') return
+      e.preventDefault()
+      e.stopPropagation()
+      voice.reset()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- voice.reset is a stable useCallback; the state gate re-subscribes
+  }, [voice.state])
 
   const handleModeChange = async (mode: string | null) => {
     if (!mode) return
@@ -1486,8 +1523,13 @@ export default function ChatInput({
       )}
 
       {voice.state !== 'idle' && (
-        <div className="flex items-center justify-center py-sm bg-primary-container rounded-t-2xl">
-          <VoiceOrb state={voice.state} />
+        <div className="flex items-center justify-center gap-sm py-sm bg-primary-container rounded-t-2xl">
+          <VoiceOrb state={voice.state} level={voice.level} />
+          {/* V5 — elapsed time while recording: re-renders ride the ~10 Hz
+              level updates, so a per-second internal interval is enough. */}
+          {voice.state === 'recording' && voice.recordingStartedAt != null && (
+            <RecordingTimer startedAt={voice.recordingStartedAt} />
+          )}
         </div>
       )}
 

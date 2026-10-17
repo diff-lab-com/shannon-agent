@@ -48,6 +48,11 @@ export interface UseVoiceResult {
   partialTranscript: string
   error: string | null
   supported: boolean
+  /** V5 — live capture loudness (0..1, ~10 Hz). 0 while idle. */
+  level: number
+  /** V5 — wall-clock ms timestamp of the current recording's start, for
+   *  elapsed-time display; null while not recording. */
+  recordingStartedAt: number | null
   startRecording: () => Promise<void>
   stopRecording: () => Promise<void>
   reset: () => void
@@ -78,6 +83,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
+  // V5 — capture loudness + start wall clock for the recording strip.
+  const [level, setLevel] = useState(0)
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null)
 
   const transcriptRef = useRef(onTranscript)
   transcriptRef.current = onTranscript
@@ -149,6 +157,8 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setError(null)
     setState('recording')
     setPartialTranscript('')
+    setLevel(0)
+    setRecordingStartedAt(Date.now())
     const provider = providerRef.current
     if (!provider) return
     try {
@@ -163,12 +173,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
         },
         onError: (err) => {
           handleError(err)
+          setLevel(0)
+          setRecordingStartedAt(null)
           setState((s) => (s === 'recording' ? 'idle' : s))
         },
         onEnd: () => {
           setPartialTranscript('')
+          setLevel(0)
+          setRecordingStartedAt(null)
           setState((s) => (s === 'recording' || s === 'transcribing' ? 'idle' : s))
         },
+        onLevel: setLevel,
       })
     } catch (err) {
       handleError({
@@ -184,6 +199,8 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     if (!provider) return
     setState('transcribing')
     setPartialTranscript('')
+    setLevel(0)
+    setRecordingStartedAt(null)
     try {
       await provider.stop()
     } catch {
@@ -198,7 +215,9 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     setState('idle')
     setPartialTranscript('')
     setError(null)
+    setLevel(0)
+    setRecordingStartedAt(null)
   }, [])
 
-  return { state, partialTranscript, error, supported, startRecording, stopRecording, reset }
+  return { state, partialTranscript, error, supported, level, recordingStartedAt, startRecording, stopRecording, reset }
 }

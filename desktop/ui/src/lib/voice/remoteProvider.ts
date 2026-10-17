@@ -5,11 +5,13 @@ import type {
   VoiceErrorHandler,
 } from './types'
 import { transcribeAudio } from '@/lib/tauri-api'
+import { attachLevelMeter } from './levelMeter'
 
 interface BoundHandlers {
   onResult: VoiceResultHandler
   onError: VoiceErrorHandler
   onEnd?: () => void
+  onLevel?: (level: number) => void
 }
 
 /**
@@ -70,6 +72,7 @@ export function createRemoteProvider(_config: VoiceProviderConfig): VoiceProvide
   let handlers: BoundHandlers | null = null
   let chunks: Blob[] = []
   let aborted = false
+  let detachLevel: (() => void) | null = null
 
   return {
     kind: 'remote',
@@ -98,6 +101,10 @@ export function createRemoteProvider(_config: VoiceProviderConfig): VoiceProvide
         })
         return
       }
+      // V5: live loudness cue for the composer's recording strip — advisory
+      // only, a missing AudioContext just means no events.
+      detachLevel?.()
+      detachLevel = next.onLevel ? attachLevelMeter(stream, next.onLevel) : null
       const mimeType = MediaRecorder.isTypeSupported('audio/webm')
         ? 'audio/webm'
         : 'audio/ogg'
@@ -106,6 +113,8 @@ export function createRemoteProvider(_config: VoiceProviderConfig): VoiceProvide
         if (e.data.size > 0) chunks.push(e.data)
       }
       mediaRecorder.onstop = () => {
+        detachLevel?.()
+        detachLevel = null
         if (!handlers || aborted) return
         const blob = new Blob(chunks, { type: mimeType })
         void flush(blob, handlers)
@@ -121,6 +130,8 @@ export function createRemoteProvider(_config: VoiceProviderConfig): VoiceProvide
       aborted = true
       try { mediaRecorder?.stop() } catch { /* noop */ }
       stream?.getTracks().forEach((t) => t.stop())
+      detachLevel?.()
+      detachLevel = null
       chunks = []
       handlers = null
     },

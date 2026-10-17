@@ -5,11 +5,13 @@ import type {
   VoiceErrorHandler,
 } from './types'
 import { transcribeAudioLocal, transcribeAudioLocalBase64 } from '@/lib/tauri-api'
+import { attachLevelMeter } from './levelMeter'
 
 interface BoundHandlers {
   onResult: VoiceResultHandler
   onError: VoiceErrorHandler
   onEnd?: () => void
+  onLevel?: (level: number) => void
 }
 
 interface LocalProviderOptions {
@@ -95,6 +97,7 @@ export function createLocalProvider(config: LocalVoiceConfig): VoiceProvider {
   let handlers: BoundHandlers | null = null
   let chunks: Blob[] = []
   let aborted = false
+  let detachLevel: (() => void) | null = null
 
   return {
     kind: 'local',
@@ -123,6 +126,9 @@ export function createLocalProvider(config: LocalVoiceConfig): VoiceProvider {
         })
         return
       }
+      // V5: live loudness cue (advisory — see remoteProvider).
+      detachLevel?.()
+      detachLevel = next.onLevel ? attachLevelMeter(stream, next.onLevel) : null
       // Prefer WAV when available; fall back gracefully. MediaRecorder
       // pick order matches the existing cloud provider so the user
       // gets a working recording on every webview.
@@ -136,6 +142,8 @@ export function createLocalProvider(config: LocalVoiceConfig): VoiceProvider {
         if (e.data.size > 0) chunks.push(e.data)
       }
       mediaRecorder.onstop = () => {
+        detachLevel?.()
+        detachLevel = null
         if (!handlers || aborted) return
         const blob = new Blob(chunks, { type: mimeType })
         void flush(blob, handlers, opts)
@@ -151,6 +159,8 @@ export function createLocalProvider(config: LocalVoiceConfig): VoiceProvider {
       aborted = true
       try { mediaRecorder?.stop() } catch { /* noop */ }
       stream?.getTracks().forEach((t) => t.stop())
+      detachLevel?.()
+      detachLevel = null
       chunks = []
       handlers = null
     },
